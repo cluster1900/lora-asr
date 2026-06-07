@@ -1,0 +1,30 @@
+model:
+  id: google/gemma-4-12B-it
+  quantization: 4bit
+
+data:
+  train_manifest: data/jsonl/train.jsonl
+  validation_manifest: data/jsonl/val.jsonl
+  max_audio_seconds: 20
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_groups:
+    - late_llm_blocks
+    - audio_projection_if_available
+
+training:
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 0.00002
+  epochs: 1
+  seed: 42
+  smoke_test_steps: 20
+
+output:
+  checkpoint_dir: checkpoints/gemma4-12b-asr-lora
+  save_steps: 200
+  keep_last_checkpoints: 3
+

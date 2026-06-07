@@ -1,0 +1,23 @@
+model:
+  id: google/gemma-4-12B-it
+  quantization: 4bit
+  device: auto
+
+input:
+  manifest: data/jsonl/baseline_smoke.example.jsonl
+  audio_root: /content/drive/MyDrive/gemma-mega-asr
+
+generation:
+  prompt: "Transcribe the following speech segment in its original language. Only output the transcription."
+  max_new_tokens: 256
+  temperature: 0.0
+
+output:
+  predictions_jsonl: outputs/baseline/predictions.jsonl
+  metrics_json: outputs/baseline/metrics.json
+  metrics_by_scenario_csv: outputs/baseline/metrics_by_scenario.csv
+
+runtime:
+  seed: 42
+  fail_fast: false
+

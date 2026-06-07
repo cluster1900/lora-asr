@@ -1,0 +1,24 @@
+project:
+  name: gemma4-robust-asr
+  audio_root: /content/drive/MyDrive/gemma-mega-asr
+
+dataset:
+  language: English
+  source: librispeech
+  min_duration_sec: 3
+  max_duration_sec: 20
+  seed: 42
+
+splits:
+  smoke: data/jsonl/baseline_smoke.example.jsonl
+  train: data/jsonl/train.jsonl
+  validation: data/jsonl/val.jsonl
+  test: data/jsonl/test.jsonl
+
+scenarios:
+  - clean
+  - noise
+  - reverb
+  - far_field
+  - dropout
+

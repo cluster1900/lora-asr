@@ -1,0 +1,21 @@
+input:
+  manifest: data/jsonl/test.jsonl
+  predictions_jsonl: outputs/eval/predictions.jsonl
+
+normalization:
+  lowercase: true
+  remove_punctuation: true
+  keep_raw_prediction: true
+
+metrics:
+  english: wer
+  chinese: cer
+  group_by:
+    - scenario
+    - language
+
+output:
+  metrics_json: outputs/eval/metrics.json
+  metrics_by_scenario_csv: outputs/eval/metrics_by_scenario.csv
+  failures_jsonl: outputs/eval/failures.jsonl
+

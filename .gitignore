@@ -1,0 +1,52 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+conda/
+
+# Logs and outputs
+logs/
+*.log
+runs/
+outputs/
+wandb/
+tensorboard/
+
+# Checkpoints and model weights
+checkpoints/
+ckpt/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.onnx
+
+# Data and generated audio
+datasets/
+data/raw/
+data/augmented/
+data/cache/
+
+# Private files
+.env
+private/
+secrets/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# External reference snapshots
+references/
