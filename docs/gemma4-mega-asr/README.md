@@ -22,11 +22,20 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 
 ## 当前范围
 
-当前状态：文档设计与整体验收已完成，下一步进入 [01 独立项目骨架](./roadmap/01_project_scaffold.md)。
+当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已跑通第一版 Colab smoke 闭环。
 
-MVP 会按路线图依次完成：
+已完成：
 
-1. 评估 Gemma 4 12B 原始 ASR 基线。
+- 原 Mega-ASR 上游工程已隔离到 `references/mega-asr-upstream/`，不作为新工程运行时依赖。
+- 新工程目录已建立：`configs/`、`data/`、`evaluation/`、`inference/`、`notebooks/`、`router/`、`scripts/`、`train/`。
+- 已实现本地 smoke 音频生成脚本、Gemma 4 baseline 推理脚本、WER/CER 评测脚本。
+- 已新增 `notebooks/01_baseline_colab.ipynb`，并在 Colab 中完成 clean/noise 各 1 条样本的 smoke baseline。
+
+下一步：扩大 [02 Baseline 评估](./roadmap/02_baseline_eval.md) 样本量，并进入 [03 数据 MVP](./roadmap/03_data_mvp.md)。
+
+MVP 会按路线图继续完成：
+
+1. 扩大 Gemma 4 12B 原始 ASR 基线评估。
 2. 构建小规模 clean/degraded 语音数据集。
 3. 训练第一版 QLoRA ASR adapter。
 4. 评估 WER/CER 和典型失败模式。
