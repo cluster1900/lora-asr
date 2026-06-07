@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-当前阶段：文档验收完成，准备进入 `01 独立项目骨架`。
+当前阶段：正在执行 `02 Baseline 评估`。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Gemma 4 12B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -22,10 +22,13 @@
 - 已将原 Mega-ASR 上游工程隔离到本地忽略目录 `references/mega-asr-upstream/`，根目录作为新工程主目录。
 - 已创建新工程最小骨架：`configs/`、`data/`、`evaluation/`、`inference/`、`notebooks/`、`router/`、`scripts/`、`train/`。
 - 已完成 `01 独立项目骨架` 验收：上游工程隔离完成，根目录无上游主入口残留，示例 JSONL/YAML 可解析，Markdown 链接检查通过。
+- 已新增 `scripts/create_smoke_audio.py`，可在本地生成 baseline smoke test 的 clean/noise 音频和本地 manifest。
+- 已新增 `inference/gemma4_base_infer.py` 和 `evaluation/eval_wer.py`，用于 Gemma 4 baseline 推理与 WER/CER 评测。
+- 已新增 `notebooks/01_baseline_colab.ipynb`，用于在 Colab/Google Drive 中跑通 baseline smoke 推理与评测。
 
 ## 进行中
 
-- 准备进入 `02 Baseline 评估`。
+- 执行 `02 Baseline 评估`：Colab smoke baseline 已跑通 2 条样本，clean/noise 的 error_rate 均为 0.0；下一步扩大到更多场景样本。
 
 ## 下一批里程碑
 
@@ -58,3 +61,9 @@
 创建新工程最小骨架和基础配置。根目录现在以 Gemma 4 Robust ASR 为主，参考工程仅位于 `references/mega-asr-upstream/`，且不会进入 git。
 
 完成 `01 独立项目骨架` 验收：示例 JSONL 解析通过，YAML 配置解析通过，本地 Markdown 链接检查通过。下一步进入 baseline 评估。
+
+新增本地 smoke 音频生成脚本。脚本已验证可生成 16kHz mono clean/noise WAV，并输出 `data/jsonl/baseline_smoke.local.jsonl`；生成物已被 `.gitignore` 排除。
+
+新增 baseline 推理和评测脚本。`evaluation/eval_wer.py` 已用伪 prediction 数据验证；`inference/gemma4_base_infer.py` 已做语法检查，真实模型推理需在 Colab/GPU 环境运行。
+
+完成第一版 Colab baseline smoke。`notebooks/01_baseline_colab.ipynb` 使用 Google Drive 路径 `/content/drive/MyDrive/gemma-mega-asr`，对 clean/noise 各 1 条样本完成 Gemma 4 12B baseline 推理，overall error_rate 为 0.0，clean/noise 场景 error_rate 均为 0.0，empty_output_rate 为 0.0。该结果只代表 smoke 样例通过，不代表鲁棒性已达标。
