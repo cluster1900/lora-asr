@@ -53,7 +53,7 @@ def require_command(name: str) -> str:
 def convert_aiff_to_wav(aiff_path: Path, wav_path: Path, sample_rate: int) -> None:
     """把 macOS `say` 生成的 AIFF 转成模型友好的 16-bit mono WAV。
 
-    smoke test 阶段应尽量让 Gemma/音频预处理看到稳定输入格式。因此这里
+    smoke test 阶段应尽量让 Qwen3-ASR/音频预处理看到稳定输入格式。因此这里
     统一转成 16 kHz mono WAV，而不是保留平台相关的 `say` 原始输出。
     """
     wav_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """计算 ASR prediction JSONL 的 WER/CER 指标。
 
-输入文件通常来自 `inference/gemma4_base_infer.py`，每行至少包含：
+输入文件通常来自 `inference/qwen3_asr_base_infer.py`，每行至少包含：
 `answer` 和 `prediction`。脚本会保留原始字段，并追加 metric、wer、
 num_edits、ref_len 等评测字段。
 

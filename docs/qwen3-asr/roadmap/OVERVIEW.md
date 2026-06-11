@@ -1,18 +1,18 @@
 # 路线图总览
 
-最后更新：2026-06-07
+最后更新：2026-06-11
 
 ## 最终目标
 
 本项目的最终目标是完成一个类似 Mega-ASR 的鲁棒 ASR 产品：能够在 clean speech 和真实退化音频之间稳定工作，针对噪声、远场、混响、遮挡、压缩、失真、dropout 等复杂场景提供可靠转写能力。
 
-这里的“类似 Mega-ASR”指产品能力和方法方向类似，而不是代码实现类似。我们的系统应基于 Gemma 4 12B 独立开发，拥有自己的数据管线、训练流程、推理服务、router、评测体系和发布文档。
+这里的“类似 Mega-ASR”指产品能力和方法方向类似，而不是代码实现类似。我们的系统应基于 Qwen3-ASR-1.7B 独立开发，拥有自己的数据管线、训练流程、推理服务、router、评测体系和发布文档。
 
 ## 产品形态
 
 最终产品应包含：
 
-- 一个 Gemma 4 12B 鲁棒 ASR LoRA adapter。
+- 一个 Qwen3-ASR-1.7B 鲁棒 ASR LoRA adapter。
 - 一个可选音频质量 router，用于判断是否启用鲁棒 LoRA。
 - 一个统一推理入口，支持 base、LoRA always-on、router 三种模式。
 - 一套可复现的数据构建和音频增强管线。
@@ -22,7 +22,7 @@
 
 ## 为什么要分步骤做
 
-鲁棒 ASR 产品不能直接从“训练模型”开始。必须先完成 baseline、数据、增强、训练、评测、router 的闭环，否则无法判断训练是否真的有效，也无法定位问题来自模型、数据、prompt、评测还是推理路径。
+鲁棒 ASR 产品不能直接从“训练模型”开始。必须先完成 baseline、数据、增强、训练、评测、router 的闭环，否则无法判断训练是否真的有效，也无法定位问题来自模型、数据、语言设置、评测还是推理路径。
 
 路线图的每一步都只解决一个核心问题：
 
@@ -64,7 +64,7 @@
 
 解决的问题：
 
-- 避免后续代码混入 Qwen3-ASR/Mega-ASR 专用实现。
+- 避免后续代码混入 Mega-ASR 上游工程的私有实现。
 - 为数据、训练、推理、评测、router、notebook 提供清晰落点。
 
 完成后得到：
@@ -78,7 +78,7 @@
 
 目的：
 
-- 测量 Gemma 4 12B 原始 ASR 能力。
+- 测量 Qwen3-ASR-1.7B 原始 ASR 能力。
 
 解决的问题：
 
@@ -86,7 +86,7 @@
 
 完成后得到：
 
-- base Gemma 4 的 WER/CER。
+- base Qwen3-ASR 的 WER/CER。
 - clean/degraded 场景表现。
 - 空输出、幻觉、漏词等初始失败样本。
 
@@ -130,11 +130,11 @@
 
 目的：
 
-- 训练第一版 Gemma 4 鲁棒 ASR LoRA adapter。
+- 训练第一版 Qwen3-ASR 鲁棒 ASR LoRA adapter。
 
 解决的问题：
 
-- 验证 Gemma 4 12B 是否能通过参数高效微调改善 degraded ASR。
+- 验证 Qwen3-ASR-1.7B 是否能通过参数高效微调改善 degraded ASR。
 - 验证 Colab 训练路径是否可行。
 
 完成后得到：
@@ -216,12 +216,11 @@ flowchart TB
 
 项目达到“类似 Mega-ASR 的产品雏形”时，应满足：
 
-- 有独立 Gemma 4 鲁棒 ASR adapter。
+- 有独立 Qwen3-ASR 鲁棒 ASR adapter。
 - 有可选 router，能在 clean/degraded 输入间切换策略。
 - 有统一推理入口。
 - 有固定 benchmark 和 scenario-level 指标。
-- 在 degraded 场景上相对 Gemma 4 base 有稳定提升。
+- 在 degraded 场景上相对 Qwen3-ASR base 有稳定提升。
 - clean speech regression 被控制在明确阈值内。
 - 数据、训练、推理、评测均可复现。
 - 文档说明适用场景、限制和未覆盖风险。
-

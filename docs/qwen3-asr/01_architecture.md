@@ -1,20 +1,20 @@
 # 架构方案
 
-最后更新：2026-06-07
+最后更新：2026-06-11
 
 ## 目标
 
-构建一个基于 Gemma 4 12B 的独立鲁棒 ASR 系统，使其在真实退化音频上的识别效果优于原始 Gemma 4，同时尽量不损害 clean speech 表现。
+构建一个基于 Qwen3-ASR-1.7B 的独立鲁棒 ASR 系统，使其在真实退化音频上的识别效果优于原始 Qwen3-ASR，同时尽量不损害 clean speech 表现。
 
-系统以 Gemma 4 12B 作为多模态基础模型，通过我们自己的代码训练 ASR 专用 LoRA adapter。Mega-ASR 只提供方法参考，具体实现必须遵循 Gemma 4 的 API、模块结构和部署约束。
+系统以 Qwen3-ASR-1.7B 作为 ASR 基础模型，通过我们自己的数据、评测、训练和 router 代码训练鲁棒 ASR LoRA adapter。Mega-ASR 只提供方法参考，具体实现必须遵循 Qwen3-ASR 官方 `qwen-asr` API、真实模块结构和部署约束。
 
 ## 为什么这样做
 
-真实 ASR 的主要难点不是 clean speech，而是噪声、远场、混响、遮挡、压缩、失真、丢包等退化条件。通用多模态模型即使支持音频输入，也不一定会稳定做“精确转写”：它可能总结、补全、幻觉、漏词，或者在严重退化时空输出。
+真实 ASR 的主要难点不是 clean speech，而是噪声、远场、混响、遮挡、压缩、失真、丢包等退化条件。Qwen3-ASR 是专用 ASR 模型，但在强退化、长音频和合成/真实分布差异下仍可能漏词、重复、空输出或过度补全。
 
 因此本项目采用四个核心设计：
 
-1. **以 Gemma 4 12B 为基础模型**：利用其原生音频输入和较强语言能力，避免从零训练 ASR。
+1. **以 Qwen3-ASR-1.7B 为基础模型**：利用官方 ASR 模型和 `qwen-asr` 工具链，避免从零训练 ASR。
 2. **用 LoRA 做鲁棒 ASR 适配**：在 Colab 资源约束下训练可行，同时保留 base model 能力。
 3. **用场景化退化数据驱动训练**：通过可控退化覆盖真实世界失败模式，而不是只在 clean 数据上提升。
 4. **用 router 控制 LoRA 启用时机**：避免鲁棒 LoRA 在 clean speech 上造成不必要退化。
@@ -27,8 +27,8 @@
 flowchart LR
   A["音频输入"] --> B["音频预处理"]
   B --> C["音频质量 router"]
-  C -->|clean| D["Gemma 4 12B base"]
-  C -->|degraded| E["Gemma 4 12B + 鲁棒 ASR LoRA"]
+  C -->|clean| D["Qwen3-ASR-1.7B base"]
+  C -->|degraded| E["Qwen3-ASR-1.7B + 鲁棒 ASR LoRA"]
   D --> F["转写结果"]
   E --> F
   F --> G["文本归一化"]
@@ -41,25 +41,25 @@ flowchart LR
 
 初始模型：
 
-- `google/gemma-4-12B-it`
+- `Qwen/Qwen3-ASR-1.7B`
 
 #### 模块目的
 
-提供音频到文本生成能力，作为所有训练和推理模式的基础。
+提供音频到文本转写能力，作为所有训练和推理模式的基础。
 
 #### 为什么需要
 
-从零训练 ASR 成本过高。Gemma 4 12B 已具备多模态输入和语言生成能力，我们可以把主要工作集中在鲁棒 ASR 适配、数据构建和评测闭环上。
+从零训练 ASR 成本过高。Qwen3-ASR-1.7B 已具备专用 ASR 能力，我们可以把主要工作集中在鲁棒 ASR 适配、数据构建和评测闭环上。
 
 #### 输入
 
-- 音频文件或音频张量。
-- ASR prompt。
+- 音频文件路径、URL、音频张量或后续扩展的批量输入。
+- 语言参数，例如 `English`、`Chinese`、`auto`。
 
 #### 输出
 
 - 原始转写文本。
-- 可选生成元信息，如生成 token 数、耗时。
+- 可选识别语言、耗时和后续扩展的时间戳信息。
 
 #### 达成标准
 
@@ -92,7 +92,7 @@ flowchart LR
 
 - 支持 wav/flac，后续可扩展 mp3。
 - 默认转为 mono。
-- 默认采样率与 Gemma processor 兼容。
+- 默认采样率与 Qwen3-ASR 官方工具链兼容。
 - 超长音频有明确切分或拒绝策略。
 - 处理结果可复现，同一输入和配置得到同一输出。
 
@@ -103,8 +103,8 @@ flowchart LR
 ```json
 {
   "audio": "/path/to/audio.wav",
-  "text": "language English<asr_text>TRANSCRIPT",
-  "prompt": "Transcribe the speech accurately.",
+  "answer": "TRANSCRIPT",
+  "language": "English",
   "scenario": "noise_reverb",
   "source": "librispeech",
   "is_degraded": true
@@ -145,18 +145,18 @@ flowchart LR
 
 LoRA adapter 是主要训练对象。
 
-需要在加载 Gemma 4 后通过 `model.named_modules()` 探测可训练模块，优先检查：
+需要在加载 Qwen3-ASR 后通过 `model.named_modules()` 探测可训练模块，优先检查：
 
 - 音频投影或音频 embedding 层。
 - 注意力投影层：`q_proj`、`k_proj`、`v_proj`、`o_proj`。
 - MLP 层：`gate_proj`、`up_proj`、`down_proj`。
 - 后几层 transformer block，用于低显存实验。
 
-LoRA target 必须来自 Gemma 4 的实际模块名，不能复制任何参考项目的规则。Mega-ASR 的 LoRA target 正则是 Qwen3-ASR 专用，不属于我们的实现。
+LoRA target 必须来自本项目加载到的 Qwen3-ASR 实际模块名，不能复制任何参考项目的规则。即使参考项目也使用 Qwen3-ASR，其 LoRA target 正则仍属于上游工程假设，不自动属于我们的实现。
 
 #### 模块目的
 
-让 Gemma 4 在退化音频上更像一个精确 ASR 模型，而不是通用音频理解模型。
+让 Qwen3-ASR 在退化音频上维持更稳定的精确转写能力。
 
 #### 为什么需要
 
@@ -164,7 +164,7 @@ LoRA target 必须来自 Gemma 4 的实际模块名，不能复制任何参考�
 
 #### 输入
 
-- Gemma 4 base model。
+- Qwen3-ASR base model。
 - 训练 JSONL。
 - LoRA target 配置。
 - 训练超参数。
@@ -249,8 +249,8 @@ MVP 版本：
 
 推理时：
 
-- clean 音频使用原始 Gemma 4 12B。
-- degraded 音频使用 Gemma 4 12B + 鲁棒 ASR LoRA。
+- clean 音频使用原始 Qwen3-ASR-1.7B。
+- degraded 音频使用 Qwen3-ASR-1.7B + 鲁棒 ASR LoRA。
 
 #### 模块目的
 
@@ -335,7 +335,7 @@ MVP 版本：
 
 #### 为什么需要
 
-ASR 训练很容易被个别样例误导。必须按 scenario、语言、clean/degraded、失败类型分别统计，才能判断下一步该扩数据、改 LoRA target，还是调 prompt。
+ASR 训练很容易被个别样例误导。必须按 scenario、语言、clean/degraded、失败类型分别统计，才能判断下一步该扩数据、改 LoRA target，还是调语言设置和输出归一化。
 
 #### 达成标准
 
@@ -351,7 +351,7 @@ ASR 训练很容易被个别样例误导。必须按 scenario、语言、clean/d
 
 用途：
 
-- 建立 Gemma 4 原始能力基线。
+- 建立 Qwen3-ASR 原始能力基线。
 - 判断 LoRA 是否真正带来提升。
 
 达成标准：
@@ -389,7 +389,7 @@ ASR 训练很容易被个别样例误导。必须按 scenario、语言、clean/d
 
 ### Milestone A: Baseline 完成
 
-- Gemma 4 baseline 可运行。
+- Qwen3-ASR baseline 可运行。
 - 至少 50-200 条样本完成评测。
 - 输出 baseline 指标和失败样本。
 
@@ -420,6 +420,6 @@ ASR 训练很容易被个别样例误导。必须按 scenario、语言、clean/d
 
 ## 独立性说明
 
-最终代码库应独立于 Mega-ASR。需要自行实现的 Gemma 组件包括：模型加载、音频 prompt 处理、collator、LoRA target 探测、推理 API、评测，以及可选 router 集成。
+最终代码库应独立于 Mega-ASR。需要自行实现或封装的 Qwen3-ASR 组件包括：官方模型加载、manifest 批量推理、collator、LoRA target 探测、评测，以及可选 router 集成。
 
 Mega-ASR 可以保留为外部 baseline 和设计参考，但不应成为运行时依赖。

@@ -1,12 +1,12 @@
 # 开发方案
 
-最后更新：2026-06-07
+最后更新：2026-06-11
 
 ## 目标
 
-创建一个独立的、Colab 优先的鲁棒 ASR 项目，用于训练、评估和使用 Gemma 4 12B 的 ASR LoRA adapter，并最终形成类似 Mega-ASR 能力形态的产品雏形。
+创建一个独立的、Colab 优先的鲁棒 ASR 项目，用于训练、评估和使用 Qwen3-ASR-1.7B 的 ASR LoRA adapter，并最终形成类似 Mega-ASR 能力形态的产品雏形。
 
-Mega-ASR 只作为训练思想和评测框架参考。下面的交付物都应由我们自己实现，不依赖 Qwen3-ASR 专用代码。
+Mega-ASR 只作为训练思想和评测框架参考。下面的交付物都应由我们自己实现；baseline 可以依赖 Qwen3-ASR 官方 `qwen-asr` API，但不得依赖 Mega-ASR 上游工程的私有 wrapper、训练入口或 LoRA target 规则。
 
 ## 开发方式
 
@@ -26,7 +26,7 @@ Mega-ASR 只作为训练思想和评测框架参考。下面的交付物都应�
 | --- | --- | --- | --- | --- |
 | 00 | 文档治理 | `AGENTS.md`、roadmap、进度文档 | 建立文档先行规则 | 所有步骤有测试和验收标准 |
 | 01 | 独立项目骨架 | `configs/`、`scripts/`、`inference/`、`evaluation/`、`train/`、`router/`、`notebooks/` | 与 Mega-ASR 解耦 | 目录职责清楚，示例配置可读 |
-| 02 | Baseline 评估 | baseline notebook、base inference、WER/CER 脚本 | 测出 Gemma 4 原始 ASR 能力 | baseline 指标可复现 |
+| 02 | Baseline 评估 | baseline notebook、base inference、WER/CER 脚本 | 测出 Qwen3-ASR 原始 ASR 能力 | baseline 指标可复现 |
 | 03 | 数据 MVP | train/val/test JSONL、数据统计 | 构建可复现数据 manifest | split 无泄漏，scenario 标签齐全 |
 | 04 | 音频增强 | 增强脚本、增强配置、metadata | 生成退化音频 | 至少 5 类退化可生成并质检 |
 | 05 | LoRA 训练 MVP | QLoRA 训练脚本、collator、adapter checkpoint | 跑通第一版训练 | adapter 可加载，至少一个 degraded 场景提升 |
@@ -104,9 +104,8 @@ train/
 
 ## 不做事项
 
-- 不在 `src/MegaASR` 上继续堆 Gemma 4 实现。
-- 不把 Mega-ASR 的 Qwen3-ASR wrapper 改造成 Gemma wrapper。
+- 不在 `src/MegaASR` 上继续堆 Qwen3-ASR 实现。
+- 不把 Mega-ASR 的私有 Qwen3-ASR wrapper 改造成本项目主实现。
 - 不绕过 baseline 直接训练。
 - 不在没有固定测试集的情况下判断模型好坏。
 - 不在没有自有评测结果前宣称达到或超过 Mega-ASR。
-

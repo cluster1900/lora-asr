@@ -4,8 +4,8 @@
 
 目标模式：
 
-- `base`：Gemma 4 原始模型。
-- `lora`：Gemma 4 + 鲁棒 ASR LoRA。
+- `base`：Qwen3-ASR 原始模型。
+- `lora`：Qwen3-ASR + 鲁棒 ASR LoRA。
 - `router`：根据音频质量自动选择 base 或 LoRA。
 
 禁止：
@@ -14,16 +14,20 @@
 
 ## 当前脚本
 
-- `gemma4_base_infer.py`：读取 JSONL manifest，使用 Gemma 4 base 模型生成 ASR prediction JSONL。
+- `qwen3_asr_base_infer.py`：读取 JSONL manifest，使用 Qwen3-ASR base 模型生成 ASR prediction JSONL。
 
 ## 示例
 
 ```bash
-python inference/gemma4_base_infer.py \
+python inference/qwen3_asr_base_infer.py \
   --manifest data/jsonl/baseline_smoke.local.jsonl \
   --output-jsonl outputs/baseline/predictions.jsonl \
-  --model-id google/gemma-4-12B-it \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --max-inference-batch-size 1 \
+  --language English \
   --limit 2
 ```
 
-该命令需要可访问 Gemma 4 的 Hugging Face 权限和足够显存。
+该命令需要稳定网络下载模型权重，并建议在 GPU runtime 上运行。

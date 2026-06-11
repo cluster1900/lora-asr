@@ -4,7 +4,8 @@
 
 规划：
 
-- `01_baseline_colab.ipynb`：Gemma 4 12B baseline smoke 推理与 WER/CER 评测。
+- `01_baseline_colab.ipynb`：Qwen3-ASR-1.7B baseline smoke 推理与 WER/CER 评测。
+- `02_mvp_150_eval_colab.ipynb`：读取本地生成并上传到 Drive 的 150 条 MVP 评测集，运行 Qwen3-ASR baseline 推理和场景级 WER/CER。
 - `02_make_dataset_colab.ipynb`
 - `03_train_lora_colab.ipynb`
 - `04_eval_colab.ipynb`

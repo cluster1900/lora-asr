@@ -1,23 +1,25 @@
 # 风险与决策
 
-最后更新：2026-06-07
+最后更新：2026-06-11
 
 ## 已定决策
 
-### D001: 第一版基础模型使用 Gemma 4 12B
+### D001: 第一版基础模型使用 Qwen3-ASR-1.7B
 
 决策：
 
-- 从 `google/gemma-4-12B-it` 开始。
+- 从 `Qwen/Qwen3-ASR-1.7B` 开始。
 
 原因：
 
-- 支持原生音频输入，并且是 instruction-tuned。
-- 相比小模型具备更强语言和语义恢复能力。
+- 是专用 ASR 模型，官方提供 `qwen-asr` 推理工具。
+- 1.7B 体量更适合 Colab Free/Pro 做 baseline 和小规模 LoRA 验证。
+- 官方模型卡说明其支持多语言 ASR、离线/流式推理和长音频转写。
 
 影响：
 
-- 必须实现 Gemma 专用的加载、prompt、collator、LoRA target 和 generation。
+- baseline 推理应优先使用 `Qwen3ASRModel.transcribe`，不再使用通用聊天模板。
+- 训练阶段仍需独立探测真实模块名和 LoRA target，不能直接复制参考工程规则。
 
 ### D002: 先做独立 Colab MVP
 
@@ -29,7 +31,7 @@
 
 - Mega-ASR 的规模不适合 Colab。
 - 最终项目不应成为 Mega-ASR fork。
-- 在扩大规模前，需要先证明 Gemma 4 LoRA 能改善 degraded ASR。
+- 在扩大规模前，需要先证明 Qwen3-ASR LoRA 能改善 degraded ASR。
 
 影响：
 
@@ -72,30 +74,29 @@
 
 原因：
 
-- Mega-ASR 与 Qwen3-ASR 深度绑定。
-- 我们的目标模型是 Gemma 4 12B。
+- Mega-ASR 的工程结构、训练入口和 wrapper 与其发布目标深度绑定。
+- 即使基础模型同属 Qwen3-ASR，本项目仍需要自己的 manifest、评测、Colab 和训练闭环。
 - 我们需要完全掌控数据、训练、推理、测试和部署。
 
 影响：
 
-- 可以观察 Mega-ASR 的行为和结果，但具体实现必须面向 Gemma API 编写。
+- 可以观察 Mega-ASR 的行为和结果，但具体实现必须面向 Qwen3-ASR API 编写。
 
 ## 风险
 
-### R001: Gemma 4 的音频能力可能不专注精确转写
+### R001: Qwen3-ASR 在强退化音频上仍可能失败
 
 影响：
 
-- 模型可能总结、过度归一化，或添加解释文本。
+- 模型可能空输出、漏词、重复、过度归一化，或在严重退化时补全错误内容。
 
 缓解：
 
-- 使用严格 prompt。
-- 比较不同 target 格式。
-- 增加输出清理。
-- 在评测中惩罚模板化输出。
+- baseline 阶段固定 `language` 参数并保存原始输出。
+- 增加输出清理和归一化，但保留原始 prediction 便于分析。
+- 在评测中统计空输出、重复输出、长度异常和幻觉式输出。
 
-### R002: Colab 显存可能不足以训练 12B QLoRA
+### R002: Colab 显存可能不足以训练 Qwen3-ASR LoRA
 
 影响：
 
@@ -117,7 +118,7 @@
 
 缓解：
 
-- 检查 Gemma 模块名。
+- 检查 Qwen3-ASR 模块名。
 - 做 ablation：仅后层 LLM、仅音频投影、联合 target。
 - 按 scenario 追踪结果。
 

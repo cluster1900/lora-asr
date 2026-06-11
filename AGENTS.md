@@ -2,16 +2,16 @@
 
 ## 项目定位
 
-本项目是独立的 Gemma 4 Robust ASR 项目。Mega-ASR 只作为方法参考和外部 baseline，不作为最终代码底座。
+本项目是独立的 Qwen3-ASR Robust ASR 项目，基础模型统一使用 `Qwen/Qwen3-ASR-1.7B`。Mega-ASR 只作为方法参考和外部 baseline，不作为最终代码底座。
 
 ## 开发约束
 
 - 不 fork 或魔改 Mega-ASR 作为主实现。
-- 不依赖 Qwen3-ASR 专用 API、模块名、LoRA target 或推理 wrapper。
+- 可以依赖 Qwen3-ASR 官方 `qwen-asr` API，但不得复用 Mega-ASR 上游工程中的私有 Qwen3-ASR wrapper、训练入口或 LoRA target 规则。
 - 原 Mega-ASR 工程只允许放在本地忽略目录 `references/mega-asr-upstream/` 作为参考。
 - 新工程代码不得写入 `references/mega-asr-upstream/`。
 - `references/` 必须保持在 `.gitignore` 中，不提交其中任何文件。
-- 新代码应面向 Gemma 4 的真实 Transformers/API 设计。
+- 新代码应面向 Qwen3-ASR 官方 `qwen-asr`/Transformers API 设计。
 - Colab 是第一优先训练环境，脚本和 notebook 要默认支持 Google Drive 路径。
 - 数据、训练、推理、router、评测应尽量解耦。
 - 所有实验应能通过 JSONL manifest、配置文件和固定随机种子复现。
@@ -19,7 +19,7 @@
 ## 文档规范
 
 - 默认先更新文档，再修改代码。除拼写、格式化、明显小 bug 外，任何功能性改动都必须先有对应文档。
-- 重要架构、训练、数据、测试和风险变更必须同步到 `docs/gemma4-mega-asr/`。
+- 重要架构、训练、数据、测试和风险变更必须同步到 `docs/qwen3-asr/`。
 - 文档默认使用中文。
 - 新增实验结论要记录到 `00_progress.md` 或相关方案文档。
 
@@ -87,11 +87,11 @@
 - 有固定输入 manifest、配置文件和随机种子。
 - 有输出结果文件和指标摘要。
 - 有 baseline 对比。
-- 文档已同步更新到 `docs/gemma4-mega-asr/`。
+- 文档已同步更新到 `docs/qwen3-asr/`。
 
 MVP 最低验收：
 
-- Gemma 4 baseline 可运行并产出 WER/CER。
+- Qwen3-ASR baseline 可运行并产出 WER/CER。
 - 数据 MVP 至少覆盖 clean、noise、reverb、far_field、dropout。
 - LoRA MVP 至少在一个 degraded 场景上相对 base 改善 WER。
 - Router MVP 在混合测试集上优于 always-base，且 clean regression 有量化记录。

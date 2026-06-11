@@ -1,32 +1,32 @@
 # Colab 训练方案
 
-最后更新：2026-06-07
+最后更新：2026-06-11
 
 ## 目标
 
-在 Colab 上跑通 Gemma 4 12B 的 baseline 到 LoRA 训练完整闭环。
+在 Colab 上跑通 Qwen3-ASR-1.7B 的 baseline 到 LoRA 训练完整闭环。
 
 ## Colab 资源现实约束
 
-Gemma 4 12B 体量较大，不适合在 Colab 上做全参训练。现实路径是 QLoRA 或 LoRA，小 batch、梯度累积、短音频。
+Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。现实路径是先跑 baseline，再做 QLoRA 或 LoRA，小 batch、梯度累积、短音频。
 
 推荐硬件：
 
 - Colab Free：baseline 脚本、数据准备、极小 smoke test。
 - Colab Pro T4/L4：小规模 QLoRA 实验。
-- Colab Pro+ A100：第一版正式 12B LoRA 训练。
+- Colab Pro+ A100：第一版更稳定的 LoRA/QLoRA 训练和较大 batch 评测。
 - 外部 GPU runtime：适合数小时以上训练。
 
 ## Google Drive 目录
 
 ```text
-/content/drive/MyDrive/gemma-mega-asr/
+/content/drive/MyDrive/qwen3-asr/
   data/
     raw/
     augmented/
     jsonl/
   checkpoints/
-    gemma4-12b-asr-lora/
+    qwen3-asr-1.7b-lora/
   outputs/
     baseline/
     eval/
@@ -41,8 +41,8 @@ Gemma 4 12B 体量较大，不适合在 Colab 上做全参训练。现实路径�
 
 目的：
 
-- 加载 `google/gemma-4-12B-it`。
-- 在小评测集上运行 ASR prompt。
+- 加载 `Qwen/Qwen3-ASR-1.7B`。
+- 在小评测集上运行 Qwen3-ASR `transcribe`。
 - 计算 WER/CER。
 - 保存预测结果。
 
@@ -51,7 +51,7 @@ Gemma 4 12B 体量较大，不适合在 Colab 上做全参训练。现实路径�
 1. 挂载 Google Drive。
 2. 安装依赖。
 3. 登录 Hugging Face，如果需要。
-4. 加载 processor 和 model。
+4. 加载 Qwen3-ASR model。
 5. 对每条音频生成转写。
 6. 归一化预测。
 7. 计算 WER/CER。
@@ -92,7 +92,7 @@ Gemma 4 12B 体量较大，不适合在 Colab 上做全参训练。现实路径�
 初始配置：
 
 ```yaml
-model_id: google/gemma-4-12B-it
+model_id: Qwen/Qwen3-ASR-1.7B
 quantization: 4bit
 lora_r: 8
 lora_alpha: 16
@@ -158,27 +158,23 @@ max_new_tokens: 256
 - threshold config。
 - routing evaluation report。
 
-## 训练 Prompt
+## 训练目标格式
 
-初始 ASR prompt：
+baseline 推理不使用聊天 prompt，而是使用 `Qwen3ASRModel.transcribe(audio=..., language=...)`。训练阶段的 target 格式需要在 LoRA MVP 前通过官方示例、模块结构和 smoke training 决定。
 
-```text
-Transcribe the following speech segment in its original language. Only output the transcription.
-```
-
-训练目标格式：
+候选 target 格式：
 
 ```text
 language English<asr_text>THE TRANSCRIPT TEXT
 ```
 
-如果 Gemma 4 instruction tuning 更适合纯转写目标，则测试第二种格式：
+也要测试纯转写目标：
 
 ```text
 THE TRANSCRIPT TEXT
 ```
 
-最终格式由验证集 WER 和输出干净程度决定。
+最终格式由验证集 WER、空输出率、重复输出率和 clean regression 决定。
 
 ## Checkpoint 策略
 

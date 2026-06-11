@@ -127,7 +127,7 @@
 
 | 产品能力 | 架构模块 | 主要路线图步骤 | 测试/验收来源 | 当前状态 |
 | --- | --- | --- | --- | --- |
-| Gemma 4 base ASR 推理 | 基础模型、推理管线 | 02 Baseline 评估 | `02_baseline_eval.md`、`05_testing_plan.md` | 已规划 |
+| Qwen3-ASR base ASR 推理 | 基础模型、推理管线 | 02 Baseline 评估 | `02_baseline_eval.md`、`05_testing_plan.md` | 已规划 |
 | 鲁棒 ASR LoRA adapter | ASR LoRA、训练管线 | 05 LoRA 训练 MVP | `05_lora_training_mvp.md`、`01_architecture.md` | 已规划 |
 | 音频质量 router | Router、推理管线 | 07 Router MVP | `07_router_mvp.md`、`05_testing_plan.md` | 已规划 |
 | clean/degraded 动态推理 | Router、部署模式 | 07 Router MVP | `07_router_mvp.md`、`01_architecture.md` | 已规划 |

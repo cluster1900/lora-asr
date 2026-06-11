@@ -1,6 +1,6 @@
 # 03 数据 MVP
 
-最后更新：2026-06-07
+最后更新：2026-06-08
 
 ## 背景
 
@@ -34,6 +34,7 @@
 - val：1k-2k 条。
 - test：1k-2k 条。
 - smoke：10-50 条。
+- baseline_mvp_150：本地合成评测集，clean/noise/reverb/far_field/dropout 各 30 条，总计 150 条，用于正式数据源接入前验证 baseline 扩展评测闭环。
 
 ## 必需字段
 
@@ -42,8 +43,7 @@
 ```json
 {
   "audio": "...",
-  "text": "language English<asr_text>REFERENCE TEXT",
-  "prompt": "Transcribe the speech accurately.",
+  "answer": "REFERENCE TEXT",
   "language": "English",
   "scenario": "noise",
   "source": "librispeech",
@@ -74,6 +74,38 @@
 6. 输出 dataset stats。
 7. 更新数据文档和进度文档。
 
+## 本地合成 MVP 评测集
+
+在真实数据源接入前，先通过 `scripts/create_mvp_eval_audio.py` 生成可复现的本地合成评测集。该数据集用于：
+
+- 验证 manifest 规模从 2 条扩展到 150 条后，推理脚本是否能稳定批处理。
+- 验证评测脚本是否能按 `scenario` 聚合 clean/noise/reverb/far_field/dropout。
+- 记录 Qwen3-ASR baseline 在典型退化场景下的初始失败模式。
+- 同时覆盖短文本和长文本，观察模型在长句上的漏词、重复输出和幻觉补全。
+
+生成物默认不进入 git：
+
+- `data/mvp_eval/audio/`
+- `data/jsonl/baseline_mvp_150.local.jsonl`
+- `data/jsonl/baseline_mvp_150_stats.local.json`
+
+注意：该数据集由系统 TTS 和规则退化生成，不能替代真实 benchmark。
+
+默认使用 `--profile hard` 生成强退化版本：
+
+- noise：低 SNR 背景噪声。
+- reverb：更长延迟、更强多段回声。
+- far_field：更明显的音量衰减、低通、房间反射和环境噪声。
+- dropout：更长、更频繁的短时静音/强衰减。
+
+clean 场景不做退化，用于后续比较 degraded 改善是否引入 clean regression。
+
+文本长度设计：
+
+- 每个场景前 15 条为短文本。
+- 每个场景后 15 条为长文本。
+- manifest 写入 `text_length_bucket` 和 `reference_word_count`，便于后续按长度聚合错误。
+
 ## 切分规则
 
 - 同一原始 utterance 不得跨 split。
@@ -86,6 +118,9 @@
 - JSONL 每行合法。
 - 每条音频路径存在。
 - 必需字段齐全。
+- `baseline_mvp_150` 场景计数必须为 clean/noise/reverb/far_field/dropout 各 30 条。
+- 每个场景必须包含 short 15 条、long 15 条。
+- `baseline_mvp_150_stats.local.json` 必须记录 `profile` 和各场景退化统计。
 - 时长在 MVP 限制内，默认 3-20 秒。
 - split 泄漏检查通过。
 
@@ -101,4 +136,3 @@
 - 数据路径在 Colab 和本地不一致。缓解：统一使用 Drive 根目录变量。
 - 数据源授权不明确。缓解：只使用允许研究和训练的数据源，并记录来源。
 - 测试集泄漏。缓解：先按原始 utterance 切分，再做增强。
-

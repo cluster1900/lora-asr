@@ -1,10 +1,10 @@
 # 01 独立项目骨架
 
-最后更新：2026-06-07
+最后更新：2026-06-11
 
 ## 背景
 
-当前仓库来源于 Mega-ASR，但我们的最终项目必须独立开发。第一步需要建立与 Mega-ASR 解耦的目录结构，后续所有 Gemma 4 相关代码都放在新结构中。
+当前仓库来源于 Mega-ASR，但我们的最终项目必须独立开发。第一步需要建立与 Mega-ASR 解耦的目录结构，后续所有 Qwen3-ASR 相关代码都放在新结构中。
 
 原 Mega-ASR 工程应被隔离到本地忽略目录 `references/mega-asr-upstream/`，根目录只保留新工程内容。`references/` 不进入 git。
 
@@ -38,9 +38,9 @@ references/
 
 ## 文件规划
 
-- `configs/baseline/gemma4_baseline.yaml`
+- `configs/baseline/qwen3_asr_baseline.yaml`
 - `configs/data/mvp_dataset.yaml`
-- `configs/train/gemma4_lora_mvp.yaml`
+- `configs/train/qwen3_asr_lora_mvp.yaml`
 - `configs/eval/default_eval.yaml`
 - `data/jsonl/README.md`
 - `data/jsonl/baseline_smoke.example.jsonl`
@@ -86,7 +86,7 @@ references/
 ## 验收标准
 
 - 后续 baseline、数据、训练、评测代码都有明确落点。
-- 项目骨架中没有依赖 Mega-ASR/Qwen3-ASR 的实现命名。
+- 项目骨架中没有依赖 Mega-ASR 上游工程的实现命名；Qwen3-ASR 只作为本项目当前基础模型命名出现。
 - 参考工程隔离路径固定为 `references/mega-asr-upstream/`，且 `references/` 被 git 忽略。
 - 进度文档已记录完成情况。
 

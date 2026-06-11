@@ -1,14 +1,14 @@
 # 项目原则
 
-最后更新：2026-06-07
+最后更新：2026-06-11
 
 ## 项目定位
 
-这是一个基于 Gemma 4 12B 的独立鲁棒 ASR 项目。
+这是一个基于 Qwen3-ASR-1.7B 的独立鲁棒 ASR 项目。
 
 Mega-ASR 是参考项目，不是实现底座。我们学习它的方法，但最终代码、架构、训练流程和部署流程都应由我们自己实现。
 
-原 Mega-ASR 工程只能保存在本地忽略目录 `references/mega-asr-upstream/`。新工程根目录以 Gemma 4 Robust ASR 为主，不再把 Mega-ASR 的源码、脚本和资源散放在主路径中。`references/` 不进入 git。
+原 Mega-ASR 工程只能保存在本地忽略目录 `references/mega-asr-upstream/`。新工程根目录以 Qwen3-ASR Robust ASR 为主，不再把 Mega-ASR 的源码、脚本和资源散放在主路径中。`references/` 不进入 git。
 
 ## 可以借鉴 Mega-ASR 的部分
 
@@ -21,24 +21,24 @@ Mega-ASR 是参考项目，不是实现底座。我们学习它的方法，但�
 
 ## 不直接复用的部分
 
-- Qwen3-ASR 专用 wrapper。
-- Qwen3-ASR 模块名。
-- Qwen3-ASR LoRA target 正则。
+- Mega-ASR 上游工程里的私有 Qwen3-ASR wrapper。
+- Mega-ASR 上游工程里的模块名假设。
+- Mega-ASR 上游工程里的 LoRA target 正则。
 - Mega-ASR 推理适配层。
 - Mega-ASR 的最终项目结构。
-- 任何把 Gemma 支持做成 Qwen3-ASR 补丁的代码路径。
+- 任何把本项目做成 Mega-ASR 补丁的代码路径。
 
 ## 参考工程隔离规则
 
 - `references/mega-asr-upstream/` 只读参考。
-- 不在该目录下新增 Gemma 4 功能代码。
+- 不在该目录下新增 Qwen3-ASR 功能代码。
 - 不从新工程导入该目录中的 Python 模块。
 - 不提交 `references/` 下的任何文件。
 - 如果参考其中的思路，必须先记录到本项目文档，再独立实现。
 
 ## 工程原则
 
-1. 基于 Gemma 4 的真实 API 和模型结构开发。
+1. 基于 Qwen3-ASR 官方 `qwen-asr` API 和真实模型结构开发。
 2. 数据、训练、推理、router、评测模块彼此解耦。
 3. Colab 是第一优先训练环境。
 4. 每次实验都应能从 JSONL manifest 和配置文件复现。
@@ -49,6 +49,6 @@ Mega-ASR 是参考项目，不是实现底座。我们学习它的方法，但�
 
 当前工作名：
 
-- Gemma 4 Robust ASR
+- Qwen3-ASR Robust ASR
 
 在项目拥有自己的结果和身份前，避免使用容易让人误解为 Mega-ASR fork 或替代品的名称。

@@ -1,14 +1,14 @@
 # 05 LoRA 训练 MVP
 
-最后更新：2026-06-07
+最后更新：2026-06-11
 
 ## 背景
 
-Baseline 和数据 MVP 完成后，需要训练第一版 Gemma 4 鲁棒 ASR LoRA，验证参数高效微调是否能改善退化音频识别。
+Baseline 和数据 MVP 完成后，需要训练第一版 Qwen3-ASR 鲁棒 ASR LoRA，验证参数高效微调是否能改善退化音频识别。
 
 ## 目标
 
-在 Colab 上跑通 Gemma 4 12B QLoRA/LoRA 训练，产出可加载、可评测的 adapter。
+在 Colab 上跑通 Qwen3-ASR-1.7B QLoRA/LoRA 训练，产出可加载、可评测的 adapter。
 
 ## 范围
 
@@ -19,7 +19,7 @@ Baseline 和数据 MVP 完成后，需要训练第一版 Gemma 4 鲁棒 ASR LoRA
 - `train.jsonl`
 - `val.jsonl`
 - 训练配置。
-- Gemma 4 base model。
+- Qwen3-ASR base model。
 
 ## 输出
 
@@ -31,15 +31,15 @@ Baseline 和数据 MVP 完成后，需要训练第一版 Gemma 4 鲁棒 ASR LoRA
 
 ## 需要实现的文件
 
-- `train/train_gemma_lora.py`
+- `train/train_qwen3_asr_lora.py`
 - `train/collator.py`
 - `train/lora_targets.py`
-- `configs/train/gemma4_lora_mvp.yaml`
+- `configs/train/qwen3_asr_lora_mvp.yaml`
 - `notebooks/03_train_lora_colab.ipynb`
 
 ## 执行步骤
 
-1. 加载 Gemma 4 processor 和 model。
+1. 加载 Qwen3-ASR processor 和 model。
 2. 打印 `model.named_modules()`，保存模块名快照。
 3. 定义第一版 LoRA target。
 4. 实现音频 + 文本 collator。
@@ -52,7 +52,7 @@ Baseline 和数据 MVP 完成后，需要训练第一版 Gemma 4 鲁棒 ASR LoRA
 ## 初始配置
 
 ```yaml
-model_id: google/gemma-4-12B-it
+model_id: Qwen/Qwen3-ASR-1.7B
 quantization: 4bit
 lora_r: 8
 lora_alpha: 16
@@ -83,7 +83,6 @@ seed: 42
 
 ## 风险
 
-- 12B QLoRA 显存不足。缓解：减小 max_audio_seconds、batch size 设为 1、使用 A100。
+- Colab 显存不足。缓解：减小 max_audio_seconds、batch size 设为 1、使用 4bit/LoRA，必要时使用 A100。
 - LoRA target 不合适。缓解：做 target ablation。
-- 模型学会输出模板而非转写。缓解：严格 prompt、清理训练目标、评测输出污染。
-
+- 模型学会输出模板而非转写。缓解：清理训练目标，保存原始输出，并在评测中统计输出污染。

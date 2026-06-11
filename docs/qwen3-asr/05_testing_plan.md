@@ -1,17 +1,17 @@
 # 测试方案
 
-最后更新：2026-06-07
+最后更新：2026-06-11
 
 ## 目标
 
-评估 Gemma 4 ASR LoRA 是否能提升退化音频识别，同时不明显损害 clean speech。
+评估 Qwen3-ASR ASR LoRA 是否能提升退化音频识别，同时不明显损害 clean speech。
 
 ## 测试模式
 
-1. Base Gemma 4 12B。
-2. Gemma 4 12B + LoRA always on。
-3. Gemma 4 12B + router conditional LoRA。
-4. 可选外部 baseline：Mega-ASR、Whisper、Qwen3-ASR。
+1. Base Qwen3-ASR-1.7B。
+2. Qwen3-ASR-1.7B + LoRA always on。
+3. Qwen3-ASR-1.7B + router conditional LoRA。
+4. 可选外部 baseline：Mega-ASR 发布模型、Whisper、商业 ASR API。
 
 外部 baseline 只作为对比对象，不作为实现依赖。
 
@@ -100,7 +100,7 @@ MVP 至少包含：
 
 扩大规模版本成功条件：
 
-- degraded 平均 WER 相对 Gemma 4 base 下降 15%-25%。
+- degraded 平均 WER 相对 Qwen3-ASR base 下降 15%-25%。
 - router 模式下 clean WER 相对退化小于 3%。
 - 在混合 clean/degraded 测试集上，router 模式优于 always-base 和 always-LoRA。
 - 结果能在至少两个源数据集上成立。
@@ -134,4 +134,3 @@ MVP 至少包含：
 4. 10 条 mini eval 可计算 WER。
 5. 无输出解析错误。
 6. checkpoint metadata 存在。
-

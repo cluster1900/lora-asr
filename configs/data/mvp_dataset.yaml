@@ -1,6 +1,6 @@
 project:
-  name: gemma4-robust-asr
-  audio_root: /content/drive/MyDrive/gemma-mega-asr
+  name: qwen3-asr-robust-asr
+  audio_root: /content/drive/MyDrive/qwen3-asr
 
 dataset:
   language: English

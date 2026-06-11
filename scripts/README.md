@@ -10,6 +10,7 @@
 ## 当前脚本
 
 - `create_smoke_audio.py`：在本地生成 baseline smoke test 所需的 clean/noise 音频和 JSONL manifest。默认使用 macOS 自带 `say` 生成英文语音，再叠加噪声生成 degraded 样本。
+- `create_mvp_eval_audio.py`：在本地生成 baseline MVP 评测集，覆盖 clean、noise、reverb、far_field、dropout 各 30 条，总计 150 条。默认使用 macOS `say` 合成 clean 语音，再用标准库生成退化版本。
 
 ## 本地生成物
 
@@ -20,3 +21,19 @@
 - `data/jsonl/baseline_smoke.local.jsonl`
 
 这些文件用于本地测试，已被 `.gitignore` 排除。
+
+MVP 150 条评测集默认输出：
+
+- `data/mvp_eval/audio/`
+- `data/jsonl/baseline_mvp_150.local.jsonl`
+- `data/jsonl/baseline_mvp_150_stats.local.json`
+
+生成命令：
+
+```bash
+python3 scripts/create_mvp_eval_audio.py --profile hard --force
+```
+
+默认 `hard` profile 会主动降低 degraded 场景质量，用于压出 baseline 错误；clean 场景仍保持清晰，用于观察 clean speech regression。该数据集用于工程闭环和 baseline 批量评测，不作为真实 benchmark。
+
+默认 30 条文本中，前 15 条为短文本，后 15 条为长文本。manifest 会写入 `text_length_bucket` 和 `reference_word_count`，方便后续按短句/长句分析错误。

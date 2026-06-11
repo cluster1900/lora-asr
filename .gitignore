@@ -35,6 +35,8 @@ data/raw/
 data/augmented/
 data/cache/
 data/local_smoke/
+data/mvp_eval/
+data/jsonl/*.local.json
 data/jsonl/*.local.jsonl
 
 # Private files

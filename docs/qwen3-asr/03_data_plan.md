@@ -12,9 +12,8 @@
 
 ```json
 {
-  "audio": "/content/drive/MyDrive/gemma-mega-asr/audio/train/000001.wav",
-  "text": "language English<asr_text>THE TRANSCRIPT TEXT",
-  "prompt": "Transcribe the speech accurately.",
+  "audio": "/content/drive/MyDrive/qwen3-asr/audio/train/000001.wav",
+  "answer": "THE TRANSCRIPT TEXT",
   "language": "English",
   "scenario": "clean",
   "source": "librispeech",
@@ -26,7 +25,7 @@
 
 ```json
 {
-  "audio": "/content/drive/MyDrive/gemma-mega-asr/audio/test/000001.wav",
+  "audio": "/content/drive/MyDrive/qwen3-asr/audio/test/000001.wav",
   "answer": "THE TRANSCRIPT TEXT",
   "language": "en",
   "scenario": "noise_reverb",
