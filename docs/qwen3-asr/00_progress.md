@@ -30,6 +30,7 @@
 ## 进行中
 
 - `02 Baseline 评估`：`Qwen/Qwen3-ASR-1.7B` 已完成 MVP 150 全量评测。clean WER 为 1.04%，degraded-only WER 约 60.23%，empty output rate 为 0.0。下一步应做错误样本分析，并把这些结果作为 LoRA/Router 的 base 对照。
+- 正在启动 `06 评测与错误分析`：先实现 scored JSONL 错误分析脚本，输出 worst cases、场景/文本长度拆分和疑似幻觉/重复/过短输出标签。
 
 ## 下一批里程碑
 

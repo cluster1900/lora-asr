@@ -15,6 +15,7 @@
 ## 当前脚本
 
 - `eval_wer.py`：读取 prediction JSONL，计算 WER/CER、overall 指标和 scenario-level 指标。
+- `analyze_errors.py`：读取 scored JSONL，输出 worst cases、错误标签和 scenario/bucket 分析。
 
 ## 示例
 
@@ -24,4 +25,11 @@ python evaluation/eval_wer.py \
   --scored-jsonl outputs/baseline/predictions.scored.jsonl \
   --metrics-json outputs/baseline/metrics.json \
   --metrics-by-scenario-csv outputs/baseline/metrics_by_scenario.csv
+```
+
+```bash
+python evaluation/analyze_errors.py \
+  --scored-jsonl outputs/baseline/predictions.scored.jsonl \
+  --output-dir outputs/baseline/error_analysis \
+  --top-k 30
 ```
