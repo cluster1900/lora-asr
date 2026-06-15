@@ -34,8 +34,10 @@ datasets/
 data/raw/
 data/augmented/
 data/cache/
+audio/
 data/local_smoke/
 data/mvp_eval/
+data/jsonl/baseline_smoke.jsonl
 data/jsonl/*.local.json
 data/jsonl/*.local.jsonl
 
