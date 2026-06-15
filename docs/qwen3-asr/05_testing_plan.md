@@ -1,6 +1,6 @@
 # 测试方案
 
-最后更新：2026-06-11
+最后更新：2026-06-15
 
 ## 目标
 
@@ -95,6 +95,18 @@ MVP 至少包含：
 - router 模式下 clean WER 相对退化小于 5%。
 - degraded 音频空输出率下降。
 - 评测脚本可复现。
+
+当前 Qwen3-ASR base 对照：
+
+- clean WER：0.010438。
+- noise WER：0.336117。
+- reverb WER：0.415449。
+- dropout WER：0.759916。
+- far_field WER：0.897704。
+- degraded-only WER：约 0.602296。
+- empty output rate：所有场景均为 0.0。
+
+LoRA MVP 的第一版成功门槛应以 degraded-only WER 或单场景 WER 相对 base 下降为准。由于 base 没有空输出，短期内更应关注错误替换、漏词、插入、重复和幻觉式补全是否减少。
 
 ## Scale-Up 成功标准
 

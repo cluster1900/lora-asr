@@ -1,6 +1,6 @@
 # 02 Baseline 评估
 
-最后更新：2026-06-11
+最后更新：2026-06-15
 
 ## 背景
 
@@ -153,7 +153,7 @@ baseline 直接使用 Qwen3-ASR 官方 `Qwen3ASRModel.transcribe(audio=..., lang
 - 记录空输出率和明显幻觉样本。
 - 文档和进度已更新。
 
-## 当前 Smoke 状态
+## 当前 Baseline 结果
 
 2026-06-07 曾在 Colab 中完成 2 条样本 smoke eval，用于验证推理与评测链路：
 
@@ -188,6 +188,42 @@ oracle 结果只验证评测链路。真实 Qwen3-ASR baseline 结果需在 Cola
 - short 参考词数：6-8，平均 7.13。
 - long 参考词数：21-27，平均 24.73。
 - overall oracle ref_len：2395。
+
+2026-06-15 已在 Colab GPU runtime 中完成 `Qwen/Qwen3-ASR-1.7B` MVP 150 hard profile 全量评测。
+
+场景级结果：
+
+| scenario | samples | num_edits | ref_len | WER | empty_output_rate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| clean | 30 | 5 | 479 | 0.010438 | 0.0 |
+| noise | 30 | 161 | 479 | 0.336117 | 0.0 |
+| reverb | 30 | 199 | 479 | 0.415449 | 0.0 |
+| dropout | 30 | 364 | 479 | 0.759916 | 0.0 |
+| far_field | 30 | 430 | 479 | 0.897704 | 0.0 |
+
+整体 WER 约 0.483925。degraded-only WER 约 0.602296。所有场景 empty output rate 均为 0.0，说明失败主要来自错误替换、漏词、插入和幻觉式补全，而不是完全空转写。
+
+短/长文本拆分结果：
+
+| scenario | bucket | samples | edits | ref_len | WER |
+| --- | --- | ---: | ---: | ---: | ---: |
+| clean | short | 15 | 0 | 107 | 0.000000 |
+| clean | long | 15 | 5 | 372 | 0.013441 |
+| noise | short | 15 | 21 | 107 | 0.196262 |
+| noise | long | 15 | 140 | 372 | 0.376344 |
+| reverb | short | 15 | 31 | 107 | 0.289720 |
+| reverb | long | 15 | 168 | 372 | 0.451613 |
+| dropout | short | 15 | 77 | 107 | 0.719626 |
+| dropout | long | 15 | 287 | 372 | 0.771505 |
+| far_field | short | 15 | 92 | 107 | 0.859813 |
+| far_field | long | 15 | 338 | 372 | 0.908602 |
+
+验收判断：
+
+- 已满足 baseline MVP 的样本数、场景级指标、空输出率和失败样本记录要求。
+- clean baseline 正常，可以作为后续 clean regression 对照。
+- degraded 场景退化足够明显，尤其 far_field/dropout，可作为 LoRA 和 router 的第一批优化目标。
+- 下一步应进入错误分析文档化，并准备 `05 LoRA 训练 MVP` 的训练数据与 target 探测。
 
 ## 风险
 

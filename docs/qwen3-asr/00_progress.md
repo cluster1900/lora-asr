@@ -1,10 +1,10 @@
 # 开发进度
 
-最后更新：2026-06-11
+最后更新：2026-06-15
 
 ## 当前状态
 
-当前阶段：正在执行 `02 Baseline 评估`。
+当前阶段：`02 Baseline 评估` 已完成 MVP 150 全量 baseline，准备进入错误分析与 LoRA MVP 前置设计。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -29,7 +29,7 @@
 
 ## 进行中
 
-- 执行 `02 Baseline 评估`：项目基础模型已统一为 `Qwen/Qwen3-ASR-1.7B`，正在从头重跑 Qwen3-ASR baseline。旧 smoke 结果只作为历史链路记录，不再作为当前模型结论。
+- `02 Baseline 评估`：`Qwen/Qwen3-ASR-1.7B` 已完成 MVP 150 全量评测。clean WER 为 1.04%，degraded-only WER 约 60.23%，empty output rate 为 0.0。下一步应做错误样本分析，并把这些结果作为 LoRA/Router 的 base 对照。
 
 ## 下一批里程碑
 
@@ -92,3 +92,46 @@
 baseline 推理逻辑从通用多模态聊天模板改为 Qwen3-ASR 官方 `qwen-asr` 包的 `Qwen3ASRModel.transcribe`。默认 Colab Free 参数为 `dtype=float16`、`device_map=cuda:0`、`max_inference_batch_size=1`、`language=English`，用于降低 OOM 风险并从头重跑 baseline。
 
 本次切换只完成工程和文档收敛；真实 Qwen3-ASR WER/CER 仍需在 Colab GPU runtime 中重新执行 `notebooks/01_baseline_colab.ipynb` 或 `notebooks/02_mvp_150_eval_colab.ipynb` 后记录。
+
+### 2026-06-15
+
+完成 `Qwen/Qwen3-ASR-1.7B` 在 MVP 150 hard profile 上的全量 baseline 评测。评测集包含 clean、noise、reverb、far_field、dropout 各 30 条，短文本/长文本各 15 条。
+
+场景级结果：
+
+| scenario | samples | num_edits | ref_len | WER | empty_output_rate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| clean | 30 | 5 | 479 | 0.010438 | 0.0 |
+| noise | 30 | 161 | 479 | 0.336117 | 0.0 |
+| reverb | 30 | 199 | 479 | 0.415449 | 0.0 |
+| dropout | 30 | 364 | 479 | 0.759916 | 0.0 |
+| far_field | 30 | 430 | 479 | 0.897704 | 0.0 |
+
+汇总结果：
+
+- overall WER：约 0.483925，1159 edits / 2395 reference words。
+- degraded-only WER：约 0.602296，1154 edits / 1916 reference words。
+- clean WER：0.010438，说明 clean baseline 基本正常。
+- empty output rate：所有场景均为 0.0，主要失败模式不是空输出，而是幻觉式替换、漏词、插入和语义补全。
+
+短/长文本拆分：
+
+| scenario | bucket | samples | edits | ref_len | WER |
+| --- | --- | ---: | ---: | ---: | ---: |
+| clean | short | 15 | 0 | 107 | 0.000000 |
+| clean | long | 15 | 5 | 372 | 0.013441 |
+| noise | short | 15 | 21 | 107 | 0.196262 |
+| noise | long | 15 | 140 | 372 | 0.376344 |
+| reverb | short | 15 | 31 | 107 | 0.289720 |
+| reverb | long | 15 | 168 | 372 | 0.451613 |
+| dropout | short | 15 | 77 | 107 | 0.719626 |
+| dropout | long | 15 | 287 | 372 | 0.771505 |
+| far_field | short | 15 | 92 | 107 | 0.859813 |
+| far_field | long | 15 | 338 | 372 | 0.908602 |
+
+初步错误观察：
+
+- far_field 是最严重场景，短句和长句都出现大量幻觉式替换，例如将 “Could you send the report before noon?” 识别成无关句子。
+- dropout 场景 WER 接近 0.76，说明断续音频会造成严重漏词和错误补全。
+- noise/reverb 仍有明显退化，但比 far_field/dropout 更可训练，适合作为第一版 LoRA 改善目标。
+- clean 仅 5 个 edit，后续 LoRA 和 router 必须把 clean regression 作为硬门槛。
