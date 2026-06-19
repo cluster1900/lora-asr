@@ -15,9 +15,10 @@ Baseline 和数据 MVP 完成后，需要训练第一版 Qwen3-ASR 鲁棒 ASR Lo
 本步骤只做第一版监督微调，不做 RL，不做大规模训练。
 
 `05A LoRA 训练前探测` 已完成。本小阶段确认了 Qwen3-ASR 的真实模块结构、
-LoRA target 候选和 Colab 资源可行性。下一步进入 `05B Unsloth 兼容性检查`
-和 `05C LoRA smoke training`：先确认 Unsloth 能否加载 Qwen3-ASR 并精确挂载
-目标 LoRA，再跑 5-20 step，验证 target 可训练、loss 正常下降、adapter 可保存加载。
+LoRA target 候选和 Colab 资源可行性。`05B Unsloth 兼容性检查` 已完成，结果为
+不兼容：Unsloth 当前无法通过 Transformers AutoConfig 加载 `model_type=qwen3_asr`。
+下一步进入 `05C Transformers + PEFT LoRA smoke training`：跑 5-20 step，验证
+target 可训练、loss 正常下降、adapter 可保存加载。
 
 ## 当前 Baseline 对照
 
@@ -142,9 +143,9 @@ notebook 默认项目目录为 `/content/drive/MyDrive/qwen3-asr`。
 
 训练 backend 决策：
 
-- 优先使用 Unsloth，因为它面向 Colab 和低显存场景，官方 Qwen3 文档说明 Unsloth 支持 Qwen3/Qwen3 MoE 高效微调。
-- 但 Qwen3-ASR 是音频 ASR 架构，不等同于普通 Qwen3 文本模型。正式训练前必须先跑 Unsloth 兼容性检查。
-- 如果 Unsloth 不能加载 `Qwen/Qwen3-ASR-1.7B`，或不能只对 audio tower target 挂 LoRA，则回退到 Transformers + PEFT，并保留 qwen-asr 做推理评测入口。
+- 已尝试 Unsloth。官方 Unsloth 支持普通 Qwen3/Qwen3 MoE 高效微调，但 Qwen3-ASR 是音频 ASR 架构。
+- 兼容性检查失败：`transformers==4.57.6` 的 AutoConfig 不识别 `model_type=qwen3_asr`，Unsloth `FastModel.from_pretrained` 无法直接加载 `Qwen/Qwen3-ASR-1.7B`。
+- 当前 MVP 回退到 Transformers + PEFT，并保留 qwen-asr 做推理评测入口。
 
 第一版 smoke training 使用 `audio_tower_attention_plus_projection_smoke` 策略：
 
@@ -183,11 +184,29 @@ model.thinker.audio_tower.proj2
 - 加载后的模型是否仍暴露 `model.thinker.audio_tower` 模块。
 - Unsloth 的 LoRA API 是否支持精确限制到 audio tower target，而不是同时命中文本 decoder。
 
+检查结果：
+
+- 已写出 `outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json`。
+- `compatible=false`。
+- 根因：Unsloth 使用标准 Transformers AutoConfig 路径；当前 `transformers==4.57.6` 不认识 `qwen3_asr` 架构。
+- 决策：不继续通过依赖 pinning 强推 Unsloth，切换到 `backend: transformers_peft`。
+
+### 05C Transformers + PEFT smoke training
+
+实现目标：
+
+- 用 qwen-asr 或底层 Qwen3-ASR torch model 作为加载入口。
+- 用 PEFT 按完整模块正则挂载 LoRA，严格限制到 99 个 audio tower target。
+- 先使用 5-20 step smoke test，不追求指标提升。
+- 保存 adapter、训练配置、target_modules、loss log 和最小推理输出。
+
 通过标准：
 
-- 能写出 `outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json`。
-- 如果 `compatible=true`，下一步使用 Unsloth 训练。
-- 如果 `compatible=false`，文档记录失败原因，并切换到 `fallback_backend: transformers_peft`。
+- target 匹配数量等于 `expected_target_count=99`。
+- 可训练参数量接近 1,683,456。
+- 训练 loss 非 NaN。
+- adapter 可保存并重新加载。
+- 至少 1 条 clean 与 1 条 degraded 音频能完成 LoRA 推理。
 
 ## 初始配置
 

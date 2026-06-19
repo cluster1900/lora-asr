@@ -22,7 +22,7 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 
 ## 当前范围
 
-当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出第一批分析文件，`05A LoRA 训练前探测` 已完成。现在进入 `05B Unsloth 兼容性检查`，先确认 Unsloth 是否能用于 Qwen3-ASR 音频架构，再实现 5-20 step 的最小训练闭环。
+当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出第一批分析文件，`05A LoRA 训练前探测` 已完成，`05B Unsloth 兼容性检查` 已完成且结果为不兼容。现在进入 `05C Transformers + PEFT LoRA smoke training`。
 
 已完成：
 
@@ -35,9 +35,9 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 - 已新增 `evaluation/analyze_errors.py` 并保存 baseline 错误分析输出。
 - 已新增 `train/inspect_qwen3_asr_modules.py` 和 `notebooks/03_train_lora_colab.ipynb`，用于 LoRA 训练前模块探测。
 - 已保存 `outputs/lora_probe/qwen3_asr_1_7b/` 探测输出，并确定第一版 smoke target：audio tower attention + speech projection。
-- 已新增 `train/check_unsloth_qwen3_asr.py`，训练框架优先尝试 Unsloth，兼容失败时回退 Transformers + PEFT。
+- 已新增 `train/check_unsloth_qwen3_asr.py`，并确认 Unsloth 当前无法直接加载 `Qwen/Qwen3-ASR-1.7B`。
 
-下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05B`，在 Colab Free GPU 中生成 `unsloth_compatibility.json`；如果兼容，再实现 Unsloth LoRA smoke training 入口。
+下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05C`，实现 Transformers + PEFT LoRA smoke training 入口。
 
 MVP 会按路线图继续完成：
 

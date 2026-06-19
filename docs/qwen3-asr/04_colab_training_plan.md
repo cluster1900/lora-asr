@@ -95,6 +95,12 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 复用 Mega-ASR 或其他工程的 target 规则；同时 Qwen3-ASR 是音频 ASR 架构，不能
 假设普通 Qwen3 LLM 的 Unsloth 训练入口一定可用。
 
+Unsloth 兼容性检查结果：
+
+- `compatible=false`。
+- 失败原因是 Transformers AutoConfig 不识别 `model_type=qwen3_asr`。
+- 后续训练入口回退到 Transformers + PEFT，不继续在当前 MVP 中调试 Unsloth 依赖。
+
 依赖注意事项：
 
 - `qwen-asr` 和 Unsloth 可能要求不同的 `transformers`、`accelerate` 版本。
@@ -122,7 +128,7 @@ max_new_tokens: 256
 训练阶段：
 
 0. Probe：加载模型并导出 `named_modules()`、LoRA target 候选和摘要。
-1. Unsloth compatibility：安装 Unsloth，检查是否能加载 Qwen3-ASR 并精确匹配 audio tower target。
+1. PEFT compatibility：按正则精确匹配 99 个 audio tower target。
 2. Smoke test：20 条样本，5-20 steps。
 3. MVP train：10k-20k 样本，1 epoch。
 4. Scenario-balanced train：按声学场景做加权采样。

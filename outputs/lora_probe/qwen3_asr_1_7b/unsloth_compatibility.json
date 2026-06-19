@@ -1,0 +1,24 @@
+{
+  "created_at": "2026-06-19T00:00:00+08:00",
+  "model_id": "Qwen/Qwen3-ASR-1.7B",
+  "backend": "unsloth",
+  "compatible": false,
+  "checks": {
+    "unsloth_load": false,
+    "matched_target_count": 0
+  },
+  "expected_target_count": 99,
+  "decision": "fallback_to_transformers_peft",
+  "errors": [
+    {
+      "type": "ValueError",
+      "message": "`Qwen/Qwen3-ASR-1.7B` is not supported yet in `transformers==4.57.6`. Transformers AutoConfig does not recognize model_type `qwen3_asr`.",
+      "root_cause": "Unsloth FastModel.from_pretrained uses the standard Transformers AutoConfig path. The installed Transformers version used by qwen-asr does not include a qwen3_asr AutoConfig mapping, so Unsloth cannot load the ASR architecture directly."
+    }
+  ],
+  "notes": [
+    "Unsloth remains suitable for ordinary Qwen3/Qwen3 MoE LLM fine-tuning, but this project uses Qwen3-ASR audio architecture.",
+    "Do not continue dependency pinning to force Unsloth in the current MVP.",
+    "Next training backend is Transformers + PEFT using the verified audio_tower target regex."
+  ]
+}

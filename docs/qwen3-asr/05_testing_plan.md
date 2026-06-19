@@ -174,7 +174,7 @@ Colab 测试：
 
 ## Unsloth 兼容性测试
 
-`05B Unsloth 兼容性检查` 的目标不是训练，而是确认训练 backend 是否可用。
+`05B Unsloth 兼容性检查` 的目标不是训练，而是确认训练 backend 是否可用。当前结果为不兼容，训练 backend 已回退到 Transformers + PEFT。
 
 通过标准：
 
@@ -190,3 +190,18 @@ Colab 测试：
 - 如果 Unsloth 不能加载 Qwen3-ASR，记录异常类型和 traceback。
 - 如果 target 匹配不精确，不进入训练。
 - 兼容失败时训练实现切换到 Transformers + PEFT，推理评测仍使用 qwen-asr。
+
+## Transformers + PEFT Smoke 测试
+
+`05C` 只验证训练闭环，不以指标提升为目标。
+
+通过标准：
+
+- LoRA target 正则匹配数量为 99。
+- matched target 不包含 text decoder、speech conv 或 `lm_head`。
+- 可训练参数量接近 1,683,456。
+- 5-20 step smoke training 能完成。
+- loss 非 NaN。
+- adapter 可保存到 `checkpoints/qwen3-asr-1.7b-lora/`。
+- adapter 可重新加载。
+- 至少 1 条 clean 和 1 条 degraded 音频能完成 LoRA 推理。

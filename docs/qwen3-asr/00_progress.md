@@ -29,16 +29,15 @@
 
 ## 进行中
 
-- `05 LoRA 训练 MVP`：`05A LoRA 训练前探测` 已完成，正在进入 `05B Unsloth 兼容性检查`。训练框架优先使用 Unsloth；若无法兼容 Qwen3-ASR 或无法精确限制 audio tower target，则回退 Transformers + PEFT。
+- `05 LoRA 训练 MVP`：`05A LoRA 训练前探测` 已完成，`05B Unsloth 兼容性检查` 已完成且结果为不兼容。当前进入 `05C Transformers + PEFT LoRA smoke training`，继续使用已确认的 audio tower 99 个 target。
 
 ## 下一批里程碑
 
 1. 提交 `outputs/lora_probe/qwen3_asr_1_7b/` 下的模块快照和候选 target。
-2. 在 Colab Free GPU 中运行 `train/check_unsloth_qwen3_asr.py`，生成 `unsloth_compatibility.json`。
-3. 若 Unsloth 兼容，按 Unsloth 实现 `train/train_qwen3_asr_lora.py`、collator 和 LoRA target 解析。
-4. 在 Colab Free GPU 中跑 5-20 step smoke test。
-5. 验证 adapter 保存、加载和最小推理。
-6. 用同一套 MVP 150 test 集比较 base 与 LoRA，并记录 clean regression。
+2. 按 Transformers + PEFT 实现 `train/train_qwen3_asr_lora.py`、collator 和 LoRA target 解析。
+3. 在 Colab Free GPU 中跑 5-20 step smoke test。
+4. 验证 adapter 保存、加载和最小推理。
+5. 用同一套 MVP 150 test 集比较 base 与 LoRA，并记录 clean regression。
 
 ## 待确认问题
 
@@ -164,4 +163,6 @@ baseline 推理逻辑从通用多模态聊天模板改为 Qwen3-ASR 官方 `qwen
 
 该决策已经写入 `configs/train/qwen3_asr_lora_mvp.yaml`，策略名为 `audio_tower_attention_plus_projection_smoke`。
 
-根据训练效率和 Colab Free 显存约束，训练 backend 决策调整为 Unsloth 优先。已查阅官方 Unsloth/Qwen 文档：Unsloth 明确支持 Qwen3/Qwen3 MoE 高效微调，但 Qwen3-ASR 是音频 ASR 架构，不等同于普通 Qwen3 LLM。因此新增 `05B Unsloth 兼容性检查`，先确认能否加载模型并精确匹配 audio tower target，再进入真实 smoke training。
+根据训练效率和 Colab Free 显存约束，曾将训练 backend 决策调整为 Unsloth 优先。已查阅官方 Unsloth/Qwen 文档：Unsloth 明确支持 Qwen3/Qwen3 MoE 高效微调，但 Qwen3-ASR 是音频 ASR 架构，不等同于普通 Qwen3 LLM。因此新增 `05B Unsloth 兼容性检查`，先确认能否加载模型并精确匹配 audio tower target，再进入真实 smoke training。
+
+完成 `05B Unsloth 兼容性检查`。Colab 结果显示 `compatible=false`，失败原因为 Unsloth `FastModel.from_pretrained` 走标准 Transformers AutoConfig 路径，而当前 `transformers==4.57.6` 不识别 `model_type=qwen3_asr`。该结果已保存到 `outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json`。当前训练 backend 回退为 `transformers_peft`，不再继续通过依赖 pinning 强推 Unsloth。

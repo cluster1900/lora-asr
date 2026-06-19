@@ -17,7 +17,7 @@ clean/noise 音频
   -> overall 与 scenario-level 指标
 ```
 
-Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。训练前探测已确认官方 `qwen-asr` wrapper 暴露 `Qwen3ASRForConditionalGeneration` 根节点，第一版 LoRA smoke target 收敛为 audio tower attention + speech projection。训练框架优先尝试 Unsloth；如果 Qwen3-ASR 音频架构不兼容，则回退 Transformers + PEFT。
+Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。训练前探测已确认官方 `qwen-asr` wrapper 暴露 `Qwen3ASRForConditionalGeneration` 根节点，第一版 LoRA smoke target 收敛为 audio tower attention + speech projection。Unsloth 兼容性检查已失败，当前训练框架回退为 Transformers + PEFT。
 
 ## 文档入口
 
@@ -170,8 +170,7 @@ train/        后续 LoRA/QLoRA 训练入口
 
 按路线图继续执行：
 
-1. 执行 [05 LoRA 训练 MVP](docs/qwen3-asr/roadmap/05_lora_training_mvp.md) 的 `05B`：运行 Unsloth 兼容性检查。
-2. 若兼容，使用 Unsloth 实现第一版 QLoRA/LoRA smoke training。
-3. 在 Colab Free GPU 中跑 5-20 step，确认 loss、adapter 保存加载和最小推理。
-4. 用同一套 MVP 150 test 集比较 base 与 LoRA，重点检查 noise/reverb 改善和 clean regression。
-5. 若 LoRA 有收益，再进入 [07 Router MVP](docs/qwen3-asr/roadmap/07_router_mvp.md)。
+1. 执行 [05 LoRA 训练 MVP](docs/qwen3-asr/roadmap/05_lora_training_mvp.md) 的 `05C`：实现 Transformers + PEFT smoke training。
+2. 在 Colab Free GPU 中跑 5-20 step，确认 loss、adapter 保存加载和最小推理。
+3. 用同一套 MVP 150 test 集比较 base 与 LoRA，重点检查 noise/reverb 改善和 clean regression。
+4. 若 LoRA 有收益，再进入 [07 Router MVP](docs/qwen3-asr/roadmap/07_router_mvp.md)。
