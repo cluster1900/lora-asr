@@ -129,7 +129,7 @@ max_new_tokens: 256
 
 0. Probe：加载模型并导出 `named_modules()`、LoRA target 候选和摘要。
 1. PEFT compatibility：按正则精确匹配 99 个 audio tower target。
-2. Smoke test：20 条样本，5-20 steps。
+2. Smoke test：20 条样本，5-20 steps，当前入口为 `train/train_qwen3_asr_lora.py`。
 3. MVP train：10k-20k 样本，1 epoch。
 4. Scenario-balanced train：按声学场景做加权采样。
 
@@ -140,9 +140,11 @@ max_new_tokens: 256
 - `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.json`
 - `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.md`
 - `outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json`
-- LoRA adapter checkpoint。
-- trainer state。
-- training logs。
+- `checkpoints/qwen3-asr-1.7b-lora/target_modules.json`
+- `checkpoints/qwen3-asr-1.7b-lora/training_config.json`
+- `checkpoints/qwen3-asr-1.7b-lora/loss_log.jsonl`
+- `checkpoints/qwen3-asr-1.7b-lora/summary.json`
+- `checkpoints/qwen3-asr-1.7b-lora/adapter/`
 
 ## Notebook 04: 评测
 
@@ -187,15 +189,15 @@ max_new_tokens: 256
 
 ## 训练目标格式
 
-baseline 推理不使用聊天 prompt，而是使用 `Qwen3ASRModel.transcribe(audio=..., language=...)`。训练阶段的 target 格式需要在 LoRA MVP 前通过官方示例、模块结构和 smoke training 决定。
+baseline 推理不使用聊天 prompt，而是使用 `Qwen3ASRModel.transcribe(audio=..., language=...)`。训练阶段使用底层 forward + labels，因此需要显式构造 prompt 和 answer mask。
 
-候选 target 格式：
+当前 smoke training target 格式：
 
 ```text
 language English<asr_text>THE TRANSCRIPT TEXT
 ```
 
-也要测试纯转写目标：
+`labels` 中 prompt 和 padding 全部置为 `-100`，只有 `THE TRANSCRIPT TEXT` 和结束 token 参与 loss。后续仍可对比纯转写目标：
 
 ```text
 THE TRANSCRIPT TEXT

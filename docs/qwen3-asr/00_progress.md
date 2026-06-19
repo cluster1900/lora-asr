@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-当前阶段：`02 Baseline 评估` 已完成 MVP 150 全量 baseline，准备进入错误分析与 LoRA MVP 前置设计。
+当前阶段：`05 LoRA 训练 MVP` 已完成训练前探测和 Unsloth 兼容性检查，正在执行 `05C Transformers + PEFT LoRA smoke training`。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -33,11 +33,10 @@
 
 ## 下一批里程碑
 
-1. 提交 `outputs/lora_probe/qwen3_asr_1_7b/` 下的模块快照和候选 target。
-2. 按 Transformers + PEFT 实现 `train/train_qwen3_asr_lora.py`、collator 和 LoRA target 解析。
-3. 在 Colab Free GPU 中跑 5-20 step smoke test。
-4. 验证 adapter 保存、加载和最小推理。
-5. 用同一套 MVP 150 test 集比较 base 与 LoRA，并记录 clean regression。
+1. 在 Colab Free GPU 中跑 5-20 step smoke test。
+2. 验证 adapter 保存、加载和最小推理。
+3. 用同一套 MVP 150 test 集比较 base 与 LoRA，并记录 clean regression。
+4. 如果 smoke loss 和 adapter 验证正常，扩展到 noise/reverb 优先的小规模训练集。
 
 ## 待确认问题
 
@@ -166,3 +165,12 @@ baseline 推理逻辑从通用多模态聊天模板改为 Qwen3-ASR 官方 `qwen
 根据训练效率和 Colab Free 显存约束，曾将训练 backend 决策调整为 Unsloth 优先。已查阅官方 Unsloth/Qwen 文档：Unsloth 明确支持 Qwen3/Qwen3 MoE 高效微调，但 Qwen3-ASR 是音频 ASR 架构，不等同于普通 Qwen3 LLM。因此新增 `05B Unsloth 兼容性检查`，先确认能否加载模型并精确匹配 audio tower target，再进入真实 smoke training。
 
 完成 `05B Unsloth 兼容性检查`。Colab 结果显示 `compatible=false`，失败原因为 Unsloth `FastModel.from_pretrained` 走标准 Transformers AutoConfig 路径，而当前 `transformers==4.57.6` 不识别 `model_type=qwen3_asr`。该结果已保存到 `outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json`。当前训练 backend 回退为 `transformers_peft`，不再继续通过依赖 pinning 强推 Unsloth。
+
+完成 `05C Transformers + PEFT smoke training` 的工程入口实现：
+
+- 新增 `train/peft_targets.py`，复用配置中的 include/exclude regex 精确匹配 PEFT LoRA target。
+- 新增 `train/train_qwen3_asr_lora.py`，通过官方 `Qwen3ASRModel.from_pretrained` 加载底层模型和 processor，挂载 PEFT LoRA，并构造只在 answer token 计算 loss 的训练 batch。
+- 更新 `notebooks/03_train_lora_colab.ipynb`，主路径改为 Transformers + PEFT smoke training，Unsloth 保留为可选兼容性复现。
+- 默认 smoke manifest 使用已提交的 `outputs/baseline_mvp_150/baseline_mvp_150.colab.jsonl`；本地运行可通过 `--manifest data/jsonl/baseline_mvp_150.local.jsonl` 覆盖。该 manifest 仅用于训练闭环验证，不代表正式训练集。
+
+下一步需要在 Colab Free GPU 中执行 5-20 step smoke training，检查 `target_modules.json`、`loss_log.jsonl`、`summary.json` 和 `adapter/`，确认 loss 非 NaN 且 adapter 可保存。

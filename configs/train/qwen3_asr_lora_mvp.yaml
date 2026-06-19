@@ -13,8 +13,9 @@ probe:
   max_new_tokens: 128
 
 data:
-  train_manifest: data/jsonl/train.jsonl
-  validation_manifest: data/jsonl/val.jsonl
+  purpose: smoke_only
+  train_manifest: outputs/baseline_mvp_150/baseline_mvp_150.colab.jsonl
+  validation_manifest: outputs/baseline_mvp_150/baseline_mvp_150.colab.jsonl
   max_audio_seconds: 20
 
 lora:
@@ -43,6 +44,9 @@ training:
   epochs: 1
   seed: 42
   smoke_test_steps: 20
+  optimizer: adamw
+  peft_task_type: none
+  gradient_checkpointing: true
 
 output:
   checkpoint_dir: checkpoints/qwen3-asr-1.7b-lora

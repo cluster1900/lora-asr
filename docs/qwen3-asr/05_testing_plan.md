@@ -200,6 +200,7 @@ Colab 测试：
 - LoRA target 正则匹配数量为 99。
 - matched target 不包含 text decoder、speech conv 或 `lm_head`。
 - 可训练参数量接近 1,683,456。
+- 训练 batch 的 `labels` 只在 answer token 上非 `-100`，prompt 和 padding 不参与 loss。
 - 5-20 step smoke training 能完成。
 - loss 非 NaN。
 - adapter 可保存到 `checkpoints/qwen3-asr-1.7b-lora/`。

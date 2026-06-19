@@ -199,6 +199,41 @@ model.thinker.audio_tower.proj2
 - 用 PEFT 按完整模块正则挂载 LoRA，严格限制到 99 个 audio tower target。
 - 先使用 5-20 step smoke test，不追求指标提升。
 - 保存 adapter、训练配置、target_modules、loss log 和最小推理输出。
+- 当前实现入口为 `train/train_qwen3_asr_lora.py`，Colab 入口为 `notebooks/03_train_lora_colab.ipynb`。
+
+训练输入构造：
+
+- 使用官方 `Qwen3ASRModel.from_pretrained` 加载模型和 processor。
+- 复用官方推理 prompt 形式：system context + user audio，再在 assistant prompt 后追加 `language English`。
+- 训练文本为 `prompt + answer`。
+- `labels` 与 `input_ids` 等长，prompt 部分和 padding 位置置为 `-100`，只对 answer token 计算 loss。
+- `processor(text=..., audio=..., return_tensors="pt", padding=True)` 负责生成 `input_ids`、`attention_mask`、`input_features`、`feature_attention_mask`。
+- 当前 smoke 训练固定 `batch_size=1`，避免 left padding 下 prompt mask 计算变复杂；后续扩大训练时再实现多样本 collator。
+
+推荐命令：
+
+```bash
+python train/train_qwen3_asr_lora.py \
+  --config configs/train/qwen3_asr_lora_mvp.yaml \
+  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
+  --audio-root . \
+  --output-dir checkpoints/qwen3-asr-1.7b-lora \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --quantization 4bit \
+  --language English \
+  --limit 20 \
+  --max-steps 20
+```
+
+输出文件：
+
+- `target_modules.json`：实际命中的 target、模块类型、weight shape 和 LoRA 参数估算。
+- `training_config.json`：配置、manifest、随机种子和命令行覆盖项。
+- `loss_log.jsonl`：逐 step loss 和样本信息。
+- `summary.json`：训练状态、耗时和 loss 摘要。
+- `adapter/`：PEFT adapter。
 
 通过标准：
 
