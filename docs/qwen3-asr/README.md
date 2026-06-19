@@ -22,7 +22,7 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 
 ## 当前范围
 
-当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出第一批分析文件。现在进入 `05A LoRA 训练前探测`，先导出 Qwen3-ASR 的真实模块结构和 LoRA target 候选。
+当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出第一批分析文件，`05A LoRA 训练前探测` 已完成。现在进入 `05B Unsloth 兼容性检查`，先确认 Unsloth 是否能用于 Qwen3-ASR 音频架构，再实现 5-20 step 的最小训练闭环。
 
 已完成：
 
@@ -34,13 +34,15 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 - 已在 MVP 150 hard profile 上记录 Qwen3-ASR base 指标：clean WER 0.010438，degraded-only WER 约 0.602296。
 - 已新增 `evaluation/analyze_errors.py` 并保存 baseline 错误分析输出。
 - 已新增 `train/inspect_qwen3_asr_modules.py` 和 `notebooks/03_train_lora_colab.ipynb`，用于 LoRA 训练前模块探测。
+- 已保存 `outputs/lora_probe/qwen3_asr_1_7b/` 探测输出，并确定第一版 smoke target：audio tower attention + speech projection。
+- 已新增 `train/check_unsloth_qwen3_asr.py`，训练框架优先尝试 Unsloth，兼容失败时回退 Transformers + PEFT。
 
-下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05A`，在 Colab GPU runtime 中生成 `outputs/lora_probe/qwen3_asr_1_7b/` 探测输出，并据此确定第一版 smoke training 的 target 组。
+下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05B`，在 Colab Free GPU 中生成 `unsloth_compatibility.json`；如果兼容，再实现 Unsloth LoRA smoke training 入口。
 
 MVP 会按路线图继续完成：
 
 1. 基于已完成的 Qwen3-ASR-1.7B baseline 和错误分析确定 LoRA 目标场景。
-2. 探测 Qwen3-ASR 真实模块结构，确定第一版 LoRA target。
+2. 基于探测结果确定第一版 LoRA target。
 3. 跑通 5-20 step smoke training。
 4. 训练第一版 QLoRA ASR adapter。
 5. 评估 WER/CER、典型失败模式和 clean regression。

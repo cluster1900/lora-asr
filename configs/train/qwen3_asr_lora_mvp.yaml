@@ -1,7 +1,8 @@
 model:
   id: Qwen/Qwen3-ASR-1.7B
   quantization: 4bit
-  backend: qwen-asr
+  backend: unsloth_preferred
+  fallback_backend: transformers_peft
 
 probe:
   output_dir: outputs/lora_probe/qwen3_asr_1_7b
@@ -16,13 +17,23 @@ data:
   max_audio_seconds: 20
 
 lora:
+  backend: unsloth_preferred
   r: 8
   alpha: 16
   dropout: 0.05
+  target_strategy: audio_tower_attention_plus_projection_smoke
   target_groups:
-    - late_llm_blocks
-    - speech_encoder_projection_if_available
-    - qwen3_asr_modules_to_probe
+    - audio_tower_attention
+    - speech_projection
+  include_regex:
+    - ^model\.thinker\.audio_tower\.layers\.[0-9]+\.self_attn\.(q_proj|k_proj|v_proj|out_proj)$
+    - ^model\.thinker\.audio_tower\.(conv_out|proj1|proj2)$
+  exclude_regex:
+    - ^model\.thinker\.lm_head$
+    - ^model\.thinker\.model\.layers\.
+    - ^model\.thinker\.audio_tower\.(conv2d1|conv2d2|conv2d3)$
+  expected_target_count: 99
+  estimated_trainable_params_r8: 1683456
 
 training:
   batch_size: 1

@@ -82,6 +82,25 @@
 
 - 可以观察 Mega-ASR 的行为和结果，但具体实现必须面向 Qwen3-ASR API 编写。
 
+### D009: 训练框架优先使用 Unsloth
+
+决策：
+
+- 第一版 LoRA 训练优先尝试 Unsloth。
+- 如果 Unsloth 不能兼容 `Qwen/Qwen3-ASR-1.7B` 的 ASR 架构或不能精确限制 audio tower target，则回退到 Transformers + PEFT。
+
+原因：
+
+- Colab Free 显存有限，Unsloth 对低显存 LoRA/QLoRA 更友好。
+- 官方 Unsloth/Qwen 文档已经覆盖 Qwen3/Qwen3 MoE 高效微调。
+- 但 Qwen3-ASR 是音频 ASR 模型，不等同于普通 Qwen3 文本模型，必须先做兼容性验证。
+
+影响：
+
+- `configs/train/qwen3_asr_lora_mvp.yaml` 使用 `backend: unsloth_preferred`。
+- `05B` 先执行 Unsloth 兼容性检查，不直接进入训练。
+- qwen-asr 仍作为 baseline 和评测推理入口保留。
+
 ## 风险
 
 ### R001: Qwen3-ASR 在强退化音频上仍可能失败
@@ -135,6 +154,19 @@
 - 不在探测完成前实现正式训练循环。
 - 如果 wrapper 不适合训练，保留 qwen-asr 作为推理入口，训练阶段切换到官方模型结构可支持的低层加载方式。
 
+### R003B: Unsloth 可能不支持 Qwen3-ASR 的音频 ASR 架构
+
+影响：
+
+- Unsloth 可能能加载普通 Qwen3 LLM，但不能加载 `Qwen3ASRForConditionalGeneration`。
+- 即使能加载，也可能只能按 `q_proj`、`v_proj` 这类叶子名挂 LoRA，导致同时命中文本 decoder，无法只训练 audio tower。
+
+缓解：
+
+- 新增 `train/check_unsloth_qwen3_asr.py` 做兼容性检查。
+- 兼容性检查必须保存 JSON 输出，用于记录失败原因。
+- 若无法精确限制 target，则回退到 Transformers + PEFT 的正则 target 方案。
+
 ### R004: 合成退化可能无法迁移到真实音频
 
 影响：
@@ -176,7 +208,7 @@
 - D006: MVP 使用英文、中文，还是双语。
 - D007: 首个源数据集。
 - D008: 是否发布中间 adapter。
-- D009: 使用 Unsloth、Transformers Trainer、TRL，还是自定义训练循环。
+- D009: 使用 Unsloth、Transformers Trainer、TRL，还是自定义训练循环。当前决策：Unsloth 优先，失败回退 Transformers + PEFT。
 
 ## 待定决策处理点
 
@@ -185,4 +217,4 @@
 | D006: MVP 语言选择 | 开始 `03 数据 MVP` 前 | `03_data_plan.md`、`03_data_mvp.md` | 默认先做英文 MVP |
 | D007: 首个源数据集 | 开始 `03 数据 MVP` 前 | `03_data_plan.md`、`03_data_mvp.md` | 默认 LibriSpeech smoke set |
 | D008: 是否发布中间 adapter | `05 LoRA 训练 MVP` 验收后 | `08_scale_up_and_release.md` | 默认不发布，只本地/Drive 保存 |
-| D009: 训练框架选择 | 开始 `05 LoRA 训练 MVP` 前 | `05_lora_training_mvp.md`、`04_colab_training_plan.md` | 默认 Transformers + PEFT，除非 Colab 资源证明不可行 |
+| D009: 训练框架选择 | 开始 `05 LoRA 训练 MVP` 前 | `05_lora_training_mvp.md`、`04_colab_training_plan.md` | Unsloth 优先，兼容失败回退 Transformers + PEFT |

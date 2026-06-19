@@ -14,9 +14,10 @@ Baseline 和数据 MVP 完成后，需要训练第一版 Qwen3-ASR 鲁棒 ASR Lo
 
 本步骤只做第一版监督微调，不做 RL，不做大规模训练。
 
-当前进入 `05A LoRA 训练前探测`。本小阶段只确认 Qwen3-ASR 的真实模块结构、
-LoRA target 候选和 Colab 资源可行性，不开始正式训练。这样做是为了避免在
-没有模块快照的情况下盲目复制其他项目的 LoRA target 规则。
+`05A LoRA 训练前探测` 已完成。本小阶段确认了 Qwen3-ASR 的真实模块结构、
+LoRA target 候选和 Colab 资源可行性。下一步进入 `05B Unsloth 兼容性检查`
+和 `05C LoRA smoke training`：先确认 Unsloth 能否加载 Qwen3-ASR 并精确挂载
+目标 LoRA，再跑 5-20 step，验证 target 可训练、loss 正常下降、adapter 可保存加载。
 
 ## 当前 Baseline 对照
 
@@ -61,6 +62,7 @@ MVP 150 hard profile 的 Qwen3-ASR base 结果：
 ## 需要实现的文件
 
 - `train/inspect_qwen3_asr_modules.py`
+- `train/check_unsloth_qwen3_asr.py`
 - `train/train_qwen3_asr_lora.py`
 - `train/collator.py`
 - `train/lora_targets.py`
@@ -112,6 +114,80 @@ notebook 默认项目目录为 `/content/drive/MyDrive/qwen3-asr`。
 - 关键输出已提交到仓库，便于后续排查。
 - 进度文档记录探测结论、候选 target 和风险。
 - 未完成探测前，不开始 `train/train_qwen3_asr_lora.py` 的正式训练实现。
+
+### 05A 探测结果
+
+探测输出来自 Colab GPU runtime，路径为 `outputs/lora_probe/qwen3_asr_1_7b/`。
+
+| 项 | 结果 |
+| --- | ---: |
+| root module | `model: Qwen3ASRForConditionalGeneration` |
+| total modules | 703 |
+| audio encoder layers | 24 |
+| text decoder layers | 28 |
+| attention candidates | 208 |
+| MLP candidates | 132 |
+| speech projection candidates | 3 |
+| `lm_head` | 1 |
+
+候选模块分布：
+
+- `attention_projection`：208 个，其中 audio tower 96 个、text decoder 112 个。
+- `mlp_projection`：132 个，其中 audio tower 48 个、text decoder 84 个。
+- `speech_projection`：3 个，分别是 `conv_out`、`proj1`、`proj2`。
+- `speech_conv`：3 个，默认只观察，不作为第一版 LoRA target。
+- `lm_head`：1 个，体量大且会直接改变 token 输出分布，第一版不训练。
+
+### 05B 第一版 smoke target 决策
+
+训练 backend 决策：
+
+- 优先使用 Unsloth，因为它面向 Colab 和低显存场景，官方 Qwen3 文档说明 Unsloth 支持 Qwen3/Qwen3 MoE 高效微调。
+- 但 Qwen3-ASR 是音频 ASR 架构，不等同于普通 Qwen3 文本模型。正式训练前必须先跑 Unsloth 兼容性检查。
+- 如果 Unsloth 不能加载 `Qwen/Qwen3-ASR-1.7B`，或不能只对 audio tower target 挂 LoRA，则回退到 Transformers + PEFT，并保留 qwen-asr 做推理评测入口。
+
+第一版 smoke training 使用 `audio_tower_attention_plus_projection_smoke` 策略：
+
+```text
+model.thinker.audio_tower.layers.*.self_attn.q_proj
+model.thinker.audio_tower.layers.*.self_attn.k_proj
+model.thinker.audio_tower.layers.*.self_attn.v_proj
+model.thinker.audio_tower.layers.*.self_attn.out_proj
+model.thinker.audio_tower.conv_out
+model.thinker.audio_tower.proj1
+model.thinker.audio_tower.proj2
+```
+
+选择原因：
+
+- 目标直接位于音频路径，优先解决 noise、reverb、far_field、dropout 的声学鲁棒性。
+- 不先动 text decoder，降低 clean regression 和 hallucination 风险。
+- 不训练 `lm_head`，避免直接改变词表输出倾向。
+- `r=8` 预计 LoRA 可训练参数约 1,683,456，适合 Colab Free 做 smoke test。
+
+第一版不训练：
+
+- text decoder attention/MLP。
+- audio tower MLP。
+- speech conv。
+- `lm_head`。
+
+如果第一版 target 能稳定训练但收益不足，再做第二轮 ablation：加入 audio tower MLP，或单独比较 text decoder attention。
+
+### 05B Unsloth 兼容性检查
+
+检查目标：
+
+- `unsloth` 和 `unsloth_zoo` 能在 Colab GPU runtime 中安装。
+- `FastModel.from_pretrained` 能否加载 `Qwen/Qwen3-ASR-1.7B`。
+- 加载后的模型是否仍暴露 `model.thinker.audio_tower` 模块。
+- Unsloth 的 LoRA API 是否支持精确限制到 audio tower target，而不是同时命中文本 decoder。
+
+通过标准：
+
+- 能写出 `outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json`。
+- 如果 `compatible=true`，下一步使用 Unsloth 训练。
+- 如果 `compatible=false`，文档记录失败原因，并切换到 `fallback_backend: transformers_peft`。
 
 ## 初始配置
 

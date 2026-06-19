@@ -12,6 +12,7 @@
 当前阶段：
 
 - `inspect_qwen3_asr_modules.py`：训练前探测脚本，在 Colab GPU runtime 中加载官方 `qwen-asr` 模型，导出 `named_modules()` 快照和 LoRA target 候选。
+- `check_unsloth_qwen3_asr.py`：Unsloth 兼容性检查脚本，确认 Unsloth 是否能加载 Qwen3-ASR 并精确匹配 audio tower target。
 - `lora_targets.py`：候选 target 分组规则，只做辅助分析，不直接代表最终训练配置。
 
 推荐命令：
@@ -22,6 +23,14 @@ python train/inspect_qwen3_asr_modules.py \
   --output-dir outputs/lora_probe/qwen3_asr_1_7b \
   --dtype float16 \
   --device-map cuda:0
+```
+
+Unsloth 兼容性检查：
+
+```bash
+python train/check_unsloth_qwen3_asr.py \
+  --config configs/train/qwen3_asr_lora_mvp.yaml \
+  --output-json outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json
 ```
 
 禁止：

@@ -29,15 +29,16 @@
 
 ## 进行中
 
-- `05 LoRA 训练 MVP`：正在进入 `05A LoRA 训练前探测`。当前目标是用官方 `qwen-asr` API 加载 `Qwen/Qwen3-ASR-1.7B`，导出真实 `named_modules()` 快照，并生成第一版 LoRA target 候选，随后再实现 smoke training。
+- `05 LoRA 训练 MVP`：`05A LoRA 训练前探测` 已完成，正在进入 `05B Unsloth 兼容性检查`。训练框架优先使用 Unsloth；若无法兼容 Qwen3-ASR 或无法精确限制 audio tower target，则回退 Transformers + PEFT。
 
 ## 下一批里程碑
 
-1. 在 Colab GPU runtime 中运行 `notebooks/03_train_lora_colab.ipynb` 的探测部分。
-2. 保存并提交 `outputs/lora_probe/qwen3_asr_1_7b/` 下的模块快照和候选 target。
-3. 人工复核候选 target，确定第一版 smoke training 的 LoRA 目标组。
-4. 实现 `train/train_qwen3_asr_lora.py`、collator 和 5-20 step smoke test。
-5. 用同一套 MVP 150 test 集比较 base 与 LoRA，并记录 clean regression。
+1. 提交 `outputs/lora_probe/qwen3_asr_1_7b/` 下的模块快照和候选 target。
+2. 在 Colab Free GPU 中运行 `train/check_unsloth_qwen3_asr.py`，生成 `unsloth_compatibility.json`。
+3. 若 Unsloth 兼容，按 Unsloth 实现 `train/train_qwen3_asr_lora.py`、collator 和 LoRA target 解析。
+4. 在 Colab Free GPU 中跑 5-20 step smoke test。
+5. 验证 adapter 保存、加载和最小推理。
+6. 用同一套 MVP 150 test 集比较 base 与 LoRA，并记录 clean regression。
 
 ## 待确认问题
 
@@ -142,3 +143,25 @@ baseline 推理逻辑从通用多模态聊天模板改为 Qwen3-ASR 官方 `qwen
 为方便后续排查和复盘，本项目将 `outputs/baseline_mvp_150/` 作为第一批受控 baseline 输出提交到版本库。该目录包含 Qwen3-ASR baseline 的 prediction、scored JSONL、metrics、scenario CSV 和 error analysis 结果；其他通用 `outputs/` 子目录仍默认忽略。
 
 进入 `05A LoRA 训练前探测`。本阶段先实现模块探测脚本和 Colab 入口，输出 Qwen3-ASR 当前版本的模块快照、候选 LoRA target 和人工复核摘要。未完成探测前，不开始正式训练循环，避免 LoRA target 来自未经验证的外部假设。
+
+完成 `05A LoRA 训练前探测`。Colab 输出已保存到 `outputs/lora_probe/qwen3_asr_1_7b/`：
+
+- root module：`model: Qwen3ASRForConditionalGeneration`。
+- total modules：703。
+- audio encoder layers：24。
+- text decoder layers：28。
+- attention candidates：208，其中 audio tower 96、text decoder 112。
+- MLP candidates：132，其中 audio tower 48、text decoder 84。
+- speech projection candidates：3，分别为 `conv_out`、`proj1`、`proj2`。
+- `lm_head`：1 个，默认不训练。
+
+第一版 smoke training target 决策：
+
+- 训练 audio tower attention：`q_proj`、`k_proj`、`v_proj`、`out_proj`。
+- 训练 speech projection：`conv_out`、`proj1`、`proj2`。
+- 暂不训练 text decoder、audio tower MLP、speech conv 和 `lm_head`。
+- `r=8` 预计 LoRA 可训练参数约 1,683,456。
+
+该决策已经写入 `configs/train/qwen3_asr_lora_mvp.yaml`，策略名为 `audio_tower_attention_plus_projection_smoke`。
+
+根据训练效率和 Colab Free 显存约束，训练 backend 决策调整为 Unsloth 优先。已查阅官方 Unsloth/Qwen 文档：Unsloth 明确支持 Qwen3/Qwen3 MoE 高效微调，但 Qwen3-ASR 是音频 ASR 架构，不等同于普通 Qwen3 LLM。因此新增 `05B Unsloth 兼容性检查`，先确认能否加载模型并精确匹配 audio tower target，再进入真实 smoke training。

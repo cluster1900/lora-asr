@@ -171,3 +171,21 @@ Colab 测试：
 - `lora_target_candidates.json` 中至少有一个候选分组。
 - `lora_target_candidates.md` 能用于人工复核第一版 target。
 - 探测输出已记录到进度文档，并在需要排查时提交到仓库。
+
+## Unsloth 兼容性测试
+
+`05B Unsloth 兼容性检查` 的目标不是训练，而是确认训练 backend 是否可用。
+
+通过标准：
+
+- Colab GPU runtime 能安装 `unsloth` 和 `unsloth_zoo`。
+- `train/check_unsloth_qwen3_asr.py` 能写出 `unsloth_compatibility.json`。
+- JSON 中必须包含 `compatible`、`checks`、`errors`、`matched_targets_preview`。
+- 若 `compatible=true`，`matched_target_count` 必须等于配置中的 `expected_target_count`，当前为 99。
+- matched target 不得包含 `model.thinker.model.layers.` 或 `lm_head`。
+
+失败处理：
+
+- 如果 Unsloth 不能加载 Qwen3-ASR，记录异常类型和 traceback。
+- 如果 target 匹配不精确，不进入训练。
+- 兼容失败时训练实现切换到 Transformers + PEFT，推理评测仍使用 qwen-asr。
