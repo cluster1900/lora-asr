@@ -95,6 +95,13 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 复用 Mega-ASR 或其他工程的 target 规则；同时 Qwen3-ASR 是音频 ASR 架构，不能
 假设普通 Qwen3 LLM 的 Unsloth 训练入口一定可用。
 
+依赖注意事项：
+
+- `qwen-asr` 和 Unsloth 可能要求不同的 `transformers`、`accelerate` 版本。
+- baseline 推理和 Unsloth 兼容性检查建议分开 runtime 执行。
+- Unsloth 安装不使用 `--force-reinstall`，避免把 Colab 预装的 `pandas`、`requests`、`protobuf` 大幅升级。
+- 如果安装后出现 pip resolver warning，先确认目标脚本是否能运行，再决定是否重启 runtime；warning 不一定等于 cell 失败。
+
 初始配置：
 
 ```yaml
