@@ -1,6 +1,6 @@
 # 开发进度
 
-最后更新：2026-06-15
+最后更新：2026-06-19
 
 ## 当前状态
 
@@ -136,3 +136,9 @@ baseline 推理逻辑从通用多模态聊天模板改为 Qwen3-ASR 官方 `qwen
 - dropout 场景 WER 接近 0.76，说明断续音频会造成严重漏词和错误补全。
 - noise/reverb 仍有明显退化，但比 far_field/dropout 更可训练，适合作为第一版 LoRA 改善目标。
 - clean 仅 5 个 edit，后续 LoRA 和 router 必须把 clean regression 作为硬门槛。
+
+### 2026-06-19
+
+已在本地对 `outputs/baseline_mvp_150/predictions.qwen3_asr_base.mvp_150.scored.jsonl` 执行 `evaluation/analyze_errors.py`，生成 `outputs/baseline_mvp_150/error_analysis/` 下的分析文件。
+
+为方便后续排查和复盘，本项目将 `outputs/baseline_mvp_150/` 作为第一批受控 baseline 输出提交到版本库。该目录包含 Qwen3-ASR baseline 的 prediction、scored JSONL、metrics、scenario CSV 和 error analysis 结果；其他通用 `outputs/` 子目录仍默认忽略。

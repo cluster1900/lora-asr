@@ -1,6 +1,6 @@
 # 06 评测与错误分析
 
-最后更新：2026-06-15
+最后更新：2026-06-19
 
 ## 背景
 
@@ -91,6 +91,27 @@ python3 evaluation/analyze_errors.py \
   --output-dir outputs/baseline_mvp_150/error_analysis \
   --top-k 30
 ```
+
+## 已保存的 Baseline 输出
+
+第一批受控 baseline 产物保存在 `outputs/baseline_mvp_150/`，用于后续 LoRA 训练前后的排查对照：
+
+- `predictions.qwen3_asr_base.mvp_150.jsonl`
+- `predictions.qwen3_asr_base.mvp_150.scored.jsonl`
+- `metrics.qwen3_asr_base.mvp_150.json`
+- `metrics_by_scenario.qwen3_asr_base.mvp_150.csv`
+- `baseline_mvp_150.colab.jsonl`
+- `predictions.oracle.mvp_150.jsonl`
+- `predictions.oracle.mvp_150.scored.jsonl`
+- `metrics.oracle.mvp_150.json`
+- `metrics_by_scenario.oracle.mvp_150.csv`
+- `error_analysis/analysis_summary.json`
+- `error_analysis/worst_cases.csv`
+- `error_analysis/flagged_cases.jsonl`
+- `error_analysis/by_scenario.csv`
+- `error_analysis/by_scenario_bucket.csv`
+
+这些文件可以进入 git；其他临时输出、缓存、模型权重和 checkpoint 仍不应提交。
 
 ## 测试标准
 
