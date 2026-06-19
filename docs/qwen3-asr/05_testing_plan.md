@@ -179,7 +179,7 @@ Colab 测试：
 通过标准：
 
 - Colab GPU runtime 能安装 `unsloth` 和 `unsloth_zoo`。
-- Unsloth 安装不应使用 `--force-reinstall`；如果出现 Colab 预装依赖冲突，先修复 `cuda-bindings==12.9.7`、`pandas==2.2.2`、`requests==2.32.4`、`protobuf<6,>=3.20.2`、`jedi>=0.16`。
+- Unsloth 安装不应使用 `--force-reinstall`；如果出现 Colab 预装依赖冲突，先修复 `cuda-python==12.9.4`、`cuda-bindings==12.9.4`、`pandas==2.2.2`、`requests==2.32.4`、`protobuf<6,>=3.20.2`、`jedi>=0.16`。
 - `train/check_unsloth_qwen3_asr.py` 能写出 `unsloth_compatibility.json`。
 - JSON 中必须包含 `compatible`、`checks`、`errors`、`matched_targets_preview`。
 - 若 `compatible=true`，`matched_target_count` 必须等于配置中的 `expected_target_count`，当前为 99。

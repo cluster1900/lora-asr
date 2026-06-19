@@ -100,7 +100,7 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 - `qwen-asr` 和 Unsloth 可能要求不同的 `transformers`、`accelerate` 版本。
 - baseline 推理和 Unsloth 兼容性检查建议分开 runtime 执行。
 - Unsloth 安装不使用 `--force-reinstall`，避免把 Colab 预装的 `pandas`、`requests`、`protobuf` 大幅升级。
-- 若出现 `cuda-python` 与 `cuda-bindings` 版本不一致，优先将 `cuda-bindings` 对齐到 `12.9.7`。
+- 若出现 `cuda-python` 与 `cuda-bindings` 版本不一致，优先服从当前 `torch` 的硬约束。当前 Colab/Unsloth 可能安装 `torch 2.10.0`，它要求 `cuda-bindings==12.9.4`，因此 CUDA Python 相关包固定为 `cuda-python==12.9.4 cuda-bindings==12.9.4`。
 - 如果安装后出现 pip resolver warning，先确认目标脚本是否能运行，再决定是否重启 runtime；warning 不一定等于 cell 失败。
 
 初始配置：
