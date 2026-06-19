@@ -1,6 +1,6 @@
 # 05 LoRA 训练 MVP
 
-最后更新：2026-06-15
+最后更新：2026-06-19
 
 ## 背景
 
@@ -13,6 +13,10 @@ Baseline 和数据 MVP 完成后，需要训练第一版 Qwen3-ASR 鲁棒 ASR Lo
 ## 范围
 
 本步骤只做第一版监督微调，不做 RL，不做大规模训练。
+
+当前进入 `05A LoRA 训练前探测`。本小阶段只确认 Qwen3-ASR 的真实模块结构、
+LoRA target 候选和 Colab 资源可行性，不开始正式训练。这样做是为了避免在
+没有模块快照的情况下盲目复制其他项目的 LoRA target 规则。
 
 ## 当前 Baseline 对照
 
@@ -47,8 +51,16 @@ MVP 150 hard profile 的 Qwen3-ASR base 结果：
 - 训练日志。
 - eval predictions。
 
+`05A` 训练前探测输出：
+
+- `outputs/lora_probe/qwen3_asr_1_7b/module_snapshot.json`
+- `outputs/lora_probe/qwen3_asr_1_7b/module_summary.csv`
+- `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.json`
+- `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.md`
+
 ## 需要实现的文件
 
+- `train/inspect_qwen3_asr_modules.py`
 - `train/train_qwen3_asr_lora.py`
 - `train/collator.py`
 - `train/lora_targets.py`
@@ -68,6 +80,38 @@ MVP 150 hard profile 的 Qwen3-ASR base 结果：
 9. 在 val/test 上评测。
 10. 使用 `evaluation/analyze_errors.py` 对比 base 与 LoRA。
 11. 更新训练文档、测试文档、进度文档。
+
+### 05A 训练前探测命令
+
+在 Colab GPU runtime 中执行：
+
+```bash
+python train/inspect_qwen3_asr_modules.py \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --output-dir outputs/lora_probe/qwen3_asr_1_7b \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --max-inference-batch-size 1 \
+  --max-new-tokens 128
+```
+
+也可以直接运行 `notebooks/03_train_lora_colab.ipynb` 的训练前探测部分。该
+notebook 默认项目目录为 `/content/drive/MyDrive/qwen3-asr`。
+
+### 05A 通过标准
+
+- 脚本能通过官方 `qwen-asr` API 加载 `Qwen/Qwen3-ASR-1.7B`。
+- 能找到至少一个 `torch.nn.Module` 根节点。
+- 能导出 `module_snapshot.json` 和 `module_summary.csv`。
+- `lora_target_candidates.json` 中包含候选分组和模块名。
+- 人工复核后能明确第一版 smoke training 的 target 组。
+
+### 05A 验收标准
+
+- 探测输出已保存到 `outputs/lora_probe/qwen3_asr_1_7b/`。
+- 关键输出已提交到仓库，便于后续排查。
+- 进度文档记录探测结论、候选 target 和风险。
+- 未完成探测前，不开始 `train/train_qwen3_asr_lora.py` 的正式训练实现。
 
 ## 初始配置
 

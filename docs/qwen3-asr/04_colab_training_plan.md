@@ -1,6 +1,6 @@
 # Colab 训练方案
 
-最后更新：2026-06-11
+最后更新：2026-06-19
 
 ## 目标
 
@@ -87,7 +87,12 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 
 目的：
 
-- 训练第一版 ASR LoRA adapter。
+- 先完成 Qwen3-ASR 模块探测和 LoRA target 候选导出。
+- 再训练第一版 ASR LoRA adapter。
+
+当前 notebook 的第一版只覆盖训练前探测，不直接启动训练。原因是 Qwen3-ASR
+官方 `qwen-asr` wrapper 的内部模块结构需要以当前环境真实加载结果为准，不能
+复用 Mega-ASR 或其他工程的 target 规则。
 
 初始配置：
 
@@ -107,12 +112,17 @@ max_new_tokens: 256
 
 训练阶段：
 
+0. Probe：加载模型并导出 `named_modules()`、LoRA target 候选和摘要。
 1. Smoke test：20 条样本，5-20 steps。
 2. MVP train：10k-20k 样本，1 epoch。
 3. Scenario-balanced train：按声学场景做加权采样。
 
 输出：
 
+- `outputs/lora_probe/qwen3_asr_1_7b/module_snapshot.json`
+- `outputs/lora_probe/qwen3_asr_1_7b/module_summary.csv`
+- `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.json`
+- `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.md`
 - LoRA adapter checkpoint。
 - trainer state。
 - training logs。

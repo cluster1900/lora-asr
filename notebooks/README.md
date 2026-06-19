@@ -6,8 +6,8 @@
 
 - `01_baseline_colab.ipynb`：Qwen3-ASR-1.7B baseline smoke 推理与 WER/CER 评测。
 - `02_mvp_150_eval_colab.ipynb`：读取本地生成并上传到 Drive 的 150 条 MVP 评测集，运行 Qwen3-ASR baseline 推理和场景级 WER/CER。
+- `03_train_lora_colab.ipynb`：先执行 Qwen3-ASR 模块探测和 LoRA target 候选导出，后续再扩展为 smoke training。
 - `02_make_dataset_colab.ipynb`
-- `03_train_lora_colab.ipynb`
 - `04_eval_colab.ipynb`
 - `05_router_colab.ipynb`
 

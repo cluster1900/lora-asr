@@ -29,17 +29,15 @@
 
 ## 进行中
 
-- `02 Baseline 评估`：`Qwen/Qwen3-ASR-1.7B` 已完成 MVP 150 全量评测。clean WER 为 1.04%，degraded-only WER 约 60.23%，empty output rate 为 0.0。下一步应做错误样本分析，并把这些结果作为 LoRA/Router 的 base 对照。
-- 正在启动 `06 评测与错误分析`：先实现 scored JSONL 错误分析脚本，输出 worst cases、场景/文本长度拆分和疑似幻觉/重复/过短输出标签。
+- `05 LoRA 训练 MVP`：正在进入 `05A LoRA 训练前探测`。当前目标是用官方 `qwen-asr` API 加载 `Qwen/Qwen3-ASR-1.7B`，导出真实 `named_modules()` 快照，并生成第一版 LoRA target 候选，随后再实现 smoke training。
 
 ## 下一批里程碑
 
-1. 按 [02 Baseline 评估](./roadmap/02_baseline_eval.md) 实现 Qwen3-ASR ASR baseline。
-2. 按 [03 数据 MVP](./roadmap/03_data_mvp.md) 构建小规模 JSONL 数据。
-3. 按 [04 音频增强](./roadmap/04_audio_augmentation.md) 实现退化增强。
-4. 按 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 实现第一版 QLoRA。
-5. 按 [06 评测与错误分析](./roadmap/06_eval_and_error_analysis.md) 跑通 baseline 与微调评测。
-6. 按 [07 Router MVP](./roadmap/07_router_mvp.md) 实现 clean/degraded 路由。
+1. 在 Colab GPU runtime 中运行 `notebooks/03_train_lora_colab.ipynb` 的探测部分。
+2. 保存并提交 `outputs/lora_probe/qwen3_asr_1_7b/` 下的模块快照和候选 target。
+3. 人工复核候选 target，确定第一版 smoke training 的 LoRA 目标组。
+4. 实现 `train/train_qwen3_asr_lora.py`、collator 和 5-20 step smoke test。
+5. 用同一套 MVP 150 test 集比较 base 与 LoRA，并记录 clean regression。
 
 ## 待确认问题
 
@@ -142,3 +140,5 @@ baseline 推理逻辑从通用多模态聊天模板改为 Qwen3-ASR 官方 `qwen
 已在本地对 `outputs/baseline_mvp_150/predictions.qwen3_asr_base.mvp_150.scored.jsonl` 执行 `evaluation/analyze_errors.py`，生成 `outputs/baseline_mvp_150/error_analysis/` 下的分析文件。
 
 为方便后续排查和复盘，本项目将 `outputs/baseline_mvp_150/` 作为第一批受控 baseline 输出提交到版本库。该目录包含 Qwen3-ASR baseline 的 prediction、scored JSONL、metrics、scenario CSV 和 error analysis 结果；其他通用 `outputs/` 子目录仍默认忽略。
+
+进入 `05A LoRA 训练前探测`。本阶段先实现模块探测脚本和 Colab 入口，输出 Qwen3-ASR 当前版本的模块快照、候选 LoRA target 和人工复核摘要。未完成探测前，不开始正式训练循环，避免 LoRA target 来自未经验证的外部假设。

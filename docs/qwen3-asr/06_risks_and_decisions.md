@@ -1,6 +1,6 @@
 # 风险与决策
 
-最后更新：2026-06-11
+最后更新：2026-06-19
 
 ## 已定决策
 
@@ -121,6 +121,19 @@
 - 检查 Qwen3-ASR 模块名。
 - 做 ablation：仅后层 LLM、仅音频投影、联合 target。
 - 按 scenario 追踪结果。
+
+### R003A: 官方 qwen-asr wrapper 可能不直接暴露训练所需模块
+
+影响：
+
+- `Qwen3ASRModel` 可能主要面向推理，内部真实 `torch.nn.Module` 根节点不一定稳定暴露。
+- 如果无法可靠定位模块，PEFT/LoRA 训练入口需要改为更底层的 Transformers 加载路径。
+
+缓解：
+
+- 在训练前执行 `train/inspect_qwen3_asr_modules.py`，保存 root、module snapshot 和候选 target。
+- 不在探测完成前实现正式训练循环。
+- 如果 wrapper 不适合训练，保留 qwen-asr 作为推理入口，训练阶段切换到官方模型结构可支持的低层加载方式。
 
 ### R004: 合成退化可能无法迁移到真实音频
 

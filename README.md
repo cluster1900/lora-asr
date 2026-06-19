@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-当前已完成第一版 baseline smoke 闭环，并新增 150 条本地合成 MVP 评测集生成与评测入口：
+当前已完成第一版 baseline smoke 闭环、150 条本地合成 MVP 评测集生成与评测入口，并进入 LoRA 训练前探测阶段：
 
 ```text
 clean/noise 音频
@@ -17,9 +17,7 @@ clean/noise 音频
   -> overall 与 scenario-level 指标
 ```
 
-历史 smoke 链路曾在 Colab 中跑通 clean/noise 各 1 条样本。切换到 Qwen3-ASR-1.7B 后，baseline 需要从头重新执行，新的 WER/CER 以重新跑出的结果为准。
-
-本地已可生成 clean、noise、reverb、far_field、dropout 各 30 条的 MVP 评测集。oracle 评测链路已通过，真实 Qwen3-ASR baseline 结果需在 Colab 中运行 `notebooks/02_mvp_150_eval_colab.ipynb`。
+Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。当前下一步不是直接训练，而是在 Colab 中导出 Qwen3-ASR 的真实模块结构和 LoRA target 候选，避免复用外部工程的 target 规则。
 
 ## 文档入口
 
@@ -36,8 +34,11 @@ clean/noise 音频
 - `scripts/create_mvp_eval_audio.py`：本地生成 150 条 MVP 评测音频，覆盖 clean、noise、reverb、far_field、dropout。
 - `inference/qwen3_asr_base_infer.py`：读取 JSONL manifest，调用 Qwen3-ASR baseline 生成 ASR prediction JSONL。
 - `evaluation/eval_wer.py`：计算 WER/CER、overall 指标和 scenario-level 指标。
+- `evaluation/analyze_errors.py`：分析 scored prediction JSONL，输出 worst cases、场景聚合和错误标签。
+- `train/inspect_qwen3_asr_modules.py`：训练前探测 Qwen3-ASR 模块结构，并生成 LoRA target 候选。
 - `notebooks/01_baseline_colab.ipynb`：Colab/Google Drive baseline smoke notebook。
 - `notebooks/02_mvp_150_eval_colab.ipynb`：Colab/Google Drive MVP 150 baseline 评测 notebook。
+- `notebooks/03_train_lora_colab.ipynb`：Colab/Google Drive LoRA 训练前探测入口。
 - `configs/baseline/qwen3_asr_baseline.yaml`：baseline smoke 配置。
 
 ## 快速开始
@@ -121,6 +122,27 @@ python3 evaluation/eval_wer.py \
   --metrics-by-scenario-csv outputs/baseline/metrics_by_scenario.qwen3_asr_base.smoke.csv
 ```
 
+### 5. Colab 探测 LoRA target 候选
+
+打开并按顺序执行：
+
+```text
+notebooks/03_train_lora_colab.ipynb
+```
+
+默认 Google Drive 项目路径：
+
+```text
+/content/drive/MyDrive/qwen3-asr
+```
+
+主要输出：
+
+- `outputs/lora_probe/qwen3_asr_1_7b/module_snapshot.json`
+- `outputs/lora_probe/qwen3_asr_1_7b/module_summary.csv`
+- `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.json`
+- `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.md`
+
 ## 目录结构
 
 ```text
@@ -147,7 +169,7 @@ train/        后续 LoRA/QLoRA 训练入口
 
 按路线图继续执行：
 
-1. 扩大 [02 Baseline 评估](docs/qwen3-asr/roadmap/02_baseline_eval.md)：从 2 条 smoke 样本扩展到更多 clean/degraded 样本。
-2. 执行 [03 数据 MVP](docs/qwen3-asr/roadmap/03_data_mvp.md)：覆盖 clean、noise、reverb、far_field、dropout。
-3. 执行 [04 音频增强](docs/qwen3-asr/roadmap/04_audio_augmentation.md)：实现可复现的退化增强管线。
-4. 执行 [05 LoRA 训练 MVP](docs/qwen3-asr/roadmap/05_lora_training_mvp.md)：在 Colab 中跑通第一版 QLoRA/LoRA smoke training。
+1. 执行 [05 LoRA 训练 MVP](docs/qwen3-asr/roadmap/05_lora_training_mvp.md) 的 `05A`：导出模块快照和候选 LoRA target。
+2. 根据探测结果实现第一版 QLoRA/LoRA smoke training。
+3. 用同一套 MVP 150 test 集比较 base 与 LoRA，重点检查 noise/reverb 改善和 clean regression。
+4. 若 LoRA 有收益，再进入 [07 Router MVP](docs/qwen3-asr/roadmap/07_router_mvp.md)。

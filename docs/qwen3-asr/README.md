@@ -1,6 +1,6 @@
 # Qwen3-ASR 鲁棒 ASR 项目方案
 
-最后更新：2026-06-11
+最后更新：2026-06-19
 
 本目录用于记录一个基于 Qwen3-ASR-1.7B 的独立鲁棒语音识别项目方案。
 
@@ -22,7 +22,7 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 
 ## 当前范围
 
-当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已跑通第一版 Colab smoke 闭环，并新增本地合成 MVP 150 条评测集生成与 Colab 评测入口。
+当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出第一批分析文件。现在进入 `05A LoRA 训练前探测`，先导出 Qwen3-ASR 的真实模块结构和 LoRA target 候选。
 
 已完成：
 
@@ -31,16 +31,20 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 - 已实现本地 smoke 音频生成脚本、Qwen3-ASR baseline 推理脚本、WER/CER 评测脚本。
 - 已新增 `notebooks/01_baseline_colab.ipynb`，并在 Colab 中完成 clean/noise 各 1 条样本的 smoke baseline。
 - 已新增 `scripts/create_mvp_eval_audio.py` 和 `notebooks/02_mvp_150_eval_colab.ipynb`，用于 clean/noise/reverb/far_field/dropout 各 30 条的 baseline MVP 评测。
+- 已在 MVP 150 hard profile 上记录 Qwen3-ASR base 指标：clean WER 0.010438，degraded-only WER 约 0.602296。
+- 已新增 `evaluation/analyze_errors.py` 并保存 baseline 错误分析输出。
+- 已新增 `train/inspect_qwen3_asr_modules.py` 和 `notebooks/03_train_lora_colab.ipynb`，用于 LoRA 训练前模块探测。
 
-下一步：扩大 [02 Baseline 评估](./roadmap/02_baseline_eval.md) 样本量，并进入 [03 数据 MVP](./roadmap/03_data_mvp.md)。
+下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05A`，在 Colab GPU runtime 中生成 `outputs/lora_probe/qwen3_asr_1_7b/` 探测输出，并据此确定第一版 smoke training 的 target 组。
 
 MVP 会按路线图继续完成：
 
-1. 扩大 Qwen3-ASR-1.7B 原始 ASR 基线评估。
-2. 构建小规模 clean/degraded 语音数据集。
-3. 训练第一版 QLoRA ASR adapter。
-4. 评估 WER/CER 和典型失败模式。
-5. 根据结果决定是否扩大数据、训练时长和 router 复杂度。
+1. 基于已完成的 Qwen3-ASR-1.7B baseline 和错误分析确定 LoRA 目标场景。
+2. 探测 Qwen3-ASR 真实模块结构，确定第一版 LoRA target。
+3. 跑通 5-20 step smoke training。
+4. 训练第一版 QLoRA ASR adapter。
+5. 评估 WER/CER、典型失败模式和 clean regression。
+6. 根据结果决定是否进入 router 和扩大训练规模。
 
 最终目标是完成一个类似 Mega-ASR 的鲁棒 ASR 产品：具备鲁棒 ASR LoRA、音频质量 router、统一推理入口、数据增强管线、评测体系和发布文档。但实现方式必须独立于 Mega-ASR，基于 Qwen3-ASR-1.7B 自行开发。
 

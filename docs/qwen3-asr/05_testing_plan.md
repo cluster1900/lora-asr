@@ -1,6 +1,6 @@
 # 测试方案
 
-最后更新：2026-06-15
+最后更新：2026-06-19
 
 ## 目标
 
@@ -146,3 +146,28 @@ LoRA MVP 的第一版成功门槛应以 degraded-only WER 或单场景 WER 相�
 4. 10 条 mini eval 可计算 WER。
 5. 无输出解析错误。
 6. checkpoint metadata 存在。
+
+## LoRA 训练前探测测试
+
+`05A LoRA 训练前探测` 不产出 adapter，因此测试重点不是 WER，而是确认模块快照可复现、候选 target 可复核。
+
+本地测试：
+
+- `train/inspect_qwen3_asr_modules.py --help` 可以正常执行。
+- `train/lora_targets.py` 可以通过语法检查。
+- `notebooks/03_train_lora_colab.ipynb` 是合法 notebook JSON，且无执行输出、无 token、无个人密钥。
+
+Colab 测试：
+
+- 使用 GPU runtime。
+- 项目目录为 `/content/drive/MyDrive/qwen3-asr`。
+- `notebooks/03_train_lora_colab.ipynb` 能完成依赖安装、配置读取和 GPU 检查。
+- 探测脚本能加载 `Qwen/Qwen3-ASR-1.7B`。
+- 输出目录中存在 `module_snapshot.json`、`module_summary.csv`、`lora_target_candidates.json`、`lora_target_candidates.md`。
+
+验收标准：
+
+- `module_snapshot.json` 中 `modules` 数量大于 0。
+- `lora_target_candidates.json` 中至少有一个候选分组。
+- `lora_target_candidates.md` 能用于人工复核第一版 target。
+- 探测输出已记录到进度文档，并在需要排查时提交到仓库。
