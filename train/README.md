@@ -58,6 +58,11 @@ smoke 阶段默认关闭 gradient checkpointing。第一版 target 只训练 aud
 在 Qwen3-ASR 自定义音频架构上先避免 k-bit PEFT prepare 默认启用 checkpointing，
 等训练闭环跑通后再单独评估是否需要打开。
 
+训练脚本会把 PEFT LoRA 包到 `wrapper.model.thinker`，而不是最外层
+`wrapper.model`。最外层 `Qwen3ASRForConditionalGeneration` 主要提供
+`generate()`，没有训练用的 `forward(input_ids=..., labels=...)`；`thinker`
+才负责音频特征融合、文本 decoder 和 loss 计算。
+
 主要输出：
 
 - `target_modules.json`：本次实际命中的 LoRA target，必须为 99 个 audio tower 模块。

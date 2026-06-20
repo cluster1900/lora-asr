@@ -204,12 +204,14 @@ model.thinker.audio_tower.proj2
 训练输入构造：
 
 - 使用官方 `Qwen3ASRModel.from_pretrained` 加载模型和 processor。
+- 训练时不直接包最外层 `Qwen3ASRForConditionalGeneration`，而是包内部 `model.thinker`。原因是最外层 Qwen3-ASR 模块主要提供 `generate()`，没有训练用的 `forward(input_ids=..., labels=...)`；`thinker` 才负责音频特征融合、文本 decoder 和 loss 计算。
 - 复用官方推理 prompt 形式：system context + user audio，再在 assistant prompt 后追加 `language English`。
 - 训练文本为 `prompt + answer`。
 - `labels` 与 `input_ids` 等长，prompt 部分和 padding 位置置为 `-100`，只对 answer token 计算 loss。
 - `processor(text=..., audio=..., return_tensors="pt", padding=True)` 负责生成 `input_ids`、`attention_mask`、`input_features`、`feature_attention_mask`。
 - 当前 smoke 训练固定 `batch_size=1`，避免 left padding 下 prompt mask 计算变复杂；后续扩大训练时再实现多样本 collator。
 - 当前 smoke 训练默认关闭 gradient checkpointing。原因是第一版 LoRA 只训练 audio tower，Qwen3-ASR 又是自定义音频架构；在 k-bit PEFT 准备阶段强行启用 checkpointing 可能触发 `get_input_embeddings` 兼容问题，或让 audio tower LoRA 的梯度路径不稳定。等 5-20 step 小闭环跑通后，再单独评估是否需要打开。
+- LoRA target 正则仍使用探测输出中的 `model.thinker.*` 全路径；训练脚本会把 `thinker` 内部 raw module name 映射回这个前缀后再匹配，PEFT 实际收到的是相对 `thinker` 的 raw target name。
 
 推荐命令：
 

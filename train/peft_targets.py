@@ -23,9 +23,14 @@ class MatchedTarget:
     lora_params: int
 
 
-def prefixed_module_name(raw_name: str) -> str:
-    """把底层模型的模块名补成探测输出中的 `model.*` 形式。"""
-    return "model" if raw_name == "" else f"model.{raw_name}"
+def prefixed_module_name(raw_name: str, root_prefix: str = "model") -> str:
+    """把底层模型的模块名补成探测输出中的全路径形式。
+
+    探测阶段的根节点是 `model`，训练阶段实际包的是内部 `model.thinker`。
+    因此训练脚本可以传入 `root_prefix="model.thinker"`，让相对 thinker 的
+    `audio_tower.*` 模块仍能匹配配置中的 `model.thinker.audio_tower.*` 正则。
+    """
+    return root_prefix if raw_name == "" else f"{root_prefix}.{raw_name}"
 
 
 def weight_shape(module: Any) -> str:
@@ -47,11 +52,15 @@ def estimate_lora_params(module: Any, rank: int) -> int:
     return int(rank) * (in_dim + out_dim)
 
 
-def match_lora_targets(model: Any, lora_config: dict[str, Any]) -> list[MatchedTarget]:
+def match_lora_targets(
+    model: Any,
+    lora_config: dict[str, Any],
+    root_prefix: str = "model",
+) -> list[MatchedTarget]:
     """使用配置中的 include/exclude regex 匹配底层模型 target。
 
-    配置正则使用探测输出里的 `model.*` 全路径；真实 PEFT 模型收到的是不带
-    顶层 wrapper 名的 raw module name，因此这里同时保留两种名称。
+    配置正则使用探测输出里的全路径；真实 PEFT 模型收到的是相对当前训练
+    root 的 raw module name，因此这里同时保留两种名称。
     """
     include_regex = [re.compile(pattern) for pattern in lora_config.get("include_regex", [])]
     exclude_regex = [re.compile(pattern) for pattern in lora_config.get("exclude_regex", [])]
@@ -59,7 +68,7 @@ def match_lora_targets(model: Any, lora_config: dict[str, Any]) -> list[MatchedT
 
     matched: list[MatchedTarget] = []
     for raw_name, module in model.named_modules():
-        full_name = prefixed_module_name(raw_name)
+        full_name = prefixed_module_name(raw_name, root_prefix=root_prefix)
         if not any(pattern.search(full_name) for pattern in include_regex):
             continue
         if any(pattern.search(full_name) for pattern in exclude_regex):

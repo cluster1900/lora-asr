@@ -179,3 +179,5 @@ Colab 首次执行 smoke training 时出现 `CalledProcessError`，该异常只�
 
 - smoke 配置默认关闭 `gradient_checkpointing`，并在 k-bit PEFT 准备阶段同步关闭，避免 Qwen3-ASR 自定义音频架构与 checkpointing/input embedding 逻辑冲突。
 - notebook 的模块探测和训练 cell 改为捕获并打印 stdout/stderr tail，后续失败时可以直接看到真实异常。
+
+第二次 Colab smoke training 捕获到真实异常：`_forward_unimplemented() got an unexpected keyword argument 'input_ids'`。根因是脚本把 PEFT LoRA 包在最外层 `Qwen3ASRForConditionalGeneration` 上，而该外层主要实现 `generate()`，没有训练用的 `forward(input_ids=..., labels=...)`。已修复为训练内部 `model.thinker`，并让 target 匹配工具以 `model.thinker` 作为探测全路径前缀，同时把 PEFT 实际 target 保持为相对 thinker 的 raw module name。

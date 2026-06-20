@@ -289,14 +289,16 @@ def build_training_batch(
 
 def enable_training_features(model: Any, gradient_checkpointing: bool) -> None:
     """关闭 cache，并按需启用 gradient checkpointing。"""
-    for obj in [model, getattr(model, "thinker", None), getattr(getattr(model, "thinker", None), "model", None)]:
+    thinker = getattr(model, "thinker", None)
+    text_model = getattr(model, "model", None)
+    thinker_text_model = getattr(thinker, "model", None)
+    for obj in [model, thinker, text_model, thinker_text_model]:
         config = getattr(obj, "config", None)
         if config is not None and hasattr(config, "use_cache"):
             config.use_cache = False
 
     if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
         model.gradient_checkpointing_enable()
-    thinker = getattr(model, "thinker", None)
     if gradient_checkpointing and hasattr(thinker, "gradient_checkpointing_enable"):
         thinker.gradient_checkpointing_enable()
 
@@ -306,14 +308,16 @@ def attach_lora(
     config: dict[str, Any],
     peft_task_type: str,
     gradient_checkpointing: bool,
+    target_root_prefix: str,
 ) -> tuple[Any, dict[str, Any]]:
     """按配置匹配 target，并通过 PEFT 挂载 LoRA。"""
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
     lora_config = config["lora"]
-    matched = match_lora_targets(model, lora_config)
+    matched = match_lora_targets(model, lora_config, root_prefix=target_root_prefix)
     validate_lora_targets(matched, lora_config)
     summary = target_summary(matched)
+    summary["target_root_prefix"] = target_root_prefix
 
     quantization = str(config.get("model", {}).get("quantization", "none")).lower()
     if quantization in {"4bit", "nf4", "8bit", "int8"}:
@@ -353,6 +357,20 @@ def trainable_parameter_summary(model: Any) -> dict[str, Any]:
         "trainable_params": int(trainable),
         "trainable_ratio": float(trainable / total) if total else 0.0,
     }
+
+
+def resolve_training_model(wrapper: Any) -> tuple[Any, str]:
+    """返回真正支持训练 forward 的 Qwen3-ASR 子模型。
+
+    qwen-asr wrapper 的 `model` 是 `Qwen3ASRForConditionalGeneration`，它主要提供
+    `generate()`；内部 `model.thinker` 才实现 `forward(..., labels=...)` 并能计算
+    loss。PEFT 因此必须包 thinker，而不是包最外层模型。
+    """
+    outer_model = getattr(wrapper, "model", None)
+    thinker = getattr(outer_model, "thinker", None)
+    if thinker is None:
+        raise AttributeError("Qwen3-ASR wrapper.model.thinker not found; cannot run training forward.")
+    return thinker, "model.thinker"
 
 
 def parse_csv_set(value: str) -> set[str]:
@@ -440,7 +458,7 @@ def main() -> None:
     print(f"[load] model={args.model_id} quantization={args.quantization} dtype={args.dtype}")
 
     wrapper = load_qwen3_asr_wrapper(args, config)
-    base_model = wrapper.model
+    base_model, target_root_prefix = resolve_training_model(wrapper)
     processor = wrapper.processor
     enable_training_features(base_model, args.gradient_checkpointing)
 
@@ -449,6 +467,7 @@ def main() -> None:
         config,
         args.peft_task_type,
         args.gradient_checkpointing,
+        target_root_prefix,
     )
     param_summary = trainable_parameter_summary(peft_model)
     lora_summary["trainable_parameter_summary"] = param_summary
@@ -462,6 +481,7 @@ def main() -> None:
         "dtype": args.dtype,
         "device_map": args.device_map,
         "quantization": args.quantization,
+        "training_root": target_root_prefix,
         "language": args.language,
         "context": args.context,
         "limit": args.limit,
