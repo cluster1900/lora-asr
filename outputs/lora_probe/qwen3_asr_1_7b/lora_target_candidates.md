@@ -3,11 +3,11 @@
 ## 元信息
 
 - model_id: `Qwen/Qwen3-ASR-1.7B`
-- created_at: `2026-06-19T03:21:28.332050+00:00`
+- created_at: `2026-06-20T05:38:28.427703+00:00`
 - dtype: `float16`
 - device_map: `cuda:0`
 - total_modules: `703`
-- elapsed_seconds: `87.68`
+- elapsed_seconds: `8.38`
 
 ## Torch Module Root
 

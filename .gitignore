@@ -19,7 +19,6 @@ wandb/
 tensorboard/
 
 # Checkpoints and model weights
-checkpoints/
 ckpt/
 *.pt
 *.pth
