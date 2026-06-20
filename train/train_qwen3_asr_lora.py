@@ -274,6 +274,35 @@ def first_param_device_dtype(model: Any) -> tuple[Any, Any]:
     return fallback_device, fallback_dtype
 
 
+def module_param_device_dtype(module: Any) -> tuple[Any, Any] | None:
+    """返回模块直属浮点参数的 device/dtype。"""
+    for name in ("bias", "weight"):
+        param = getattr(module, name, None)
+        if param is not None and getattr(param, "is_floating_point", lambda: False)():
+            return param.device, param.dtype
+    for param in module.parameters(recurse=False):
+        if param.is_floating_point():
+            return param.device, param.dtype
+    return None
+
+
+def audio_feature_device_dtype(model: Any) -> tuple[Any, Any]:
+    """返回音频特征应使用的 device/dtype。
+
+    Qwen3-ASR 的前置音频卷积在 4bit/LoRA 路径中可能保留 float32 bias。
+    `input_features` 必须跟随 `audio_tower.conv2d1`，否则会出现
+    `Input type (c10::Half) and bias type (float) should be the same`。
+    """
+    base_model = model.get_base_model() if hasattr(model, "get_base_model") else model
+    for candidate in (model, base_model):
+        for module_name, module in candidate.named_modules():
+            if module_name.endswith("audio_tower.conv2d1"):
+                found = module_param_device_dtype(module)
+                if found is not None:
+                    return found
+    return first_param_device_dtype(model)
+
+
 def build_text_prompt(processor: Any, context: str, language: str | None) -> str:
     """复用官方推理 prompt：system + audio user turn + assistant generation prompt。"""
     messages = [
@@ -297,14 +326,15 @@ def move_batch_to_model(batch: dict[str, Any], model: Any) -> dict[str, Any]:
     """把 processor batch 移到模型 device，音频特征转成模型浮点 dtype。"""
     import torch
 
-    device, dtype = first_param_device_dtype(model)
+    device, _ = first_param_device_dtype(model)
+    audio_device, audio_dtype = audio_feature_device_dtype(model)
     moved: dict[str, Any] = {}
     for key, value in batch.items():
         if not torch.is_tensor(value):
             moved[key] = value
             continue
         if key == "input_features":
-            moved[key] = value.to(device=device, dtype=dtype)
+            moved[key] = value.to(device=audio_device, dtype=audio_dtype)
         else:
             moved[key] = value.to(device=device)
     return moved

@@ -63,6 +63,7 @@ Colab 环境注意：
 - 如果环境中预装了 `torchao==0.10.0`，当前 PEFT 会在 LoRA 注入阶段报错，要求 `torchao>0.16.0`。
 - 本 smoke training 不依赖 torchao，推荐在 Colab 安装依赖后执行 `%pip uninstall -y torchao`。
 - 训练脚本会提前检测旧版 torchao，并给出明确修复提示。
+- 4bit 加载时，文本侧参数可能是 float16/量化权重，但 audio tower 的前置卷积仍可能保留 float32 bias。训练脚本会让 `input_features` 跟随 `audio_tower.conv2d1` 的 dtype，避免卷积输入和 bias dtype 不一致。
 
 训练脚本会把 PEFT LoRA 包到 `wrapper.model.thinker`，而不是最外层
 `wrapper.model`。最外层 `Qwen3ASRForConditionalGeneration` 主要提供
