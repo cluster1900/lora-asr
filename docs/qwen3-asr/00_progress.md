@@ -193,3 +193,11 @@ Colab 中临时拉取 notebook 只执行了 clone/pull，看到 `Already up to d
 - 检查 `resolve_training_model`、`target_root_prefix`、`gradient_checkpointing: false` 等关键标记，作为继续执行训练 notebook 前的版本验收。
 
 随后按“只保留一个标准入口”的要求删除多余的旧 notebook，后续 Colab 拉取和更新统一使用 `notebooks/00_clone_github_colab.ipynb`。
+
+Colab `03_train_lora_colab.ipynb` 第 19 个运行单元再次失败，真实错误为：
+
+```text
+ImportError: Found an incompatible version of torchao. Found version 0.10.0, but only versions above 0.16.0 are supported
+```
+
+根因是 Colab runtime 预装旧版 `torchao`，PEFT 在 `get_peft_model()` 注入 LoRA 时会探测该包并因版本过旧中断。当前 Qwen3-ASR smoke training 不依赖 torchao，因此修复策略是在 notebook 安装依赖后默认卸载 `torchao`，并在训练脚本启动阶段加入环境预检，提前给出明确处理建议。

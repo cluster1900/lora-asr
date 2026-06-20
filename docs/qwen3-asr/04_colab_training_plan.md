@@ -150,6 +150,7 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 
 - 当前 notebook 固定 `qwen-asr==0.0.6`、`transformers==4.57.6`、`accelerate==1.12.0`，避免破坏 Qwen3-ASR 官方 wrapper 已验证过的依赖组合。
 - Colab 预装包中 `pandas`、`requests` 容易被升级到冲突版本，因此 notebook 固定 `pandas==2.2.2`、`requests==2.32.4`。
+- PEFT 注入 LoRA 时会探测 `torchao`。部分 Colab runtime 预装 `torchao==0.10.0`，而当前 PEFT 只支持 `torchao>0.16.0`，会在 `get_peft_model()` 阶段报错。当前 notebook 默认卸载 `torchao`，因为本 smoke training 不依赖 torchao。
 - 如果安装后出现 pip resolver warning，先确认目标脚本是否能运行，再决定是否重启 runtime；warning 不一定等于 cell 失败。
 
 初始配置：
@@ -278,6 +279,7 @@ THE TRANSCRIPT TEXT
 - notebook 使用 Google Drive 根目录变量，不写死个人本地路径。
 - baseline notebook 至少能对 1 条 clean 和 1 条 degraded 音频推理。
 - 训练 notebook 必须先完成 5-20 step smoke test。
+- 训练 notebook 的依赖 cell 必须处理 Colab 预装旧版 `torchao`，避免 PEFT LoRA 注入阶段失败。
 - 评测 notebook 能读取 prediction JSONL 并输出 WER/CER。
 - 失败信息要写入输出文件或日志，不能只显示在 notebook cell 中。
 

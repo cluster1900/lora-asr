@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+from importlib import metadata as importlib_metadata
 import json
 import math
 import random
@@ -144,6 +145,44 @@ def seed_everything(seed: int) -> None:
             torch.cuda.manual_seed_all(seed)
     except Exception:
         pass
+
+
+def parse_version_prefix(version: str) -> tuple[int, int, int]:
+    """解析版本号前三段数字，避免为环境预检额外引入 packaging 依赖。"""
+    parts: list[int] = []
+    for token in version.replace("-", ".").split("."):
+        digits = ""
+        for char in token:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            break
+        parts.append(int(digits))
+        if len(parts) == 3:
+            break
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def validate_peft_environment() -> None:
+    """提前识别会导致 PEFT LoRA 注入失败的 Colab 依赖组合。"""
+    try:
+        torchao_version = importlib_metadata.version("torchao")
+    except importlib_metadata.PackageNotFoundError:
+        return
+
+    if parse_version_prefix(torchao_version) >= (0, 16, 0):
+        return
+
+    raise ImportError(
+        "Detected torchao=={version}, but current PEFT requires torchao>0.16.0 when "
+        "the package is installed. This Qwen3-ASR smoke training does not require "
+        "torchao. In Colab, run `%pip uninstall -y torchao`, then rerun the training "
+        "cell. Alternatively install a compatible torchao version if your runtime "
+        "explicitly needs torchao.".format(version=torchao_version)
+    )
 
 
 def build_model_kwargs(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
@@ -444,6 +483,7 @@ def main() -> None:
     if not args.manifest:
         raise ValueError("No train manifest provided.")
 
+    validate_peft_environment()
     seed_everything(args.seed)
     manifest_path = Path(args.manifest).expanduser()
     output_dir = Path(args.output_dir).expanduser()

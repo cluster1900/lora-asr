@@ -58,6 +58,12 @@ smoke 阶段默认关闭 gradient checkpointing。第一版 target 只训练 aud
 在 Qwen3-ASR 自定义音频架构上先避免 k-bit PEFT prepare 默认启用 checkpointing，
 等训练闭环跑通后再单独评估是否需要打开。
 
+Colab 环境注意：
+
+- 如果环境中预装了 `torchao==0.10.0`，当前 PEFT 会在 LoRA 注入阶段报错，要求 `torchao>0.16.0`。
+- 本 smoke training 不依赖 torchao，推荐在 Colab 安装依赖后执行 `%pip uninstall -y torchao`。
+- 训练脚本会提前检测旧版 torchao，并给出明确修复提示。
+
 训练脚本会把 PEFT LoRA 包到 `wrapper.model.thinker`，而不是最外层
 `wrapper.model`。最外层 `Qwen3ASRForConditionalGeneration` 主要提供
 `generate()`，没有训练用的 `forward(input_ids=..., labels=...)`；`thinker`
