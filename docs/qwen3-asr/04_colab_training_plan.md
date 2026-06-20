@@ -90,23 +90,21 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 - 先完成 Qwen3-ASR 模块探测和 LoRA target 候选导出。
 - 再训练第一版 ASR LoRA adapter。
 
-当前 notebook 已覆盖训练前探测，并新增 Unsloth 兼容性检查。原因是 Qwen3-ASR
+当前 notebook 覆盖训练前探测和 Transformers + PEFT smoke training。Qwen3-ASR
 官方 `qwen-asr` wrapper 的内部模块结构需要以当前环境真实加载结果为准，不能
-复用 Mega-ASR 或其他工程的 target 规则；同时 Qwen3-ASR 是音频 ASR 架构，不能
-假设普通 Qwen3 LLM 的 Unsloth 训练入口一定可用。
+复用 Mega-ASR 或其他工程的 target 规则。
 
-Unsloth 兼容性检查结果：
+历史 Unsloth 兼容性检查结果：
 
 - `compatible=false`。
 - 失败原因是 Transformers AutoConfig 不识别 `model_type=qwen3_asr`。
 - 后续训练入口回退到 Transformers + PEFT，不继续在当前 MVP 中调试 Unsloth 依赖。
+- 兼容性结论保留在 `outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json`；当前 notebook 不再重复执行已知失败的 Unsloth 安装和检查。
 
 依赖注意事项：
 
-- `qwen-asr` 和 Unsloth 可能要求不同的 `transformers`、`accelerate` 版本。
-- baseline 推理和 Unsloth 兼容性检查建议分开 runtime 执行。
-- Unsloth 安装不使用 `--force-reinstall`，避免把 Colab 预装的 `pandas`、`requests`、`protobuf` 大幅升级。
-- 若出现 `cuda-python` 与 `cuda-bindings` 版本不一致，优先服从当前 `torch` 的硬约束。当前 Colab/Unsloth 可能安装 `torch 2.10.0`，它要求 `cuda-bindings==12.9.4`，因此 CUDA Python 相关包固定为 `cuda-python==12.9.4 cuda-bindings==12.9.4`。
+- 当前 notebook 固定 `qwen-asr==0.0.6`、`transformers==4.57.6`、`accelerate==1.12.0`，避免破坏 Qwen3-ASR 官方 wrapper 已验证过的依赖组合。
+- Colab 预装包中 `pandas`、`requests` 容易被升级到冲突版本，因此 notebook 固定 `pandas==2.2.2`、`requests==2.32.4`。
 - 如果安装后出现 pip resolver warning，先确认目标脚本是否能运行，再决定是否重启 runtime；warning 不一定等于 cell 失败。
 
 初始配置：
@@ -123,7 +121,13 @@ learning_rate: 2e-5
 epochs: 1
 max_audio_seconds: 20
 max_new_tokens: 256
+gradient_checkpointing: false
 ```
+
+smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audio tower，
+而 Qwen3-ASR 不是普通文本 LLM；在 k-bit PEFT 准备阶段启用 checkpointing 可能
+引入自定义架构兼容问题。先用 4bit + batch size 1 跑通训练闭环，再决定是否单独
+测试 checkpointing。
 
 训练阶段：
 

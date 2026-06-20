@@ -301,7 +301,12 @@ def enable_training_features(model: Any, gradient_checkpointing: bool) -> None:
         thinker.gradient_checkpointing_enable()
 
 
-def attach_lora(model: Any, config: dict[str, Any], peft_task_type: str) -> tuple[Any, dict[str, Any]]:
+def attach_lora(
+    model: Any,
+    config: dict[str, Any],
+    peft_task_type: str,
+    gradient_checkpointing: bool,
+) -> tuple[Any, dict[str, Any]]:
     """按配置匹配 target，并通过 PEFT 挂载 LoRA。"""
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
@@ -312,7 +317,10 @@ def attach_lora(model: Any, config: dict[str, Any], peft_task_type: str) -> tupl
 
     quantization = str(config.get("model", {}).get("quantization", "none")).lower()
     if quantization in {"4bit", "nf4", "8bit", "int8"}:
-        model = prepare_model_for_kbit_training(model)
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=gradient_checkpointing,
+        )
 
     peft_kwargs: dict[str, Any] = {
         "r": int(lora_config["r"]),
@@ -436,7 +444,12 @@ def main() -> None:
     processor = wrapper.processor
     enable_training_features(base_model, args.gradient_checkpointing)
 
-    peft_model, lora_summary = attach_lora(base_model, config, args.peft_task_type)
+    peft_model, lora_summary = attach_lora(
+        base_model,
+        config,
+        args.peft_task_type,
+        args.gradient_checkpointing,
+    )
     param_summary = trainable_parameter_summary(peft_model)
     lora_summary["trainable_parameter_summary"] = param_summary
 

@@ -54,6 +54,10 @@ python train/train_qwen3_asr_lora.py \
   --max-steps 20
 ```
 
+smoke 阶段默认关闭 gradient checkpointing。第一版 target 只训练 audio tower，
+在 Qwen3-ASR 自定义音频架构上先避免 k-bit PEFT prepare 默认启用 checkpointing，
+等训练闭环跑通后再单独评估是否需要打开。
+
 主要输出：
 
 - `target_modules.json`：本次实际命中的 LoRA target，必须为 99 个 audio tower 模块。

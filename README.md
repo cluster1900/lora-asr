@@ -40,7 +40,7 @@ Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 
 - `train/train_qwen3_asr_lora.py`：使用 Transformers + PEFT 对 Qwen3-ASR 跑 LoRA smoke training。
 - `notebooks/01_baseline_colab.ipynb`：Colab/Google Drive baseline smoke notebook。
 - `notebooks/02_mvp_150_eval_colab.ipynb`：Colab/Google Drive MVP 150 baseline 评测 notebook。
-- `notebooks/03_train_lora_colab.ipynb`：Colab/Google Drive LoRA 探测、兼容性检查和 PEFT smoke training 入口。
+- `notebooks/03_train_lora_colab.ipynb`：Colab/Google Drive LoRA 探测和 PEFT smoke training 入口。
 - `configs/baseline/qwen3_asr_baseline.yaml`：baseline smoke 配置。
 
 ## 快速开始

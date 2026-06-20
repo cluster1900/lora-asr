@@ -209,6 +209,7 @@ model.thinker.audio_tower.proj2
 - `labels` 与 `input_ids` 等长，prompt 部分和 padding 位置置为 `-100`，只对 answer token 计算 loss。
 - `processor(text=..., audio=..., return_tensors="pt", padding=True)` 负责生成 `input_ids`、`attention_mask`、`input_features`、`feature_attention_mask`。
 - 当前 smoke 训练固定 `batch_size=1`，避免 left padding 下 prompt mask 计算变复杂；后续扩大训练时再实现多样本 collator。
+- 当前 smoke 训练默认关闭 gradient checkpointing。原因是第一版 LoRA 只训练 audio tower，Qwen3-ASR 又是自定义音频架构；在 k-bit PEFT 准备阶段强行启用 checkpointing 可能触发 `get_input_embeddings` 兼容问题，或让 audio tower LoRA 的梯度路径不稳定。等 5-20 step 小闭环跑通后，再单独评估是否需要打开。
 
 推荐命令：
 
@@ -242,6 +243,7 @@ python train/train_qwen3_asr_lora.py \
 - 训练 loss 非 NaN。
 - adapter 可保存并重新加载。
 - 至少 1 条 clean 与 1 条 degraded 音频能完成 LoRA 推理。
+- 如果 Colab 训练 cell 只显示 `CalledProcessError`，先查看子进程 stdout/stderr；该异常本身只表示脚本返回非 0，不是根因。
 
 ## 初始配置
 

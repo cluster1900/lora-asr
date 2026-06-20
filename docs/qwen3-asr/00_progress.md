@@ -170,7 +170,12 @@ baseline 推理逻辑从通用多模态聊天模板改为 Qwen3-ASR 官方 `qwen
 
 - 新增 `train/peft_targets.py`，复用配置中的 include/exclude regex 精确匹配 PEFT LoRA target。
 - 新增 `train/train_qwen3_asr_lora.py`，通过官方 `Qwen3ASRModel.from_pretrained` 加载底层模型和 processor，挂载 PEFT LoRA，并构造只在 answer token 计算 loss 的训练 batch。
-- 更新 `notebooks/03_train_lora_colab.ipynb`，主路径改为 Transformers + PEFT smoke training，Unsloth 保留为可选兼容性复现。
+- 更新 `notebooks/03_train_lora_colab.ipynb`，主路径改为 Transformers + PEFT smoke training；Unsloth 兼容性检查已从 notebook 执行流程中移除，仅保留历史脚本、文档结论和 `unsloth_compatibility.json`。
 - 默认 smoke manifest 使用已提交的 `outputs/baseline_mvp_150/baseline_mvp_150.colab.jsonl`；本地运行可通过 `--manifest data/jsonl/baseline_mvp_150.local.jsonl` 覆盖。该 manifest 仅用于训练闭环验证，不代表正式训练集。
 
 下一步需要在 Colab Free GPU 中执行 5-20 step smoke training，检查 `target_modules.json`、`loss_log.jsonl`、`summary.json` 和 `adapter/`，确认 loss 非 NaN 且 adapter 可保存。
+
+Colab 首次执行 smoke training 时出现 `CalledProcessError`，该异常只表示子进程非 0 退出，根因需要查看脚本 stdout/stderr。已对 notebook 做两项收敛：
+
+- smoke 配置默认关闭 `gradient_checkpointing`，并在 k-bit PEFT 准备阶段同步关闭，避免 Qwen3-ASR 自定义音频架构与 checkpointing/input embedding 逻辑冲突。
+- notebook 的模块探测和训练 cell 改为捕获并打印 stdout/stderr tail，后续失败时可以直接看到真实异常。

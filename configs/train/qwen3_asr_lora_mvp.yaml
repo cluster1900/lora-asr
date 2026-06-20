@@ -46,7 +46,7 @@ training:
   smoke_test_steps: 20
   optimizer: adamw
   peft_task_type: none
-  gradient_checkpointing: true
+  gradient_checkpointing: false
 
 output:
   checkpoint_dir: checkpoints/qwen3-asr-1.7b-lora
