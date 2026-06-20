@@ -1,6 +1,6 @@
 # 开发进度
 
-最后更新：2026-06-19
+最后更新：2026-06-20
 
 ## 当前状态
 
@@ -26,6 +26,7 @@
 - 已新增 `inference/qwen3_asr_base_infer.py` 和 `evaluation/eval_wer.py`，用于 Qwen3-ASR baseline 推理与 WER/CER 评测。
 - 已新增 `notebooks/01_baseline_colab.ipynb`，用于在 Colab/Google Drive 中跑通 baseline smoke 推理与评测。
 - 已新增 `scripts/create_mvp_eval_audio.py` 和 `notebooks/02_mvp_150_eval_colab.ipynb`，用于生成并评测 clean/noise/reverb/far_field/dropout 各 30 条的 baseline MVP 集。
+- 已新增 `notebooks/00_clone_github_colab.ipynb`，用于在 Colab/Google Drive 中 clone 或更新 GitHub 工程，并确认当前 commit 与关键修复标记；同时保留 `notebooks/00clonegithub.ipynb` 作为旧命名兼容入口。
 
 ## 进行中
 
@@ -181,3 +182,12 @@ Colab 首次执行 smoke training 时出现 `CalledProcessError`，该异常只�
 - notebook 的模块探测和训练 cell 改为捕获并打印 stdout/stderr tail，后续失败时可以直接看到真实异常。
 
 第二次 Colab smoke training 捕获到真实异常：`_forward_unimplemented() got an unexpected keyword argument 'input_ids'`。根因是脚本把 PEFT LoRA 包在最外层 `Qwen3ASRForConditionalGeneration` 上，而该外层主要实现 `generate()`，没有训练用的 `forward(input_ids=..., labels=...)`。已修复为训练内部 `model.thinker`，并让 target 匹配工具以 `model.thinker` 作为探测全路径前缀，同时把 PEFT 实际 target 保持为相对 thinker 的 raw module name。
+
+### 2026-06-20
+
+Colab 中临时 `0clonegithub.ipynb`/`00clonegithub.ipynb` 只执行了 clone/pull，看到 `Already up to date` 时无法判断 Drive 里的代码是否包含最新训练修复。为此新增正式 `notebooks/00_clone_github_colab.ipynb`，并将 `notebooks/00clonegithub.ipynb` 同步为兼容入口：
+
+- 空目录时 clone `https://github.com/cluster1900/lora-asr.git` 到 `/content/drive/MyDrive/qwen3-asr`。
+- 已存在 git 仓库时执行 `fetch + pull --ff-only`，默认不覆盖本地修改。
+- 打印当前 `HEAD`、最新提交信息和 `git status --short`。
+- 检查 `resolve_training_model`、`target_root_prefix`、`gradient_checkpointing: false` 等关键标记，作为继续执行训练 notebook 前的版本验收。

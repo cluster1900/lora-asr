@@ -4,6 +4,8 @@
 
 规划：
 
+- `00_clone_github_colab.ipynb`：挂载 Google Drive，clone/update GitHub 工程，并打印 commit 与关键修复标记。
+- `00clonegithub.ipynb`：兼容旧命名，内容与 `00_clone_github_colab.ipynb` 保持一致。
 - `01_baseline_colab.ipynb`：Qwen3-ASR-1.7B baseline smoke 推理与 WER/CER 评测。
 - `02_mvp_150_eval_colab.ipynb`：读取本地生成并上传到 Drive 的 150 条 MVP 评测集，运行 Qwen3-ASR baseline 推理和场景级 WER/CER。
 - `03_train_lora_colab.ipynb`：执行 Qwen3-ASR 模块探测、LoRA target 候选导出和 Unsloth 兼容性检查；Unsloth 已验证不兼容，后续 smoke training 走 Transformers + PEFT。

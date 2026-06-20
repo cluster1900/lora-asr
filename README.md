@@ -19,6 +19,8 @@ clean/noise 音频
 
 Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。训练前探测已确认官方 `qwen-asr` wrapper 暴露 `Qwen3ASRForConditionalGeneration` 根节点，第一版 LoRA smoke target 收敛为 audio tower attention + speech projection。Unsloth 兼容性检查已失败，当前训练框架回退为 Transformers + PEFT，并已新增 5-20 step smoke training 入口。
 
+Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google Drive 中的工程代码已经更新到 GitHub 最新提交，再继续执行 baseline 或训练 notebook。旧命名 `notebooks/00clonegithub.ipynb` 保留为兼容入口，避免在 Colab 打开旧文件时漏掉版本验收。
+
 ## 文档入口
 
 - [项目方案](docs/qwen3-asr/README.md)
@@ -38,12 +40,36 @@ Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 
 - `train/inspect_qwen3_asr_modules.py`：训练前探测 Qwen3-ASR 模块结构，并生成 LoRA target 候选。
 - `train/check_unsloth_qwen3_asr.py`：检查 Unsloth 是否能加载 Qwen3-ASR 并精确匹配 audio tower target。
 - `train/train_qwen3_asr_lora.py`：使用 Transformers + PEFT 对 Qwen3-ASR 跑 LoRA smoke training。
+- `notebooks/00_clone_github_colab.ipynb`：Colab/Google Drive clone 或更新 GitHub 工程，并校验当前 commit 和关键修复。
+- `notebooks/00clonegithub.ipynb`：兼容旧命名的 clone/update notebook。
 - `notebooks/01_baseline_colab.ipynb`：Colab/Google Drive baseline smoke notebook。
 - `notebooks/02_mvp_150_eval_colab.ipynb`：Colab/Google Drive MVP 150 baseline 评测 notebook。
 - `notebooks/03_train_lora_colab.ipynb`：Colab/Google Drive LoRA 探测和 PEFT smoke training 入口。
 - `configs/baseline/qwen3_asr_baseline.yaml`：baseline smoke 配置。
 
 ## 快速开始
+
+### 0. Colab 拉取或更新工程
+
+打开并按顺序执行：
+
+```text
+notebooks/00_clone_github_colab.ipynb
+```
+
+如果 Colab 中已经打开旧文件名，也可以执行：
+
+```text
+notebooks/00clonegithub.ipynb
+```
+
+默认 Google Drive 项目路径：
+
+```text
+/content/drive/MyDrive/qwen3-asr
+```
+
+执行完成后应看到当前 commit、最新 commit message，以及关键修复标记检查通过。
 
 ### 1. 本地生成 smoke 音频
 

@@ -1,6 +1,6 @@
 # Colab 训练方案
 
-最后更新：2026-06-19
+最后更新：2026-06-20
 
 ## 目标
 
@@ -32,6 +32,53 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
     eval/
   logs/
 ```
+
+## Notebook 00: 拉取或更新工程
+
+名称：
+
+- `notebooks/00_clone_github_colab.ipynb`
+- 兼容旧命名：`notebooks/00clonegithub.ipynb`
+
+目的：
+
+- 在新的 Colab Free runtime 中挂载 Google Drive。
+- 如果 `/content/drive/MyDrive/qwen3-asr` 不存在，则从 GitHub clone 项目。
+- 如果目录已存在且是 git 仓库，则执行 `fetch + pull --ff-only`。
+- 打印当前本地 commit、远端 commit 和关键修复标记，避免只看到 `Already up to date` 却无法判断代码版本。
+
+为什么需要单独 notebook：
+
+- Colab 的 Drive 目录会跨 runtime 保留，代码可能来自旧 clone。
+- `git pull` 输出 `Already up to date` 只说明当前本地分支相对远端没有新提交，不说明当前 notebook 是否拿到了我们期望的修复。
+- 训练 notebook 失败时，必须先确认 Drive 中的工程代码版本，再继续排查模型或依赖问题。
+
+输入：
+
+- GitHub 仓库：`https://github.com/cluster1900/lora-asr.git`
+- 分支：`main`
+- Drive 项目目录：`/content/drive/MyDrive/qwen3-asr`
+
+输出：
+
+- Drive 中的项目目录。
+- 当前 `HEAD` 短 hash。
+- 最新一条 commit message。
+- 关键文件存在性和关键字符串检查结果。
+
+测试标准：
+
+- 空 Drive 项目目录时，可以 clone 到 `/content/drive/MyDrive/qwen3-asr`。
+- 已存在 git 仓库时，可以 fast-forward 更新。
+- notebook 必须打印 `git rev-parse --short HEAD` 和 `git log -1 --oneline`。
+- notebook 必须检查 `resolve_training_model`、`target_root_prefix`、`gradient_checkpointing: false` 等关键修复标记。
+
+验收标准：
+
+- 执行完成后显示“版本验收通过”。
+- 若 Drive 中代码不是 git 仓库，必须明确报错并提示用户先确认目录处理方式。
+- 默认不得丢弃用户在 Drive 仓库里的本地修改；只有手动设置 `FORCE_RESET=True` 才允许强制对齐远端。
+- 旧命名 notebook 必须与标准 notebook 保持同等检查逻辑，避免用户在 Colab 打开旧文件后继续使用旧代码。
 
 ## Notebook 01: Baseline
 
@@ -229,6 +276,7 @@ THE TRANSCRIPT TEXT
 ## 测试标准
 
 - 每个 notebook 能从空 Colab runtime 按顺序执行关键单元。
+- `00_clone_github_colab.ipynb` 必须能确认本地代码版本和关键修复标记。
 - notebook 使用 Google Drive 根目录变量，不写死个人本地路径。
 - baseline notebook 至少能对 1 条 clean 和 1 条 degraded 音频推理。
 - 训练 notebook 必须先完成 5-20 step smoke test。
@@ -237,6 +285,7 @@ THE TRANSCRIPT TEXT
 
 ## 验收标准
 
+- `00_clone_github_colab.ipynb` 完成 clone/update，并打印当前 commit 与版本验收结果。
 - `01_baseline_colab.ipynb` 产出 baseline predictions 和 metrics。
 - `02_make_dataset_colab.ipynb` 产出 train/val/test JSONL。
 - `03_train_lora_colab.ipynb` 产出可加载 LoRA adapter。
