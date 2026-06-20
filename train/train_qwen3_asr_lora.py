@@ -128,6 +128,37 @@ def select_rows(rows: list[dict[str, Any]], include_scenarios: set[str], limit: 
     return selected
 
 
+def validate_audio_paths(
+    rows: list[dict[str, Any]],
+    manifest_path: Path,
+    audio_root: str | None,
+    max_examples: int = 10,
+) -> int:
+    """在加载模型前验证已选样本的音频路径。"""
+    missing: list[tuple[int, str, Path]] = []
+    for index, row in enumerate(rows, start=1):
+        audio = row.get("audio") or row.get("audio_path")
+        if not audio:
+            raise ValueError(f"row {index} missing audio/audio_path field")
+        resolved = resolve_audio_path(str(audio), manifest_path, audio_root)
+        if not resolved.exists():
+            missing.append((index, str(audio), resolved))
+
+    if missing:
+        examples = "\n".join(
+            f"- row={index} audio={audio} resolved={resolved}"
+            for index, audio, resolved in missing[:max_examples]
+        )
+        raise FileNotFoundError(
+            "Missing audio files for selected training rows: "
+            f"{len(missing)}/{len(rows)}.\n"
+            f"Examples:\n{examples}\n"
+            "Hint: sync or upload data/mvp_eval/audio/ into the Colab project directory, "
+            "or point --manifest/--audio-root to a manifest whose audio files exist."
+        )
+    return len(rows)
+
+
 def seed_everything(seed: int) -> None:
     """固定 Python、NumPy 和 torch 随机种子。"""
     random.seed(seed)
@@ -495,6 +526,8 @@ def main() -> None:
         raise ValueError("No training rows selected.")
 
     print(f"[data] manifest={manifest_path} selected_rows={len(selected_rows)}")
+    checked_audio = validate_audio_paths(selected_rows, manifest_path, args.audio_root)
+    print(f"[data] verified_audio_paths={checked_audio}")
     print(f"[load] model={args.model_id} quantization={args.quantization} dtype={args.dtype}")
 
     wrapper = load_qwen3_asr_wrapper(args, config)

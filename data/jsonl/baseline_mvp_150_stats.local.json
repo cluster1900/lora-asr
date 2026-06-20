@@ -1,0 +1,54 @@
+{
+  "total_rows": 150,
+  "items_per_scenario": 30,
+  "scenario_counts": {
+    "clean": 30,
+    "dropout": 30,
+    "far_field": 30,
+    "noise": 30,
+    "reverb": 30
+  },
+  "sample_rate": 16000,
+  "voice": "Alex",
+  "seed": 42,
+  "profile": "hard",
+  "text_length_design": "first half short, second half long",
+  "text_length_bucket_counts_per_scenario": {
+    "long": 15,
+    "short": 15
+  },
+  "avg_reference_word_count": 15.9333,
+  "min_reference_word_count": 6,
+  "max_reference_word_count": 27,
+  "manifest": "data/jsonl/baseline_mvp_150.local.jsonl",
+  "audio_dir": "data/mvp_eval/audio",
+  "avg_clean_duration_seconds": 5.4485,
+  "min_clean_duration_seconds": 1.7651,
+  "max_clean_duration_seconds": 10.4262,
+  "degradation_stats": {
+    "dropout": {
+      "avg_snr_db": 1.6031,
+      "avg_rms_ratio": 0.5411,
+      "avg_active_near_silence_ratio": 0.6314,
+      "max_clipping_ratio": 0.0
+    },
+    "far_field": {
+      "avg_snr_db": 0.3274,
+      "avg_rms_ratio": 0.3103,
+      "avg_active_near_silence_ratio": 0.0443,
+      "max_clipping_ratio": 0.0
+    },
+    "noise": {
+      "avg_snr_db": -2.3185,
+      "avg_rms_ratio": 1.4775,
+      "avg_active_near_silence_ratio": 0.0137,
+      "max_clipping_ratio": 0.000442
+    },
+    "reverb": {
+      "avg_snr_db": -0.5244,
+      "avg_rms_ratio": 1.0823,
+      "avg_active_near_silence_ratio": 0.0169,
+      "max_clipping_ratio": 0.000139
+    }
+  }
+}

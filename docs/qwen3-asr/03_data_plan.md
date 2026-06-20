@@ -187,6 +187,7 @@ MVP 建议：
 
 - JSONL 每行都是合法 JSON。
 - 每条样本的 `audio` 路径存在。
+- 对于 Colab 训练，manifest 中的音频路径必须在 Google Drive 项目目录中真实存在；`outputs/baseline_mvp_150/baseline_mvp_150.colab.jsonl` 只保存路径和标签，不包含 wav 音频本体。
 - 训练样本包含 `text`，评测样本包含 `answer`。
 - 每条样本包含 `language`、`scenario`、`source`、`is_degraded`。
 - train/val/test 不存在同一原始 utterance 泄漏。

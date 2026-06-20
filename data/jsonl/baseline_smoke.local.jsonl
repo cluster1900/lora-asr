@@ -1,0 +1,2 @@
+{"audio": "data/local_smoke/audio/clean_0001.wav", "answer": "Please call me when the meeting starts.", "language": "en", "scenario": "clean", "source": "macos_say", "is_degraded": false}
+{"audio": "data/local_smoke/audio/noise_0001.wav", "answer": "Please call me when the meeting starts.", "language": "en", "scenario": "noise", "source": "macos_say_plus_noise", "is_degraded": true}

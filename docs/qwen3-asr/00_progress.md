@@ -201,3 +201,11 @@ ImportError: Found an incompatible version of torchao. Found version 0.10.0, but
 ```
 
 根因是 Colab runtime 预装旧版 `torchao`，PEFT 在 `get_peft_model()` 注入 LoRA 时会探测该包并因版本过旧中断。当前 Qwen3-ASR smoke training 不依赖 torchao，因此修复策略是在 notebook 安装依赖后默认卸载 `torchao`，并在训练脚本启动阶段加入环境预检，提前给出明确处理建议。
+
+再次执行后，训练已经通过模型加载和 LoRA 注入，新的失败点是：
+
+```text
+FileNotFoundError: /content/drive/MyDrive/qwen3-asr/data/mvp_eval/audio/clean/clean_0001.wav
+```
+
+根因是 `outputs/baseline_mvp_150/baseline_mvp_150.colab.jsonl` 已提交到仓库，但 `data/mvp_eval/audio/` 是生成音频目录，被 `.gitignore` 排除，不会随 GitHub 拉取自动出现在 Google Drive。当前修复策略是在 notebook 和训练脚本中提前验证所选训练样本的音频路径，缺失时先报清楚缺失样例，再提示同步音频目录。
