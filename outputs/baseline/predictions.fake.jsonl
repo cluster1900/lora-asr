@@ -1,0 +1,2 @@
+{"audio": "data/local_smoke/audio/clean_0001.wav", "answer": "Please call me when the meeting starts.", "prediction": "Please call me when the meeting starts.", "language": "en", "scenario": "clean"}
+{"audio": "data/local_smoke/audio/noise_0001.wav", "answer": "Please call me when the meeting starts.", "prediction": "Please call me when meeting starts", "language": "en", "scenario": "noise"}

@@ -15,21 +15,6 @@ conda/
 logs/
 *.log
 runs/
-outputs/*
-!outputs/baseline_mvp_150/
-!outputs/baseline_mvp_150/*.json
-!outputs/baseline_mvp_150/*.jsonl
-!outputs/baseline_mvp_150/*.csv
-!outputs/baseline_mvp_150/error_analysis/
-!outputs/baseline_mvp_150/error_analysis/*.json
-!outputs/baseline_mvp_150/error_analysis/*.jsonl
-!outputs/baseline_mvp_150/error_analysis/*.csv
-!outputs/lora_probe/
-!outputs/lora_probe/README.md
-!outputs/lora_probe/**/
-!outputs/lora_probe/**/*.json
-!outputs/lora_probe/**/*.csv
-!outputs/lora_probe/**/*.md
 wandb/
 tensorboard/
 

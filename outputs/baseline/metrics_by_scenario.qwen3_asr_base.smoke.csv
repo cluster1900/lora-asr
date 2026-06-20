@@ -1,0 +1,3 @@
+group,samples,num_edits,ref_len,error_rate,empty_output_rate
+clean,1,0,7,0.0,0.0
+noise,1,0,7,0.0,0.0
