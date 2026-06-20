@@ -34,6 +34,7 @@ Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google
 
 - `scripts/create_smoke_audio.py`：本地生成 clean/noise smoke 音频和本地 manifest。
 - `scripts/create_mvp_eval_audio.py`：本地生成 150 条 MVP 评测音频，覆盖 clean、noise、reverb、far_field、dropout。
+- `data/mvp_eval/audio/`：已提交 150 条 MVP smoke 音频，供 Colab 直接拉取后训练前检查和 smoke training 使用。
 - `inference/qwen3_asr_base_infer.py`：读取 JSONL manifest，调用 Qwen3-ASR baseline 生成 ASR prediction JSONL。
 - `evaluation/eval_wer.py`：计算 WER/CER、overall 指标和 scenario-level 指标。
 - `evaluation/analyze_errors.py`：分析 scored prediction JSONL，输出 worst cases、场景聚合和错误标签。
@@ -110,7 +111,7 @@ python3 scripts/create_mvp_eval_audio.py --profile hard --force
 - `data/jsonl/baseline_mvp_150.local.jsonl`
 - `data/jsonl/baseline_mvp_150_stats.local.json`
 
-把这些文件同步到 Google Drive 项目目录后，在 Colab 中执行：
+当前仓库已经提交一份 MVP 150 音频，Colab 中 `git pull` 后应能直接得到 `data/mvp_eval/audio/`。如需重新生成本地版本，再把新文件同步到 Google Drive 项目目录后执行：
 
 ```text
 notebooks/02_mvp_150_eval_colab.ipynb

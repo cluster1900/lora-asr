@@ -26,6 +26,7 @@
 - 已新增 `inference/qwen3_asr_base_infer.py` 和 `evaluation/eval_wer.py`，用于 Qwen3-ASR baseline 推理与 WER/CER 评测。
 - 已新增 `notebooks/01_baseline_colab.ipynb`，用于在 Colab/Google Drive 中跑通 baseline smoke 推理与评测。
 - 已新增 `scripts/create_mvp_eval_audio.py` 和 `notebooks/02_mvp_150_eval_colab.ipynb`，用于生成并评测 clean/noise/reverb/far_field/dropout 各 30 条的 baseline MVP 集。
+- 已提交 `data/mvp_eval/audio/` 下 150 条 MVP smoke 音频，方便 Colab 直接 `git pull` 后运行 baseline、评测和 LoRA smoke training。
 - 已新增 `notebooks/00_clone_github_colab.ipynb`，用于在 Colab/Google Drive 中 clone 或更新 GitHub 工程，并确认当前 commit 与关键修复标记。
 
 ## 进行中
