@@ -38,7 +38,6 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 名称：
 
 - `notebooks/00_clone_github_colab.ipynb`
-- 兼容旧命名：`notebooks/00clonegithub.ipynb`
 
 目的：
 
@@ -78,7 +77,6 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 - 执行完成后显示“版本验收通过”。
 - 若 Drive 中代码不是 git 仓库，必须明确报错并提示用户先确认目录处理方式。
 - 默认不得丢弃用户在 Drive 仓库里的本地修改；只有手动设置 `FORCE_RESET=True` 才允许强制对齐远端。
-- 旧命名 notebook 必须与标准 notebook 保持同等检查逻辑，避免用户在 Colab 打开旧文件后继续使用旧代码。
 
 ## Notebook 01: Baseline
 
