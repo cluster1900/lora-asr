@@ -218,3 +218,14 @@ RuntimeError: Input type (c10::Half) and bias type (float) should be the same
 ```
 
 根因是训练脚本把 `input_features` 按模型首个参数转成 `float16`，但 Qwen3-ASR 的 `audio_tower.conv2d1` 在当前 4bit 加载路径中仍保留 `float32` bias。修复策略是让音频特征跟随 `audio_tower.conv2d1` 的 dtype/device，而不是跟随模型任意首个参数。
+
+完成 `05C Transformers + PEFT smoke training` 的 Colab 20 step 验收。训练产物已同步到本地 `checkpoints/qwen3-asr-1.7b-lora/`，但 checkpoint 目录继续按 `.gitignore` 保持不提交：
+
+- `summary.json` 中 `status=trained`。
+- `loss_log.jsonl` 共 20 行，loss 全部为有限值，`loss_min=5.84125075420161e-07`，`loss_max=4.830900192260742`，`loss_last=3.1748266220092773`。
+- `target_modules.json` 中 `count=99`，`target_root_prefix=model.thinker`。
+- 实际可训练参数 `trainable_params=1,683,456`，总参数 `total_params=1,178,592,896`。
+- 20 step 覆盖 clean、noise、reverb、far_field、dropout 各 4 条。
+- `adapter/adapter_model.safetensors`、`adapter/adapter_config.json` 和 `processor/` 均已生成。
+
+注意：`summary.json` 中的 `estimated_lora_params` 在 4bit `Linear4bit` packed weight shape 下会被放大，不作为验收指标；本阶段以 PEFT 实际统计的 `trainable_parameter_summary.trainable_params` 为准。
