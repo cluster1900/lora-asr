@@ -118,14 +118,18 @@
 
 - 新增 `scripts/create_lora_mvp_dataset.py` 生成 train/val。
 - 新增 `configs/train/qwen3_asr_lora_mvp_train.yaml` 作为正式 MVP 训练配置。
-- 评测仍使用 `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json` 作为 base 对照。
+- 评测使用固定 MVP 150 held-out test；当前 LoRA 对比应优先使用
+  `outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
+  作为 4bit base 对照。历史 `outputs/baseline_mvp_150/` 只作为旧环境参考。
 
 ### D011: v1 LoRA 不进入 router，先做 v2 ablation
 
 决策：
 
-- v1 LoRA always-on 没有通过 MVP 验收，不进入 router。
+- 按历史 base 口径，v1 LoRA always-on 没有通过 MVP 验收，不进入 router。
 - 下一步新增 v2 ablation：attention-only、noise/reverb-only、更低学习率、更少 step。
+- 该判断已被 D013 修正：历史 base 口径与当前 4bit LoRA 评测口径不一致，v1
+  需要以 base recheck 重算。
 
 原因：
 
@@ -143,8 +147,10 @@
 
 决策：
 
-- v2 LoRA attention-only 短跑不通过 MVP 验收，不进入 router。
+- 按历史 base 口径，v2 LoRA attention-only 短跑不通过 MVP 验收，不进入 router。
 - 下一轮继续在 LoRA always-on 层面做快速 ablation。
+- 该判断已被 D013 修正：以 4bit base recheck 为对照时，v2 在 noise/reverb
+  有弱收益，但仍未达到 MVP 改善门槛。
 
 原因：
 
@@ -158,6 +164,34 @@
 - router 继续暂停，因为 LoRA 对 degraded 目标场景尚无明确收益。
 - 后续优先验证更早停止点、更小学习率、后层 audio attention target、训练目标格式和数据难度。
 - v2 输出保留为 ablation 对照，不覆盖 v1 或 base。
+
+### D013: 当前 LoRA 对比改用 4bit base recheck 口径
+
+决策：
+
+- `outputs/base_recheck_mvp_150/` 中的 4bit base recheck 作为当前 LoRA v1/v2
+  的主对照。
+- 历史 `outputs/baseline_mvp_150/` base 指标保留为旧环境参考，不再作为当前
+  LoRA 是否改善的主判断依据。
+- LoRA v1/v2 仍不进入 router，因为收益幅度不足且 dropout/far_field 未改善。
+
+原因：
+
+- LoRA v1/v2 推理使用 4bit base 后挂载 adapter；历史 base 来自早期 baseline
+  notebook，输出中没有记录量化方式。
+- 4bit base recheck 使用同一 MVP 150 manifest、同一音频、`dtype=float16`、
+  `device_map=cuda:0`、`quantization=4bit`。
+- base recheck overall WER 为 0.550313，明显差于历史 base 0.483925。
+- 差异主要集中在 noise、reverb 和 far_field，说明历史 base 与当前 LoRA
+  评测口径不一致。
+- 以 base recheck 为准，LoRA v1 对 noise+reverb 有约 5.45% 相对改善，LoRA
+  v2 有约 2.52% 相对改善，均未达到第一版 10% 改善门槛。
+
+影响：
+
+- 后续实验表格必须同时标注 `historical_base` 和 `base_recheck`，避免混淆。
+- MVP 通过标准改为相对 4bit base recheck 计算。
+- 当前结论从“LoRA 完全失败”修正为“目标场景有弱收益，但不足以进入 router”。
 
 ## 风险
 
@@ -205,6 +239,8 @@
 
 - v1 已出现该现象：clean WER 小幅改善，但 noise/reverb/degraded-only 变差。
 - v2 继续验证了该风险：clean 未退化，dropout/far_field 略稳，但目标 noise/reverb 仍相对 base 变差。
+- base recheck 后，该风险需要重新表述：相对 4bit base，v1/v2 对 noise/reverb
+  有弱收益，但观察场景 dropout/far_field 没有改善，仍不能只看 target 场景收益。
 - 如果只看 loss 或 clean 指标，可能误判训练成功。
 
 缓解：

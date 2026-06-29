@@ -98,15 +98,23 @@ MVP 至少包含：
 
 当前 Qwen3-ASR base 对照：
 
-- clean WER：0.010438。
-- noise WER：0.336117。
-- reverb WER：0.415449。
-- dropout WER：0.759916。
-- far_field WER：0.897704。
-- degraded-only WER：约 0.602296。
+- 当前 LoRA 对比应优先使用 `outputs/base_recheck_mvp_150/` 中的 4bit base recheck。
+- clean WER：0.008351。
+- noise WER：0.450939。
+- reverb WER：0.544885。
+- dropout WER：0.762004。
+- far_field WER：0.985386。
+- degraded-only WER：约 0.685804。
 - empty output rate：所有场景均为 0.0。
 
-LoRA MVP 的第一版成功门槛应以 degraded-only WER 或单场景 WER 相对 base 下降为准。由于 base 没有空输出，短期内更应关注错误替换、漏词、插入、重复和幻觉式补全是否减少。
+历史 `outputs/baseline_mvp_150/` base 指标来自早期 baseline notebook，overall WER
+为 0.483925，noise/reverb/far_field 明显强于 4bit base recheck。由于 LoRA v1/v2
+评测使用 4bit base 后挂载 adapter，该历史 base 只作为旧环境参考，不再作为当前
+LoRA 是否改善的主判断口径。
+
+LoRA MVP 的第一版成功门槛应以 degraded-only WER 或单场景 WER 相对 4bit base
+recheck 下降为准。由于 base 没有空输出，短期内更应关注错误替换、漏词、插入、
+重复和幻觉式补全是否减少。
 
 ## Base Recheck 测试
 
@@ -160,6 +168,15 @@ python scripts/run_qwen3_asr_base_recheck.py \
 - metrics JSON 包含 overall 和 clean/noise/reverb/dropout/far_field。
 - `comparison.json` 至少比较 historical base 与 recheck base；如果 LoRA v1/v2 指标存在，也一起比较。
 - 新 base recheck 结果要作为后续 LoRA 对比的新候选 base，而不是直接覆盖旧 baseline。
+
+当前执行结果：
+
+- base recheck 已完成，150 条推理错误 0，empty output 0。
+- base recheck overall WER 为 0.550313，历史 base overall WER 为 0.483925。
+- 差异主要来自 noise、reverb 和 far_field，说明历史 base 与当前 LoRA 4bit
+  评测口径不一致。
+- 以 base recheck 为准，LoRA v1 对 noise+reverb 有约 5.45% 相对改善，LoRA
+  v2 有约 2.52% 相对改善，均未达到第一版 10% 改善门槛。
 
 ## Scale-Up 成功标准
 
@@ -327,15 +344,19 @@ Colab 运行测试：
 ### 验收测试
 
 - 在固定 MVP 150 held-out test 上跑 LoRA always-on。
-- 与 `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json` 对比。
+- 与 `outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
+  对比；历史 `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json`
+  只作为旧环境参考。
 - 报告 clean、noise、reverb、dropout、far_field 五个场景。
-- noise 或 reverb 至少一个场景 WER 相对 base 改善。
+- noise 或 reverb 至少一个场景 WER 相对 4bit base recheck 改善，第一版
+  期望接近或达到 10% 相对 WER 下降。
 - clean regression 量化记录；第一版警戒线为相对退化不超过 5%。
 - dropout/far_field 即使不改善也要作为观察结果记录。
 
 ### v1 LoRA MVP 评测结论
 
-v1 已完成 held-out MVP 150 评测，但不满足验收标准：
+v1 已完成 held-out MVP 150 评测。按历史 base 口径，v1 曾被判断为不满足
+验收标准：
 
 - overall WER：base 0.483925，LoRA v1 0.543215，相对变差 12.25%。
 - degraded-only WER：base 0.602296，LoRA v1 0.676931，相对变差 12.39%。
@@ -343,10 +364,14 @@ v1 已完成 held-out MVP 150 评测，但不满足验收标准：
 - noise WER：base 0.336117，LoRA v1 0.419624，相对变差 24.84%。
 - reverb WER：base 0.415449，LoRA v1 0.521921，相对变差 25.63%。
 
-因此当前阶段不能进入 router。下一轮测试对象是 v2 ablation：
+base recheck 完成后，该结论需要修正：历史 base 与当前 4bit LoRA 评测口径
+不一致。以 4bit base recheck 为对照，LoRA v1 对 noise+reverb 有约 5.45%
+相对改善，LoRA v2 有约 2.52% 相对改善；二者仍未达到 10% 改善门槛，也没有
+改善 dropout/far_field，因此当前阶段仍不能进入 router。
 
-- target count 应从 99 降到 96，只训练 audio tower attention。
-- 训练样本只选择 noise/reverb。
-- 训练采样必须按 `scenario + text_length_bucket` 均衡轮转，避免短步数实验只覆盖短句。
-- 使用固定 MVP 150 held-out test 继续对比 base、v1 和 v2。
-- 通过标准仍然是 noise 或 reverb 至少一个场景相对 base 改善。
+下一轮测试对象：
+
+- 继续使用固定 MVP 150 held-out test。
+- 继续输出 historical base、base recheck、v1 和当前版本对比。
+- 优先尝试 v1 风格 target、后层 audio attention、训练目标格式和数据难度。
+- 通过标准仍然是 noise 或 reverb 至少一个场景相对 4bit base recheck 有明确改善。

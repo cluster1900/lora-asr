@@ -303,13 +303,16 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 
 - `04_train_lora_mvp_colab.ipynb` 只证明训练完成并保存 adapter。
 - LoRA 是否有效必须看 held-out test WER/CER，而不能只看 loss。
-- 第一版先评估 always-on LoRA；只有确认 LoRA 有收益且 clean regression 可接受后，才进入 router。
+- 第一版先评估 always-on LoRA；只有确认 LoRA 相对当前公平 base 有足够收益且
+  clean regression 可接受后，才进入 router。当前公平 base 口径为 4bit
+  base recheck。
 
 输入：
 
 - `data/jsonl/baseline_mvp_150.local.jsonl`
 - `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`
-- `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json`
+- `outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
+- `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json`，仅作为历史 base 参考
 
 指标：
 
@@ -365,21 +368,28 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 
 - noise 或 reverb 至少一个场景相对 base 改善。
 - clean regression 被量化。
-- 如果 v2 仍未赢 base，继续做 target/data/lr ablation，不进入 router。
+- 如果 v2 仍未达到相对 4bit base recheck 的明确改善门槛，继续做 target/data/lr
+  ablation，不进入 router。
 
 当前执行结果：
 
 - v2 已完成 150 step 训练，target count 为 96，adapter 和 processor 均已保存。
 - loss log 覆盖 noise/reverb 和 short/long：noise long 38、noise short 38、reverb long 37、reverb short 37。
 - held-out MVP 150 推理和评测已完成，empty output rate 为 0。
-- v2 相比 v1 在 dropout 和 far_field 上略有改善，clean 与 v1 持平，但 noise/reverb 仍比 v1 和 base 更差。
-- 因此 v2 不通过 LoRA MVP 验收，继续保留 router 暂停状态。
+- v2 相比 v1 在 dropout 和 far_field 上略有改善，clean 与 v1 持平；按历史
+  base 口径看 noise/reverb 仍更差，但 base recheck 证明历史 base 与当前
+  4bit LoRA 评测口径不一致。
+- 按 4bit base recheck 口径，v2 对 noise+reverb 有约 2.52% 相对改善，仍未
+  达到第一版 10% 改善门槛，因此继续保留 router 暂停状态。
 
 v2 结论对下一轮训练的影响：
 
-- 单纯减少 step、降低学习率、移除 clean 样本和移除 speech projection 不能解决目标场景退化。
-- 后续快速迭代应继续保留固定 held-out MVP 150，并优先测试更小学习率/更早停止点、audio tower 后层 attention-only、训练目标格式和数据难度，而不是直接扩大训练规模。
-- 每一轮仍必须输出 base/v1/当前版本的 scenario-level 对比，避免只看 loss 判断训练成功。
+- 单纯减少 step、降低学习率、移除 clean 样本和移除 speech projection 让 v2
+  比 v1 更保守，但并没有带来更强 target 场景收益。
+- 后续快速迭代应继续保留固定 held-out MVP 150，并优先测试 v1 风格 target、
+  更早停止点、audio tower 后层 attention-only、训练目标格式和数据难度，而不是直接扩大训练规模。
+- 每一轮仍必须输出 historical base、base recheck、v1 和当前版本的 scenario-level
+  对比，避免只看 loss 或旧 base 判断训练成功。
 
 ## Base Recheck: MVP 150 复核基线
 
@@ -425,6 +435,13 @@ python scripts/run_qwen3_asr_base_recheck.py \
 - 新 base recheck 完整跑完 MVP 150。
 - 与历史 base 的差异必须记录到 `00_progress.md`，再决定是否以 recheck base
   作为后续 LoRA 对比口径。
+
+当前执行结果：
+
+- base recheck 已完成，overall WER 为 0.550313，历史 base overall WER 为 0.483925。
+- noise/reverb/far_field 上 base recheck 明显差于历史 base，说明旧 base 不再适合作为
+  当前 4bit LoRA 的公平对照。
+- 后续 LoRA 对比以 base recheck 为主，historical base 只作为旧环境参考。
 
 ## Notebook 07: Router
 

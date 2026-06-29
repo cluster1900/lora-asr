@@ -4,9 +4,9 @@
 
 ## 当前状态
 
-当前阶段：`05E LoRA MVP v2 ablation` 第一轮短跑已经完成评测，结论仍是不通过。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练、v1 held-out MVP 150 评测、v2 attention-only 短跑和 v2 held-out MVP 150 评测均已完成；v1/v2 adapter 都没有改善目标 noise/reverb 场景。
+当前阶段：`Base recheck` 已完成，历史 base 口径被确认与当前 LoRA 评测口径不一致。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练、v1 held-out MVP 150 评测、v2 attention-only 短跑、v2 held-out MVP 150 评测和 4bit base recheck 均已完成。
 
-现在的执行重点是：继续暂停 router，先复核 base。v2 已经排除一部分假设：仅移除 speech projection、移除 clean 训练样本、降低学习率、减少步数，并用 `scenario + text_length_bucket` 平衡短长文本，仍不能让 noise/reverb 优于 base。由于 LoRA v1/v2 使用 4bit 加载 base 后挂载 adapter，而历史 base 指标来自早期 baseline notebook，下一步先用同一 manifest、同一音频和同一 4bit 加载方式重跑 base recheck。
+现在的执行重点是：修正 LoRA 对比口径。由于 LoRA v1/v2 使用 4bit 加载 base 后挂载 adapter，而历史 base 指标来自早期 baseline notebook，4bit base recheck 更适合作为当前 LoRA 评测对照。按 base recheck 口径，LoRA v1/v2 在 noise/reverb 上有小幅改善，但幅度仍弱，不足以进入 router 或宣称 MVP 完成。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -35,26 +35,27 @@
 - 已完成 v1 LoRA always-on held-out 评测：`outputs/lora_mvp_eval/` 包含 prediction、scored、metrics、scenario CSV 和错误分析输出。
 - 已完成 v2 LoRA attention-only ablation 训练与 held-out 评测：`checkpoints/qwen3-asr-1.7b-lora-mvp-v2-attn-noise-reverb/` 和 `outputs/lora_mvp_v2_eval/` 已同步，loss 有限、adapter 可保存、推理 empty output 为 0。
 - 已新增 base recheck 入口：`scripts/run_qwen3_asr_base_recheck.py` 和 `configs/baseline/qwen3_asr_base_recheck_mvp_150.yaml`，用于不覆盖历史 baseline 的前提下重跑 base 并生成对比表。
+- 已完成 base recheck 输出同步：`outputs/base_recheck_mvp_150/` 包含 prediction、scored、metrics、scenario CSV、error analysis 和 base/LoRA 对比表。
 
 ## 进行中
 
-- `05E LoRA MVP v2 ablation`：
-  - 不进入 router。
-  - 固定同一 held-out MVP 150 作为 test。
-  - 第一轮 v2 已完成：attention-only target、noise/reverb-only 训练样本、更低学习率、更少 step、`scenario + text_length_bucket` 均衡轮转。
-  - v2 结果比 v1 在 dropout/far_field 上略稳，但 noise/reverb 仍差于 v1 和 base，因此仍不满足 LoRA MVP 验收标准。
 - `Base recheck`：
   - 使用同一 MVP 150 manifest 和音频。
   - 默认用 `quantization=4bit` 复核 base，与 LoRA v1/v2 评测加载方式对齐。
   - 输出到 `outputs/base_recheck_mvp_150/`，不覆盖历史 `outputs/baseline_mvp_150/`。
-  - base recheck 完成后，再决定继续 LoRA target/data/lr ablation 还是先修正 base 对比口径。
+  - 已完成。新 base recheck overall WER 为 0.550313，明显差于历史 base 0.483925。
+  - 后续 LoRA 对比应优先使用 base recheck 口径，历史 base 仅作为旧环境参考。
+- `05E LoRA MVP v2 ablation`：
+  - 不进入 router。
+  - 固定同一 held-out MVP 150 作为 test。
+  - v1/v2 在 base recheck 口径下对 noise/reverb 有小幅收益，但幅度不足 10%，仍需要继续快速迭代。
 
 ## 下一批里程碑
 
-1. 在 Colab/GPU 上运行 `scripts/run_qwen3_asr_base_recheck.py --config configs/baseline/qwen3_asr_base_recheck_mvp_150.yaml`。
-2. 比较 historical base、base recheck、LoRA v1、LoRA v2 的 scenario-level WER，判断旧 base 是否可信。
-3. 如果 base recheck 与历史 base 差异显著，后续 LoRA 对比改用 base recheck 作为口径，并把历史结论重算。
-4. 如果 base recheck 与历史 base 基本一致，再继续 LoRA 快速 ablation：更早停止点、更小学习率、后层 audio attention target、训练目标格式和数据难度。
+1. 以 base recheck 作为当前公平对照，重写 v1/v2 的阶段结论和通过标准。
+2. 暂不进入 router，因为 noise/reverb 只有小幅改善，dropout/far_field 仍未改善。
+3. 继续 LoRA 快速 ablation：优先 v1 风格 target 或后层 audio attention，保留 4bit base recheck 口径。
+4. 下一轮目标是让 noise 或 reverb 相对 base recheck 达到更明确改善，至少接近 10% 相对 WER 下降。
 
 ## 待确认问题
 
@@ -313,5 +314,36 @@ base vs LoRA v1 vs LoRA v2 结果：
 
 逐样本对齐显示，v2 相比 v1：150 条中 12 条改善、14 条变差、124 条持平。
 改善主要体现在 dropout/far_field 的少量样本和 clean 稳定性；noise/reverb 作为
-训练目标场景没有改善，反而分别比 v1 更差 4.48% 和 2.00%。因此 v2 仍不满足
-LoRA MVP 验收标准，当前不进入 router。
+训练目标场景没有改善，反而分别比 v1 更差 4.48% 和 2.00%。该结论基于历史
+base，对当前 4bit LoRA 评测并不公平，后续以 base recheck 口径重算。
+
+完成 4bit base recheck。输出位于 `outputs/base_recheck_mvp_150/`，推理 150 条，
+错误 0 条，empty output 0 条。新 base recheck 与 LoRA v1/v2 使用相同的
+`quantization=4bit`、`dtype=float16`、`device_map=cuda:0` 口径，更适合作为
+当前 LoRA 对照。
+
+historical base vs base recheck：
+
+| scenario | historical base WER | base recheck WER | delta |
+| --- | ---: | ---: | ---: |
+| overall | 0.483925 | 0.550313 | +0.066388 |
+| clean | 0.010438 | 0.008351 | -0.002087 |
+| noise | 0.336117 | 0.450939 | +0.114822 |
+| reverb | 0.415449 | 0.544885 | +0.129436 |
+| dropout | 0.759916 | 0.762004 | +0.002088 |
+| far_field | 0.897704 | 0.985386 | +0.087682 |
+
+按 base recheck 口径重算 LoRA v1/v2：
+
+| group | base recheck | LoRA v1 | LoRA v2 | v1 delta | v2 delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| overall | 0.550313 | 0.543215 | 0.545720 | -0.007098 | -0.004593 |
+| degraded-only | 0.685804 | 0.676931 | 0.680063 | -0.008873 | -0.005741 |
+| noise+reverb | 0.497912 | 0.470772 | 0.485386 | -0.027140 | -0.012526 |
+| dropout+far_field | 0.873695 | 0.883090 | 0.874739 | +0.009395 | +0.001044 |
+| clean | 0.008351 | 0.008351 | 0.008351 | +0.000000 | +0.000000 |
+
+结论：历史 base 指标不能继续作为 LoRA v1/v2 的公平对照。以 4bit base recheck
+为准，LoRA v1 对 noise+reverb 有约 5.45% 相对改善，v2 有约 2.52% 相对改善；
+clean 无退化，dropout/far_field 未改善。因此状态从“LoRA 完全失败”修正为
+“目标场景有弱收益，但未达到 MVP 10% 改善门槛，仍不进入 router”。
