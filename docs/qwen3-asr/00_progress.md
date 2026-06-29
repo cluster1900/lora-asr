@@ -6,7 +6,7 @@
 
 当前阶段：`05E LoRA MVP v2 ablation` 第一轮短跑已经完成评测，结论仍是不通过。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练、v1 held-out MVP 150 评测、v2 attention-only 短跑和 v2 held-out MVP 150 评测均已完成；v1/v2 adapter 都没有改善目标 noise/reverb 场景。
 
-现在的执行重点是：继续暂停 router，在同一 held-out MVP 150 上做更快的问题定位。v2 已经排除一部分假设：仅移除 speech projection、移除 clean 训练样本、降低学习率、减少步数，并用 `scenario + text_length_bucket` 平衡短长文本，仍不能让 noise/reverb 优于 base。
+现在的执行重点是：继续暂停 router，先复核 base。v2 已经排除一部分假设：仅移除 speech projection、移除 clean 训练样本、降低学习率、减少步数，并用 `scenario + text_length_bucket` 平衡短长文本，仍不能让 noise/reverb 优于 base。由于 LoRA v1/v2 使用 4bit 加载 base 后挂载 adapter，而历史 base 指标来自早期 baseline notebook，下一步先用同一 manifest、同一音频和同一 4bit 加载方式重跑 base recheck。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -34,6 +34,7 @@
 - 已完成正式 LoRA MVP bootstrap 训练产物同步：`checkpoints/qwen3-asr-1.7b-lora-mvp/` 包含 adapter、processor、target_modules、training_config、loss_log 和 summary；`summary.json` 记录 `status=trained`、`steps=600`。
 - 已完成 v1 LoRA always-on held-out 评测：`outputs/lora_mvp_eval/` 包含 prediction、scored、metrics、scenario CSV 和错误分析输出。
 - 已完成 v2 LoRA attention-only ablation 训练与 held-out 评测：`checkpoints/qwen3-asr-1.7b-lora-mvp-v2-attn-noise-reverb/` 和 `outputs/lora_mvp_v2_eval/` 已同步，loss 有限、adapter 可保存、推理 empty output 为 0。
+- 已新增 base recheck 入口：`scripts/run_qwen3_asr_base_recheck.py` 和 `configs/baseline/qwen3_asr_base_recheck_mvp_150.yaml`，用于不覆盖历史 baseline 的前提下重跑 base 并生成对比表。
 
 ## 进行中
 
@@ -42,14 +43,18 @@
   - 固定同一 held-out MVP 150 作为 test。
   - 第一轮 v2 已完成：attention-only target、noise/reverb-only 训练样本、更低学习率、更少 step、`scenario + text_length_bucket` 均衡轮转。
   - v2 结果比 v1 在 dropout/far_field 上略稳，但 noise/reverb 仍差于 v1 和 base，因此仍不满足 LoRA MVP 验收标准。
-  - 下一轮重点从“单纯少训一点”转为验证训练目标、target 深度、数据难度和早停点。
+- `Base recheck`：
+  - 使用同一 MVP 150 manifest 和音频。
+  - 默认用 `quantization=4bit` 复核 base，与 LoRA v1/v2 评测加载方式对齐。
+  - 输出到 `outputs/base_recheck_mvp_150/`，不覆盖历史 `outputs/baseline_mvp_150/`。
+  - base recheck 完成后，再决定继续 LoRA target/data/lr ablation 还是先修正 base 对比口径。
 
 ## 下一批里程碑
 
-1. 对 v2 输出做逐样本错误对齐，确认哪些样本从 v1 改善、哪些样本继续恶化。
-2. 新增下一轮快速 ablation：保留短步数，但显式比较 50/100/150 step 或更小学习率，并保持 short/long 均衡。
-3. 增加 target 深度对照，例如只训练 audio tower 后半层 attention，避免全 24 层 attention 对 ASR 表征造成整体扰动。
-4. 继续固定同一 MVP 150 held-out test；只有当 LoRA always-on 至少在 noise 或 reverb 明确优于 base 后，再进入 router MVP。
+1. 在 Colab/GPU 上运行 `scripts/run_qwen3_asr_base_recheck.py --config configs/baseline/qwen3_asr_base_recheck_mvp_150.yaml`。
+2. 比较 historical base、base recheck、LoRA v1、LoRA v2 的 scenario-level WER，判断旧 base 是否可信。
+3. 如果 base recheck 与历史 base 差异显著，后续 LoRA 对比改用 base recheck 作为口径，并把历史结论重算。
+4. 如果 base recheck 与历史 base 基本一致，再继续 LoRA 快速 ablation：更早停止点、更小学习率、后层 audio attention target、训练目标格式和数据难度。
 
 ## 待确认问题
 

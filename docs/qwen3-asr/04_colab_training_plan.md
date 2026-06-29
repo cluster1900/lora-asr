@@ -381,6 +381,51 @@ v2 结论对下一轮训练的影响：
 - 后续快速迭代应继续保留固定 held-out MVP 150，并优先测试更小学习率/更早停止点、audio tower 后层 attention-only、训练目标格式和数据难度，而不是直接扩大训练规模。
 - 每一轮仍必须输出 base/v1/当前版本的 scenario-level 对比，避免只看 loss 判断训练成功。
 
+## Base Recheck: MVP 150 复核基线
+
+名称：
+
+- `scripts/run_qwen3_asr_base_recheck.py`
+
+目的：
+
+- 在继续 LoRA ablation 前，重新跑一次 Qwen3-ASR base。
+- 使用与 LoRA v1/v2 评测一致的 manifest、音频、dtype、device_map、max_new_tokens
+  和量化参数。
+- 验证历史 base 指标是否可信，避免把 base 环境差异误判为 LoRA 效果。
+
+推荐 Colab 命令：
+
+```bash
+python scripts/run_qwen3_asr_base_recheck.py \
+  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
+  --audio-root /content/drive/MyDrive/qwen3-asr \
+  --output-dir outputs/base_recheck_mvp_150 \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --quantization 4bit \
+  --max-inference-batch-size 1 \
+  --max-new-tokens 128 \
+  --language English \
+  --compare-metrics outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json \
+  --compare-metrics outputs/lora_mvp_eval/metrics.qwen3_asr_lora_mvp.mvp_150.json \
+  --compare-metrics outputs/lora_mvp_v2_eval/metrics.qwen3_asr_lora_mvp_v2.mvp_150.json
+```
+
+输出：
+
+- `outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
+- `outputs/base_recheck_mvp_150/error_analysis/analysis_summary.json`
+- `outputs/base_recheck_mvp_150/comparison.json`
+- `outputs/base_recheck_mvp_150/comparison_by_scenario.csv`
+
+验收标准：
+
+- 新 base recheck 完整跑完 MVP 150。
+- 与历史 base 的差异必须记录到 `00_progress.md`，再决定是否以 recheck base
+  作为后续 LoRA 对比口径。
+
 ## Notebook 07: Router
 
 名称：

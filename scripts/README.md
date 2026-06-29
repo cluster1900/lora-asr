@@ -12,6 +12,7 @@
 - `create_smoke_audio.py`：在本地生成 baseline smoke test 所需的 clean/noise 音频和 JSONL manifest。默认使用 macOS 自带 `say` 生成英文语音，再叠加噪声生成 degraded 样本。
 - `create_mvp_eval_audio.py`：在本地生成 baseline MVP 评测集，覆盖 clean、noise、reverb、far_field、dropout 各 30 条，总计 150 条。默认使用 macOS `say` 合成 clean 语音，再用标准库生成退化版本。
 - `create_lora_mvp_dataset.py`：生成正式 LoRA MVP 启动用 bootstrap train/val manifest。默认覆盖 clean、noise、reverb，不使用固定 MVP 150 held-out test 作为训练集。
+- `run_qwen3_asr_base_recheck.py`：一键复核 Qwen3-ASR base，在同一 MVP 150 manifest 上完成 base 推理、WER/CER、错误分析和 historical base/LoRA 对比。
 
 ## 本地生成物
 
@@ -58,3 +59,20 @@ python3 scripts/create_lora_mvp_dataset.py \
 ```
 
 该数据集用于启动第一版 LoRA MVP 训练闭环；正式评测仍使用固定 MVP 150 held-out test。
+
+Base recheck 默认输出：
+
+- `outputs/base_recheck_mvp_150/predictions.qwen3_asr_base_recheck.mvp_150.jsonl`
+- `outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
+- `outputs/base_recheck_mvp_150/error_analysis/`
+- `outputs/base_recheck_mvp_150/comparison.json`
+- `outputs/base_recheck_mvp_150/comparison_by_scenario.csv`
+
+复核命令：
+
+```bash
+python scripts/run_qwen3_asr_base_recheck.py \
+  --config configs/baseline/qwen3_asr_base_recheck_mvp_150.yaml
+```
+
+该脚本默认使用 4bit 加载 base，目的是和 LoRA v1/v2 的评测加载方式对齐；输出不会覆盖历史 `outputs/baseline_mvp_150/`。

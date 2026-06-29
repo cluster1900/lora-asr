@@ -1,0 +1,31 @@
+model:
+  id: Qwen/Qwen3-ASR-1.7B
+  dtype: float16
+  device_map: cuda:0
+  quantization: 4bit
+  max_inference_batch_size: 1
+
+input:
+  manifest: data/jsonl/baseline_mvp_150.local.jsonl
+  audio_root: /content/drive/MyDrive/qwen3-asr
+
+inference:
+  language: English
+  max_new_tokens: 128
+
+output:
+  dir: outputs/base_recheck_mvp_150
+  label: qwen3_asr_base_recheck
+  dataset_name: mvp_150
+
+analysis:
+  top_k: 30
+
+compare:
+  metrics:
+    - outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json
+    - outputs/lora_mvp_eval/metrics.qwen3_asr_lora_mvp.mvp_150.json
+    - outputs/lora_mvp_v2_eval/metrics.qwen3_asr_lora_mvp_v2.mvp_150.json
+
+runtime:
+  limit: 0

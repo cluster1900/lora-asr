@@ -84,12 +84,56 @@ def resolve_torch_dtype(dtype: str) -> Any:
     raise ValueError(f"Unsupported dtype: {dtype}")
 
 
+def build_model_kwargs(
+    dtype: str,
+    device_map: str,
+    max_inference_batch_size: int,
+    max_new_tokens: int,
+    quantization: str,
+) -> dict[str, Any]:
+    """生成 qwen-asr `from_pretrained` 参数。
+
+    base recheck 需要能和 LoRA 评测使用相同的 4bit/8bit 加载方式，否则
+    base-vs-LoRA 对比会混入量化差异。
+    """
+    import torch
+
+    torch_dtype = resolve_torch_dtype(dtype)
+    kwargs: dict[str, Any] = {
+        "device_map": device_map,
+        "max_inference_batch_size": max_inference_batch_size,
+        "max_new_tokens": max_new_tokens,
+    }
+    if torch_dtype is not None:
+        kwargs["dtype"] = torch_dtype
+
+    quantization = quantization.lower()
+    if quantization in {"4bit", "nf4"}:
+        from transformers import BitsAndBytesConfig
+
+        kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch_dtype or torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+    elif quantization in {"8bit", "int8"}:
+        from transformers import BitsAndBytesConfig
+
+        kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+    elif quantization not in {"none", "false", "no", "0", ""}:
+        raise ValueError(f"Unsupported quantization: {quantization}")
+
+    return kwargs
+
+
 def load_model(
     model_id: str,
     dtype: str,
     device_map: str,
     max_inference_batch_size: int,
     max_new_tokens: int,
+    quantization: str,
 ) -> Any:
     """加载 Qwen3-ASR 模型。
 
@@ -99,16 +143,20 @@ def load_model(
     """
     from qwen_asr import Qwen3ASRModel
 
-    kwargs: dict[str, Any] = {
-        "device_map": device_map,
-        "max_inference_batch_size": max_inference_batch_size,
-        "max_new_tokens": max_new_tokens,
-    }
-    torch_dtype = resolve_torch_dtype(dtype)
-    if torch_dtype is not None:
-        kwargs["dtype"] = torch_dtype
-
-    model = Qwen3ASRModel.from_pretrained(model_id, **kwargs)
+    kwargs = build_model_kwargs(
+        dtype=dtype,
+        device_map=device_map,
+        max_inference_batch_size=max_inference_batch_size,
+        max_new_tokens=max_new_tokens,
+        quantization=quantization,
+    )
+    try:
+        model = Qwen3ASRModel.from_pretrained(model_id, **kwargs)
+    except TypeError:
+        retry_kwargs = dict(kwargs)
+        if "dtype" in retry_kwargs:
+            retry_kwargs["torch_dtype"] = retry_kwargs.pop("dtype")
+        model = Qwen3ASRModel.from_pretrained(model_id, **retry_kwargs)
     if hasattr(model, "eval"):
         model.eval()
     return model
@@ -199,6 +247,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dtype", default="float16", choices=["auto", "bfloat16", "float16", "float32"])
     parser.add_argument("--device-map", default="cuda:0")
+    parser.add_argument("--quantization", default="none", choices=["none", "4bit", "8bit", "nf4", "int8"])
     parser.add_argument(
         "--language",
         default="English",
@@ -220,19 +269,25 @@ def main() -> None:
     if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
         print("[auth] Hugging Face token detected in environment.")
 
-    print(f"[load] model={args.model_id}")
+    print(f"[load] model={args.model_id} quantization={args.quantization}")
     model = load_model(
         model_id=args.model_id,
         dtype=args.dtype,
         device_map=args.device_map,
         max_inference_batch_size=args.max_inference_batch_size,
         max_new_tokens=args.max_new_tokens,
+        quantization=args.quantization,
     )
 
     outputs: list[dict[str, Any]] = []
     for idx, item in enumerate(rows, start=1):
         started = time.perf_counter()
         out = dict(item)
+        out["mode"] = "base"
+        out["model_id"] = args.model_id
+        out["dtype"] = args.dtype
+        out["device_map"] = args.device_map
+        out["quantization"] = args.quantization
         audio = item.get("audio") or item.get("audio_path")
         if not audio:
             out["prediction"] = ""

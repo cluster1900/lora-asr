@@ -26,12 +26,29 @@ python inference/qwen3_asr_base_infer.py \
   --model-id Qwen/Qwen3-ASR-1.7B \
   --dtype float16 \
   --device-map cuda:0 \
+  --quantization none \
   --max-inference-batch-size 1 \
   --language English \
   --limit 2
 ```
 
 该命令需要稳定网络下载模型权重，并建议在 GPU runtime 上运行。
+
+Base recheck 如果要和 LoRA 4bit 评测对齐，应显式使用 `--quantization 4bit`：
+
+```bash
+python inference/qwen3_asr_base_infer.py \
+  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
+  --output-jsonl outputs/base_recheck_mvp_150/predictions.qwen3_asr_base_recheck.mvp_150.jsonl \
+  --audio-root . \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --quantization 4bit \
+  --max-inference-batch-size 1 \
+  --max-new-tokens 128 \
+  --language English
+```
 
 LoRA always-on 推理示例：
 

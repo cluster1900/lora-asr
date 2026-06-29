@@ -108,6 +108,59 @@ MVP 至少包含：
 
 LoRA MVP 的第一版成功门槛应以 degraded-only WER 或单场景 WER 相对 base 下降为准。由于 base 没有空输出，短期内更应关注错误替换、漏词、插入、重复和幻觉式补全是否减少。
 
+## Base Recheck 测试
+
+背景：
+
+- LoRA v1/v2 评测使用 4bit 加载 base 后挂载 adapter，而历史 `baseline_mvp_150`
+  base 指标来自早期 baseline notebook。
+- 如果 base 与 LoRA 使用的模型加载参数、qwen-asr 版本、音频路径或 manifest 不一致，
+  LoRA 对比会被污染。
+- 在继续 LoRA ablation 前，需要用同一套 held-out MVP 150 音频重新跑一个 base
+  复核版本。
+
+范围：
+
+- 输入仍使用 `data/jsonl/baseline_mvp_150.local.jsonl`。
+- 音频仍使用同一批 `data/mvp_eval/audio/`。
+- 默认输出到 `outputs/base_recheck_mvp_150/`，不覆盖历史 `outputs/baseline_mvp_150/`。
+- 默认使用 `quantization=4bit`、`dtype=float16`、`device_map=cuda:0`，与 LoRA
+  v1/v2 评测加载方式保持一致。
+
+执行入口：
+
+```bash
+python scripts/run_qwen3_asr_base_recheck.py \
+  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
+  --audio-root . \
+  --output-dir outputs/base_recheck_mvp_150 \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --quantization 4bit \
+  --max-inference-batch-size 1 \
+  --max-new-tokens 128 \
+  --language English
+```
+
+输出：
+
+- `predictions.qwen3_asr_base_recheck.mvp_150.jsonl`
+- `predictions.qwen3_asr_base_recheck.mvp_150.scored.jsonl`
+- `metrics.qwen3_asr_base_recheck.mvp_150.json`
+- `metrics_by_scenario.qwen3_asr_base_recheck.mvp_150.csv`
+- `error_analysis/`
+- `comparison.json`
+- `comparison_by_scenario.csv`
+
+通过标准：
+
+- prediction JSONL 行数等于输入 manifest 行数。
+- 推理错误数为 0，或所有错误都保存在 `error` 字段中并进入评测。
+- metrics JSON 包含 overall 和 clean/noise/reverb/dropout/far_field。
+- `comparison.json` 至少比较 historical base 与 recheck base；如果 LoRA v1/v2 指标存在，也一起比较。
+- 新 base recheck 结果要作为后续 LoRA 对比的新候选 base，而不是直接覆盖旧 baseline。
+
 ## Scale-Up 成功标准
 
 扩大规模版本成功条件：
