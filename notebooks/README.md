@@ -8,9 +8,10 @@
 - `00_github_commit_push_colab.ipynb`：单独提交并推送 Colab 产生的受控输出；使用 Colab Secret `GITHUB_TOKEN` 授权。
 - `01_baseline_colab.ipynb`：Qwen3-ASR-1.7B baseline smoke 推理与 WER/CER 评测。
 - `02_mvp_150_eval_colab.ipynb`：读取本地生成并上传到 Drive 的 150 条 MVP 评测集，运行 Qwen3-ASR baseline 推理和场景级 WER/CER。
-- `03_train_lora_colab.ipynb`：执行 Qwen3-ASR 模块探测、LoRA target 候选导出和 Unsloth 兼容性检查；Unsloth 已验证不兼容，后续 smoke training 走 Transformers + PEFT。
+- `03_train_lora_colab.ipynb`：执行 Qwen3-ASR 模块探测和 20 step Transformers + PEFT smoke training。
+- `04_train_lora_mvp_colab.ipynb`：执行正式 LoRA MVP bootstrap 训练，使用独立 clean/noise/reverb train manifest，默认 600 step。
 - `02_make_dataset_colab.ipynb`
-- `04_eval_colab.ipynb`
+- `05_eval_colab.ipynb`
 - `05_router_colab.ipynb`
 
 规则：

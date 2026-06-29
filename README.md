@@ -47,6 +47,7 @@ Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google
 - `notebooks/01_baseline_colab.ipynb`：Colab/Google Drive baseline smoke notebook。
 - `notebooks/02_mvp_150_eval_colab.ipynb`：Colab/Google Drive MVP 150 baseline 评测 notebook。
 - `notebooks/03_train_lora_colab.ipynb`：Colab/Google Drive LoRA 探测和 PEFT smoke training 入口。
+- `notebooks/04_train_lora_mvp_colab.ipynb`：Colab/Google Drive 正式 LoRA MVP bootstrap 训练入口，默认 600 step。
 - `configs/baseline/qwen3_asr_baseline.yaml`：baseline smoke 配置。
 
 ## 快速开始
@@ -199,6 +200,12 @@ python3 scripts/create_lora_mvp_dataset.py \
 
 ```text
 configs/train/qwen3_asr_lora_mvp_train.yaml
+```
+
+Colab 中正式训练入口为：
+
+```text
+notebooks/04_train_lora_mvp_colab.ipynb
 ```
 
 ## 目录结构

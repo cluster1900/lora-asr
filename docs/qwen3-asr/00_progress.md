@@ -6,7 +6,7 @@
 
 当前阶段：正式启动 `05 LoRA 训练 MVP`。`05A` 训练前探测、`05B` Unsloth 兼容性检查和 `05C` Transformers + PEFT smoke training 均已完成；但这些只证明训练链路可行，不等于 LoRA MVP 已完成。
 
-现在进入 `05D LoRA MVP 正式训练闭环`：先建立独立 train/val manifest，不复用 MVP 150 held-out test；再跑第一版 MVP 训练、adapter 加载推理和 base-vs-LoRA 评测。
+现在进入 `05D LoRA MVP 正式训练闭环`：独立 train/val manifest 已建立，不复用 MVP 150 held-out test；下一步通过 `notebooks/04_train_lora_mvp_colab.ipynb` 跑第一版 MVP 训练、adapter 加载推理和 base-vs-LoRA 评测。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -38,6 +38,7 @@
   - 固定 `outputs/baseline_mvp_150/` 和 `data/jsonl/baseline_mvp_150.local.jsonl` 作为 held-out test 对照，不直接用于正式 LoRA 训练。
   - 新增独立 bootstrap train/val 数据入口，第一版优先覆盖 clean、noise、reverb。
   - 训练仍使用已确认的 99 个 audio tower target，先验证 noise/reverb 是否相对 base 改善，再决定是否扩展 target 或进入 router。
+  - 已新增 `notebooks/04_train_lora_mvp_colab.ipynb` 作为正式 MVP 训练入口；`03_train_lora_colab.ipynb` 继续只承担探测和 20 step smoke training。
 
 ## 下一批里程碑
 
@@ -246,3 +247,4 @@ RuntimeError: Input type (c10::Half) and bias type (float) should be the same
 - 固定 MVP 150 hard profile 为 held-out test，不直接作为训练集。
 - 第一版 LoRA MVP 训练数据优先覆盖 clean、noise、reverb；dropout 和 far_field 暂作为测试观察场景。
 - 新增 bootstrap 数据生成入口和 MVP 训练配置后，再进入 Colab 训练。
+- 新增 `notebooks/04_train_lora_mvp_colab.ipynb`，将正式 600 step bootstrap 训练从 `03_train_lora_colab.ipynb` 中拆出，避免 smoke 与正式训练混用。

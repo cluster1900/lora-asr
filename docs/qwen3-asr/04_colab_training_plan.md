@@ -172,16 +172,14 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 目的：
 
 - 先完成 Qwen3-ASR 模块探测和 LoRA target 候选导出。
-- 再训练第一版 ASR LoRA adapter。
+- 再跑 20 step Transformers + PEFT smoke training，确认训练链路可用。
 
 当前 notebook 覆盖训练前探测和 Transformers + PEFT smoke training。Qwen3-ASR
 官方 `qwen-asr` wrapper 的内部模块结构需要以当前环境真实加载结果为准，不能
 复用 Mega-ASR 或其他工程的 target 规则。
 
-`05C` smoke training 已完成 20 step 验收。正式 LoRA MVP 从 `05D` 开始：
-先生成独立 bootstrap train/val，再使用 `configs/train/qwen3_asr_lora_mvp_train.yaml`
-跑第一版 200-1000 step 训练，最后在固定 MVP 150 held-out test 上比较 base 与
-LoRA。
+`05C` smoke training 已完成 20 step 验收。正式 LoRA MVP 从 `05D` 开始，
+由 `notebooks/04_train_lora_mvp_colab.ipynb` 执行。
 
 历史 Unsloth 兼容性检查结果：
 
@@ -225,7 +223,7 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 0. Probe：加载模型并导出 `named_modules()`、LoRA target 候选和摘要。
 1. PEFT compatibility：按正则精确匹配 99 个 audio tower target。
 2. Smoke test：20 条样本，5-20 steps，当前入口为 `train/train_qwen3_asr_lora.py`。
-3. MVP bootstrap train：clean/noise/reverb 独立 train/val，200-1000 step。
+3. MVP bootstrap train：交给 `04_train_lora_mvp_colab.ipynb`。
 4. Scenario-balanced train：按声学场景做加权采样，后续再扩到真实数据。
 
 输出：
@@ -252,11 +250,47 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 - `checkpoints/qwen3-asr-1.7b-lora-mvp/summary.json`
 - `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`
 
-## Notebook 04: 评测
+## Notebook 04: LoRA MVP Bootstrap 训练
 
 名称：
 
-- `notebooks/04_eval_colab.ipynb`
+- `notebooks/04_train_lora_mvp_colab.ipynb`
+
+目的：
+
+- 使用独立 `data/jsonl/lora_mvp_train.local.jsonl` 启动正式 LoRA MVP bootstrap 训练。
+- 先执行 preflight，确认模型加载、音频路径、99 个 LoRA target 和输出目录都正常。
+- 再跑默认 600 step 训练，产出 `checkpoints/qwen3-asr-1.7b-lora-mvp/`。
+
+输入：
+
+- `configs/train/qwen3_asr_lora_mvp_train.yaml`
+- `data/jsonl/lora_mvp_train.local.jsonl`
+- `data/jsonl/lora_mvp_val.local.jsonl`
+- `data/lora_mvp/audio/`
+
+输出：
+
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/target_modules.json`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/training_config.json`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/loss_log.jsonl`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/summary.json`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/processor/`
+
+通过标准：
+
+- preflight `summary.json` 中 `status=preflight_ok`。
+- 正式训练 `summary.json` 中 `status=trained`。
+- `loss_log.jsonl` 行数等于默认 `MAX_STEPS=600`。
+- target count 等于 99。
+- adapter 和 processor 均已保存。
+
+## Notebook 05: 评测
+
+名称：
+
+- `notebooks/05_eval_colab.ipynb`
 
 目的：
 
@@ -277,11 +311,11 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 - `outputs/eval/lora.jsonl`
 - `outputs/eval/metrics_by_scenario.csv`
 
-## Notebook 05: Router
+## Notebook 06: Router
 
 名称：
 
-- `notebooks/05_router_colab.ipynb`
+- `notebooks/06_router_colab.ipynb`
 
 目的：
 
