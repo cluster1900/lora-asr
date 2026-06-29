@@ -373,5 +373,27 @@ base recheck 完成后，该结论需要修正：历史 base 与当前 4bit LoRA
 
 - 继续使用固定 MVP 150 held-out test。
 - 继续输出 historical base、base recheck、v1 和当前版本对比。
-- 优先尝试 v1 风格 target、后层 audio attention、训练目标格式和数据难度。
+- 优先尝试 v3 target-focus：v1 风格 99 个 target、noise/reverb-only、长短均衡采样。
 - 通过标准仍然是 noise 或 reverb 至少一个场景相对 4bit base recheck 有明确改善。
+
+### v3 LoRA MVP 测试目标
+
+v3 的目的不是证明训练通路，而是把已观察到的弱收益放大：
+
+- base 对照：`outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`。
+- 目标场景：noise、reverb。
+- 观察场景：dropout、far_field。
+- clean regression：必须继续量化。
+
+通过标准：
+
+- `target_modules.json` 中 target count 等于 99。
+- `loss_log.jsonl` 覆盖 noise/reverb × short/long 四个桶。
+- prediction JSONL 行数等于 150。
+- WER/CER、scenario CSV 和 error analysis 均生成。
+
+验收标准：
+
+- noise 或 reverb 至少一个场景相对 4bit base recheck 接近或达到 10% 相对 WER 下降。
+- clean WER 不相对 4bit base recheck 退化超过 5%。
+- 如果只有 noise+reverb 合并改善、但单场景未接近 10%，继续 ablation，不进入 router。

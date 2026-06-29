@@ -18,3 +18,4 @@
 - `configs/train/qwen3_asr_lora_mvp.yaml`：历史 `05C` smoke training 配置，只用于验证 LoRA 通路。
 - `configs/train/qwen3_asr_lora_mvp_train.yaml`：正式 LoRA MVP 第一版训练配置，默认读取独立 bootstrap train/val manifest，并保留 MVP 150 作为 held-out test。
 - `configs/train/qwen3_asr_lora_mvp_v2_ablation.yaml`：LoRA MVP v2 ablation 配置，默认 attention-only、noise/reverb-only、较低学习率和较短训练步数。
+- `configs/train/qwen3_asr_lora_mvp_v3_target_focus.yaml`：LoRA MVP v3 target-focus 配置，回到 v1 的 99 个 target，但只训练 noise/reverb，并以 4bit base recheck 为公平对照。

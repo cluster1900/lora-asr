@@ -21,21 +21,25 @@ LoRA target 候选和 Colab 资源可行性。`05B Unsloth 兼容性检查` 已�
 audio tower target 可挂载、loss 非 NaN、adapter 可保存。
 
 当前 `05D LoRA MVP 正式训练闭环` 第一轮已经完成。注意：`05C` 不是 LoRA MVP
-成功，只是不再被训练入口、target 和 Colab 依赖阻塞。`05D` 的 v1 结果没有改善
-目标 degraded 场景，因此现在进入 `05E LoRA MVP v2 ablation`，先排查训练策略，
-不进入 router。
+成功，只是不再被训练入口、target 和 Colab 依赖阻塞。4bit base recheck 完成后，
+v1/v2 被确认对 noise/reverb 有弱收益，但未达到 10% 改善门槛。因此现在进入
+`05F LoRA MVP v3 target-focus`，继续优化 target 场景，不进入 router。
 
 ## 当前 Baseline 对照
 
-MVP 150 hard profile 的 Qwen3-ASR base 结果：
+当前主对照为 4bit base recheck，输出位于 `outputs/base_recheck_mvp_150/`：
 
-- clean WER：0.010438。
-- noise WER：0.336117。
-- reverb WER：0.415449。
-- dropout WER：0.759916。
-- far_field WER：0.897704。
-- degraded-only WER：约 0.602296。
+- clean WER：0.008351。
+- noise WER：0.450939。
+- reverb WER：0.544885。
+- dropout WER：0.762004。
+- far_field WER：0.985386。
+- degraded-only WER：约 0.685804。
 - empty output rate：所有场景均为 0.0。
+
+历史 `outputs/baseline_mvp_150/` base 指标来自早期 baseline notebook，整体更强，
+只作为旧环境参考。当前 LoRA v1/v2 使用 4bit base 后挂载 adapter，因此验收必须
+相对 4bit base recheck 计算。
 
 第一版 LoRA MVP 不应直接追求所有 hard degraded 场景都大幅改善。目标分层：
 
@@ -164,12 +168,11 @@ base vs LoRA v1：
 
 结论：
 
-- v1 不满足 LoRA MVP 验收标准。
-- clean 小幅改善不能抵消 noise/reverb 目标场景退化。
-- degraded-only WER 也变差，说明不能进入 router。
-- 错误分析显示 hallucination_like、repeat_like 和 insertion_heavy 均有上升风险，尤其 far_field 和 reverb。
-
-下一步不是扩大训练，而是做 ablation。
+- 该表基于历史 base，后来被 4bit base recheck 修正。
+- 以 4bit base recheck 为准，v1 对 noise+reverb 有约 5.45% 相对改善，clean
+  无退化，但 dropout/far_field 未改善。
+- v1 证明 LoRA 路线有效，但未达到 10% 改善门槛，不能进入 router。
+- 下一步不是直接 router，而是做 v3 target-focus，尝试放大 v1 的收益。
 
 ## 05E LoRA MVP v2 ablation
 
@@ -227,6 +230,37 @@ projection。held-out 评测显示 clean 变好但 degraded 变差，说明当�
 - 在固定 MVP 150 held-out test 上完成 LoRA always-on 评测。
 - noise 或 reverb 至少一个场景相对 base 改善，且 clean regression 被量化。
 - 如果没有改善，必须记录失败结论，并继续 ablation，不进入 router。
+
+### 05F LoRA MVP v3 target-focus
+
+背景：
+
+- v1 使用 99 个 target，对 noise+reverb 有约 5.45% 相对改善。
+- v2 使用 96 个 attention-only target，对 noise+reverb 只有约 2.52% 相对改善。
+- 因此 v3 回到 v1 target 组合，但去掉 clean 训练样本，聚焦 noise/reverb，并保留
+  v2 的长短均衡采样。
+
+默认配置：
+
+- 配置：`configs/train/qwen3_asr_lora_mvp_v3_target_focus.yaml`
+- Colab 入口：`notebooks/07_train_lora_mvp_v3_colab.ipynb`
+- train manifest：`data/jsonl/lora_mvp_train.local.jsonl`
+- scenario filter：`noise,reverb`
+- output：`checkpoints/qwen3-asr-1.7b-lora-mvp-v3-target-focus`
+- eval output：`outputs/lora_mvp_v3_eval`
+- target：audio tower attention + speech projection，共 99 个模块
+- 学习率：`2e-5`
+- max steps：`450`
+- sampling：`scenario_bucket_round_robin`，按 `noise/reverb × short/long` 四个桶轮转。
+
+v3 验收标准：
+
+- target count 等于 99。
+- loss log 覆盖 noise/reverb 的 short/long。
+- held-out MVP 150 推理和评测完成。
+- noise 或 reverb 至少一个场景相对 4bit base recheck 接近或达到 10% 相对 WER 改善。
+- clean WER 不相对 4bit base recheck 退化超过 5%。
+- dropout/far_field 继续作为观察项；若未改善，不进入 router。
 
 ### LoRA held-out 推理评测入口
 

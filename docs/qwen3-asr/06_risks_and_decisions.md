@@ -193,6 +193,28 @@
 - MVP 通过标准改为相对 4bit base recheck 计算。
 - 当前结论从“LoRA 完全失败”修正为“目标场景有弱收益，但不足以进入 router”。
 
+### D014: v3 使用 v1 target 组合并聚焦 noise/reverb
+
+决策：
+
+- v3 使用 v1 的 99 个 target：audio tower attention + speech projection。
+- v3 不训练 clean 样本，只训练 noise/reverb。
+- v3 使用 `scenario + text_length_bucket` 均衡采样，默认 `max_steps=450`、
+  `learning_rate=2e-5`。
+
+原因：
+
+- 以 4bit base recheck 为对照，v1 对 noise+reverb 的相对改善约 5.45%，强于 v2 的约 2.52%。
+- v2 移除 speech projection 后收益变弱，说明 speech projection 可能对当前合成退化任务有帮助。
+- v1 混入 clean 后 clean 没退化，但目标收益不足；v3 先聚焦 noise/reverb，尝试放大目标收益。
+- 长短样本必须均衡，避免 v1 manifest 顺序下前段主要覆盖 short 的问题影响短跑判断。
+
+影响：
+
+- 新增 `configs/train/qwen3_asr_lora_mvp_v3_target_focus.yaml`。
+- 新增 `notebooks/07_train_lora_mvp_v3_colab.ipynb`。
+- router 继续暂停；只有 noise 或 reverb 相对 4bit base recheck 接近或达到 10% 改善，才进入 router 前检查。
+
 ## 风险
 
 ### R001: Qwen3-ASR 在强退化音频上仍可能失败

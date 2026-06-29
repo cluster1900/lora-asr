@@ -1,0 +1,73 @@
+model:
+  id: Qwen/Qwen3-ASR-1.7B
+  quantization: 4bit
+  backend: transformers_peft
+
+probe:
+  output_dir: outputs/lora_probe/qwen3_asr_1_7b
+  dtype: float16
+  device_map: cuda:0
+  max_inference_batch_size: 1
+  max_new_tokens: 256
+
+data:
+  purpose: lora_mvp_v3_target_focus_noise_reverb
+  train_manifest: data/jsonl/lora_mvp_train.local.jsonl
+  validation_manifest: data/jsonl/lora_mvp_val.local.jsonl
+  held_out_test_manifest: data/jsonl/baseline_mvp_150.local.jsonl
+  max_audio_seconds: 20
+  train_scenarios:
+    - noise
+    - reverb
+  held_out_observation_scenarios:
+    - clean
+    - dropout
+    - far_field
+
+lora:
+  backend: transformers_peft
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_strategy: audio_tower_attention_plus_projection_mvp_v3_target_focus
+  target_groups:
+    - audio_tower_attention
+    - speech_projection
+  include_regex:
+    - ^model\.thinker\.audio_tower\.layers\.[0-9]+\.self_attn\.(q_proj|k_proj|v_proj|out_proj)$
+    - ^model\.thinker\.audio_tower\.(conv_out|proj1|proj2)$
+  exclude_regex:
+    - ^model\.thinker\.lm_head$
+    - ^model\.thinker\.model\.layers\.
+    - ^model\.thinker\.audio_tower\.(conv2d1|conv2d2|conv2d3)$
+  expected_target_count: 99
+
+training:
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 0.00002
+  epochs: 1
+  seed: 20260701
+  max_steps: 450
+  optimizer: adamw
+  peft_task_type: none
+  gradient_checkpointing: false
+  include_scenarios:
+    - noise
+    - reverb
+  sampling_strategy: scenario_bucket_round_robin
+  sampling_bucket_fields:
+    - scenario
+    - text_length_bucket
+
+output:
+  checkpoint_dir: checkpoints/qwen3-asr-1.7b-lora-mvp-v3-target-focus
+  eval_dir: outputs/lora_mvp_v3_eval
+  save_steps: 150
+  keep_last_checkpoints: 3
+
+compare:
+  base_metrics: outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json
+  historical_base_metrics: outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json
+  v1_metrics: outputs/lora_mvp_eval/metrics.qwen3_asr_lora_mvp.mvp_150.json
+  v2_metrics: outputs/lora_mvp_v2_eval/metrics.qwen3_asr_lora_mvp_v2.mvp_150.json

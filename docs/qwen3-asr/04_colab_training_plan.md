@@ -443,11 +443,46 @@ python scripts/run_qwen3_asr_base_recheck.py \
   当前 4bit LoRA 的公平对照。
 - 后续 LoRA 对比以 base recheck 为主，historical base 只作为旧环境参考。
 
+## Notebook 07: LoRA MVP v3 Target-Focus
+
+名称：
+
+- `notebooks/07_train_lora_mvp_v3_colab.ipynb`
+
+目的：
+
+- 在确认 LoRA 相对 4bit base recheck 有弱收益后，继续把 noise/reverb 改善推到
+  10% 以上。
+- 复用 v1 更有效的 target 组合：audio tower attention + speech projection，共 99 个 target。
+- 去掉 clean 训练样本，聚焦 noise/reverb，同时使用 `scenario + text_length_bucket`
+  均衡轮转，避免长短样本失衡。
+
+默认配置：
+
+- `configs/train/qwen3_asr_lora_mvp_v3_target_focus.yaml`
+- output：`checkpoints/qwen3-asr-1.7b-lora-mvp-v3-target-focus`
+- eval output：`outputs/lora_mvp_v3_eval`
+- target count：99
+- scenario filter：noise,reverb
+- learning rate：2e-5
+- max steps：450
+- sampling：`scenario_bucket_round_robin`
+- base 对照：`outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
+
+验收标准：
+
+- preflight target count 等于 99。
+- loss log 覆盖 noise/reverb 的 short 和 long。
+- held-out MVP 150 推理、WER/CER 和错误分析完成。
+- noise 或 reverb 至少一个场景相对 4bit base recheck 接近或达到 10% 相对 WER 改善。
+- clean WER 不相对 base recheck 退化超过 5%。
+- dropout/far_field 必须记录；若仍不改善，继续暂停 router。
+
 ## Notebook 07: Router
 
 名称：
 
-- `notebooks/07_router_colab.ipynb`
+- `notebooks/08_router_colab.ipynb`
 
 目的：
 

@@ -12,8 +12,9 @@
 - `04_train_lora_mvp_colab.ipynb`：执行正式 LoRA MVP bootstrap 训练，使用独立 clean/noise/reverb train manifest，默认 600 step。
 - `05_eval_lora_mvp_colab.ipynb`：加载正式 LoRA MVP adapter，在固定 MVP 150 held-out test 上运行 LoRA always-on 推理、WER/CER 评测和错误分析。
 - `06_train_lora_mvp_v2_colab.ipynb`：执行 LoRA MVP v2 ablation，默认 attention-only、noise/reverb-only，并在训练后自动跑 held-out 评测。
+- `07_train_lora_mvp_v3_colab.ipynb`：执行 LoRA MVP v3 target-focus，默认使用 v1 的 99 个 target、noise/reverb-only、长短均衡采样，目标是相对 4bit base recheck 接近或超过 10% 改善。
 - `02_make_dataset_colab.ipynb`
-- `07_router_colab.ipynb`
+- `08_router_colab.ipynb`
 
 规则：
 
