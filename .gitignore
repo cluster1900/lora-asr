@@ -33,8 +33,6 @@ private/
 secrets/
 references/
 
-# Generated local data
-
 # System files
 .DS_Store
 Thumbs.db
