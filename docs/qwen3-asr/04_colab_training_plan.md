@@ -286,15 +286,30 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 - target count 等于 99。
 - adapter 和 processor 均已保存。
 
-## Notebook 05: 评测
+## Notebook 05: LoRA MVP 评测
 
 名称：
 
-- `notebooks/05_eval_colab.ipynb`
+- `notebooks/05_eval_lora_mvp_colab.ipynb`
 
 目的：
 
-- 对比 base model、LoRA always-on，以及可用时的 router mode。
+- 加载 `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`。
+- 在固定 MVP 150 held-out test 上运行 LoRA always-on 推理。
+- 复用 baseline 同一套 WER/CER 与错误分析脚本，产出 base-vs-LoRA 对比。
+- 量化 clean regression，并记录 noise/reverb、dropout/far_field 场景结果。
+
+背景：
+
+- `04_train_lora_mvp_colab.ipynb` 只证明训练完成并保存 adapter。
+- LoRA 是否有效必须看 held-out test WER/CER，而不能只看 loss。
+- 第一版先评估 always-on LoRA；只有确认 LoRA 有收益且 clean regression 可接受后，才进入 router。
+
+输入：
+
+- `data/jsonl/baseline_mvp_150.local.jsonl`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`
+- `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json`
 
 指标：
 
@@ -307,9 +322,24 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 
 输出：
 
-- `outputs/eval/base.jsonl`
-- `outputs/eval/lora.jsonl`
-- `outputs/eval/metrics_by_scenario.csv`
+- `outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.jsonl`
+- `outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.scored.jsonl`
+- `outputs/lora_mvp_eval/metrics.qwen3_asr_lora_mvp.mvp_150.json`
+- `outputs/lora_mvp_eval/metrics_by_scenario.qwen3_asr_lora_mvp.mvp_150.csv`
+- `outputs/lora_mvp_eval/error_analysis/`
+
+通过标准：
+
+- mini LoRA inference 至少跑通 2 条样本。
+- full LoRA inference 产出 150 行 prediction JSONL。
+- WER/CER 评测与错误分析脚本执行完成。
+- notebook 打印 base 与 LoRA 的 scenario-level 对比表。
+
+验收标准：
+
+- noise 或 reverb 至少一个场景相对 base 改善。
+- clean WER 相对 base 的退化被量化，第一版警戒线为相对退化不超过 5%。
+- dropout 与 far_field 作为观察场景完整记录。
 
 ## Notebook 06: Router
 
@@ -380,6 +410,7 @@ THE TRANSCRIPT TEXT
 - `01_baseline_colab.ipynb` 产出 baseline predictions 和 metrics。
 - `02_make_dataset_colab.ipynb` 产出 train/val/test JSONL。
 - `03_train_lora_colab.ipynb` 产出可加载 LoRA adapter。
-- `04_eval_colab.ipynb` 产出 overall 和 scenario-level 指标。
-- `05_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
+- `04_train_lora_mvp_colab.ipynb` 产出正式 LoRA MVP adapter。
+- `05_eval_lora_mvp_colab.ipynb` 产出 LoRA always-on overall 和 scenario-level 指标。
+- `06_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
 - 所有 notebook 的输入、输出和依赖都能追溯到配置文件。

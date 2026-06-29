@@ -235,6 +235,41 @@ Colab 测试：
 - 至少 1 条 clean 和 1 条 noise/reverb 可完成推理。
 - 推理失败记录到 JSONL 的 `error` 字段，不中断整批任务。
 - LoRA prediction JSONL 可被 `evaluation/eval_wer.py` 评分。
+- 推理输出必须保留与 base 相同的字段，并额外记录 `mode=lora` 与 `adapter_dir`，方便后续 base-vs-LoRA 对齐分析。
+
+### LoRA MVP 评测执行
+
+背景：`summary.json` 和 loss 只能证明训练过程完成，不能证明 ASR 质量提升。正式
+LoRA MVP 必须把 adapter 加载到同一个 Qwen3-ASR official wrapper 中，在固定
+MVP 150 held-out test 上跑 always-on LoRA 推理，再和 base 指标对比。
+
+范围：
+
+- 使用 `inference/qwen3_asr_lora_infer.py` 加载 `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`。
+- 使用 `data/jsonl/baseline_mvp_150.local.jsonl` 作为 held-out test。
+- 使用 `evaluation/eval_wer.py` 和 `evaluation/analyze_errors.py` 复用同一评测口径。
+- 本阶段不训练 router，不做动态切换。
+
+本地静态测试：
+
+- `python3 inference/qwen3_asr_lora_infer.py --help` 可执行。
+- 脚本语法检查通过。
+- `notebooks/05_eval_lora_mvp_colab.ipynb` 是合法 notebook JSON，且无执行输出、无 token、无个人密钥。
+
+Colab 运行测试：
+
+- 先用 `--limit 2` 跑 1 条 clean 和 1 条 degraded 或前 2 条样本，确认 adapter 加载和转写输出正常。
+- 再跑完整 MVP 150，输出 `outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.jsonl`。
+- 使用同一评测脚本输出 scored JSONL、metrics JSON 和 scenario CSV。
+- 使用错误分析脚本输出 worst cases 与场景聚合。
+
+通过标准：
+
+- prediction JSONL 行数等于输入 manifest 行数。
+- 所有行包含 `prediction`、`error`、`mode`、`adapter_dir`。
+- 推理异常必须写入 `error`，不能中断整批评测。
+- metrics JSON 同时包含 overall 和 scenario。
+- scenario CSV 包含 clean、noise、reverb、dropout、far_field。
 
 ### 验收测试
 

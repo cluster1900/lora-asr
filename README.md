@@ -17,7 +17,7 @@ clean/noise 音频
   -> overall 与 scenario-level 指标
 ```
 
-Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。训练前探测已确认官方 `qwen-asr` wrapper 暴露 `Qwen3ASRForConditionalGeneration` 根节点，第一版 LoRA smoke target 收敛为 audio tower attention + speech projection。Unsloth 兼容性检查已失败，当前训练框架回退为 Transformers + PEFT；20 step smoke training 已跑通，但这只证明训练链路可行，正式 LoRA MVP 从独立 train/val 数据和 base-vs-LoRA 评测开始。
+Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。训练前探测已确认官方 `qwen-asr` wrapper 暴露 `Qwen3ASRForConditionalGeneration` 根节点，第一版 LoRA smoke target 收敛为 audio tower attention + speech projection。Unsloth 兼容性检查已失败，当前训练框架回退为 Transformers + PEFT；20 step smoke training 已跑通。正式 LoRA MVP bootstrap 训练产物已经保存，当前重点是 adapter 加载推理和固定 held-out base-vs-LoRA 评测。
 
 Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google Drive 中的工程代码已经更新到 GitHub 最新提交，再继续执行 baseline 或训练 notebook。
 
@@ -37,6 +37,7 @@ Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google
 - `scripts/create_lora_mvp_dataset.py`：生成正式 LoRA MVP 启动用 bootstrap train/val manifest，默认覆盖 clean、noise、reverb。
 - `data/mvp_eval/audio/`：已提交 150 条 MVP smoke 音频，供 Colab 直接拉取后训练前检查和 smoke training 使用。
 - `inference/qwen3_asr_base_infer.py`：读取 JSONL manifest，调用 Qwen3-ASR baseline 生成 ASR prediction JSONL。
+- `inference/qwen3_asr_lora_infer.py`：加载 Qwen3-ASR base 与 PEFT adapter，生成 LoRA always-on ASR prediction JSONL。
 - `evaluation/eval_wer.py`：计算 WER/CER、overall 指标和 scenario-level 指标。
 - `evaluation/analyze_errors.py`：分析 scored prediction JSONL，输出 worst cases、场景聚合和错误标签。
 - `train/inspect_qwen3_asr_modules.py`：训练前探测 Qwen3-ASR 模块结构，并生成 LoRA target 候选。
@@ -48,6 +49,7 @@ Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google
 - `notebooks/02_mvp_150_eval_colab.ipynb`：Colab/Google Drive MVP 150 baseline 评测 notebook。
 - `notebooks/03_train_lora_colab.ipynb`：Colab/Google Drive LoRA 探测和 PEFT smoke training 入口。
 - `notebooks/04_train_lora_mvp_colab.ipynb`：Colab/Google Drive 正式 LoRA MVP bootstrap 训练入口，默认 600 step。
+- `notebooks/05_eval_lora_mvp_colab.ipynb`：Colab/Google Drive LoRA MVP held-out 评测入口，对比 base 与 LoRA。
 - `configs/baseline/qwen3_asr_baseline.yaml`：baseline smoke 配置。
 
 ## 快速开始
@@ -208,6 +210,31 @@ Colab 中正式训练入口为：
 notebooks/04_train_lora_mvp_colab.ipynb
 ```
 
+### 7. 评测 LoRA MVP adapter
+
+正式训练完成后，先在固定 MVP 150 held-out test 上跑 LoRA always-on：
+
+```bash
+python3 inference/qwen3_asr_lora_infer.py \
+  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
+  --output-jsonl outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.jsonl \
+  --adapter-dir checkpoints/qwen3-asr-1.7b-lora-mvp/adapter \
+  --audio-root . \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --quantization 4bit \
+  --max-inference-batch-size 1 \
+  --max-new-tokens 128 \
+  --language English
+```
+
+Colab 中推荐直接执行：
+
+```text
+notebooks/05_eval_lora_mvp_colab.ipynb
+```
+
 ## 目录结构
 
 ```text
@@ -234,7 +261,6 @@ train/        后续 LoRA/QLoRA 训练入口
 
 按路线图继续执行：
 
-1. 执行 [05 LoRA 训练 MVP](docs/qwen3-asr/roadmap/05_lora_training_mvp.md) 的 `05D`：生成独立 bootstrap train/val 并跑第一版 200-1000 step MVP 训练。
-2. 实现或验证 LoRA adapter 加载推理入口。
-3. 用固定 MVP 150 held-out test 集比较 base 与 LoRA，重点检查 noise/reverb 改善和 clean regression。
-4. 若 LoRA 有收益，再进入 [07 Router MVP](docs/qwen3-asr/roadmap/07_router_mvp.md)。
+1. 执行 [05 LoRA 训练 MVP](docs/qwen3-asr/roadmap/05_lora_training_mvp.md) 的 `05D` 评测：用固定 MVP 150 held-out test 集比较 base 与 LoRA。
+2. 重点检查 noise/reverb 改善、clean regression、dropout/far_field 观察结果。
+3. 若 LoRA 有收益，再进入 [07 Router MVP](docs/qwen3-asr/roadmap/07_router_mvp.md)。

@@ -1,6 +1,6 @@
 # 07 Router MVP
 
-最后更新：2026-06-07
+最后更新：2026-06-29
 
 ## 背景
 
@@ -33,7 +33,7 @@
 - `router/infer_router.py`
 - `router/model.py`
 - `configs/train/router_mvp.yaml`
-- `notebooks/05_router_colab.ipynb`
+- `notebooks/06_router_colab.ipynb`
 
 ## 执行步骤
 
@@ -64,4 +64,3 @@
 - router 错把 degraded 判成 clean。缓解：优先提高 degraded recall。
 - router 对合成退化过拟合。缓解：加入真实 holdout。
 - 双模型路径维护复杂。缓解：统一推理接口，记录 route_source。
-

@@ -139,6 +139,40 @@ python train/train_qwen3_asr_lora.py \
 - dropout 和 far_field 结果被记录为观察项，即使未改善也不能省略。
 - 若没有达到改善，进度文档必须记录失败结论和下一轮调整方向。
 
+### 05D 推理评测入口
+
+LoRA MVP 训练完成后，下一步不是继续调参，而是先完成 adapter 加载推理和固定
+held-out 评测。当前标准入口为：
+
+```bash
+python inference/qwen3_asr_lora_infer.py \
+  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
+  --output-jsonl outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.jsonl \
+  --adapter-dir checkpoints/qwen3-asr-1.7b-lora-mvp/adapter \
+  --audio-root . \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --quantization 4bit \
+  --max-inference-batch-size 1 \
+  --max-new-tokens 128 \
+  --language English
+```
+
+评测入口：
+
+```bash
+python evaluation/eval_wer.py \
+  --predictions-jsonl outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.jsonl \
+  --scored-jsonl outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.scored.jsonl \
+  --metrics-json outputs/lora_mvp_eval/metrics.qwen3_asr_lora_mvp.mvp_150.json \
+  --metrics-by-scenario-csv outputs/lora_mvp_eval/metrics_by_scenario.qwen3_asr_lora_mvp.mvp_150.csv
+```
+
+Colab 入口为 `notebooks/05_eval_lora_mvp_colab.ipynb`。该 notebook 必须先跑
+mini inference，再跑 full MVP 150，最后打印 base 与 LoRA 的 scenario-level
+对比。只有 LoRA always-on 确认有收益后，才进入 router MVP。
+
 ## 输入
 
 - `train.jsonl`
@@ -166,10 +200,12 @@ python train/train_qwen3_asr_lora.py \
 - `train/inspect_qwen3_asr_modules.py`
 - `train/check_unsloth_qwen3_asr.py`
 - `train/train_qwen3_asr_lora.py`
+- `inference/qwen3_asr_lora_infer.py`
 - `train/collator.py`
 - `train/lora_targets.py`
 - `configs/train/qwen3_asr_lora_mvp.yaml`
 - `notebooks/03_train_lora_colab.ipynb`
+- `notebooks/05_eval_lora_mvp_colab.ipynb`
 
 ## 执行步骤
 

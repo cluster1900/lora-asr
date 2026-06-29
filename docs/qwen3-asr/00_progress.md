@@ -4,9 +4,9 @@
 
 ## 当前状态
 
-当前阶段：正式启动 `05 LoRA 训练 MVP`。`05A` 训练前探测、`05B` Unsloth 兼容性检查和 `05C` Transformers + PEFT smoke training 均已完成；但这些只证明训练链路可行，不等于 LoRA MVP 已完成。
+当前阶段：推进 `05D LoRA MVP 正式训练闭环` 的评测环节。`05A` 训练前探测、`05B` Unsloth 兼容性检查和 `05C` Transformers + PEFT smoke training 均已完成；正式 LoRA MVP bootstrap 训练产物已经保存，下一步必须用固定 held-out test 验证 adapter 是否真的改善 ASR 指标。
 
-现在进入 `05D LoRA MVP 正式训练闭环`：独立 train/val manifest 已建立，不复用 MVP 150 held-out test；下一步通过 `notebooks/04_train_lora_mvp_colab.ipynb` 跑第一版 MVP 训练、adapter 加载推理和 base-vs-LoRA 评测。
+现在的执行重点是：新增 LoRA adapter always-on 推理入口和 `05_eval_lora_mvp_colab.ipynb`，在 MVP 150 hard profile 上生成 LoRA prediction、WER/CER、错误分析和 base-vs-LoRA 对比。只有 LoRA 至少在 noise 或 reverb 有收益且 clean regression 被量化后，才进入 router。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -31,6 +31,7 @@
 - 已提交 `data/mvp_eval/audio/` 下 150 条 MVP smoke 音频，方便 Colab 直接 `git pull` 后运行 baseline、评测和 LoRA smoke training。
 - 已新增 `notebooks/00_clone_github_colab.ipynb`，用于在 Colab/Google Drive 中 clone 或更新 GitHub 工程，并确认当前 commit 与关键修复标记。
 - 已完成 `05C Transformers + PEFT smoke training` 的 Colab 20 step 验收：99 个 audio tower target、loss 非 NaN、adapter/processor/summary 已保存到本地 checkpoint 目录。该结果只作为训练通路验证，不作为 LoRA MVP 指标。
+- 已完成正式 LoRA MVP bootstrap 训练产物同步：`checkpoints/qwen3-asr-1.7b-lora-mvp/` 包含 adapter、processor、target_modules、training_config、loss_log 和 summary；`summary.json` 记录 `status=trained`、`steps=600`。
 
 ## 进行中
 
@@ -39,14 +40,14 @@
   - 新增独立 bootstrap train/val 数据入口，第一版优先覆盖 clean、noise、reverb。
   - 训练仍使用已确认的 99 个 audio tower target，先验证 noise/reverb 是否相对 base 改善，再决定是否扩展 target 或进入 router。
   - 已新增 `notebooks/04_train_lora_mvp_colab.ipynb` 作为正式 MVP 训练入口；`03_train_lora_colab.ipynb` 继续只承担探测和 20 step smoke training。
+  - 正在补齐 LoRA always-on 推理与评测入口，用固定 MVP 150 held-out test 对比 base 与 LoRA。
 
 ## 下一批里程碑
 
-1. 生成独立 `train/val` LoRA MVP bootstrap manifest，并记录 stats 与 split 泄漏检查。
-2. 在 Colab GPU 中跑 200-1000 step 第一版 MVP 训练，保存 adapter、config、loss log 和 summary。
-3. 实现或验证 LoRA adapter 加载推理，至少跑通 1 条 clean 和 1 条 degraded 音频。
-4. 用固定 MVP 150 held-out test 集比较 base 与 LoRA，并记录 clean regression、noise/reverb 改善和 dropout/far_field 观察结果。
-5. 如果 noise/reverb 没有改善，先调整训练数据、步数或 target，不进入 router。
+1. 实现或验证 LoRA adapter 加载推理，至少跑通 1 条 clean 和 1 条 degraded 音频。
+2. 用固定 MVP 150 held-out test 集比较 base 与 LoRA，并记录 clean regression、noise/reverb 改善和 dropout/far_field 观察结果。
+3. 如果 noise/reverb 没有改善，先调整训练数据、步数或 target，不进入 router。
+4. 如果 LoRA 有收益，再进入 router MVP：训练 clean/degraded 分类器并比较 always-base、always-LoRA、router。
 
 ## 待确认问题
 
@@ -248,3 +249,9 @@ RuntimeError: Input type (c10::Half) and bias type (float) should be the same
 - 第一版 LoRA MVP 训练数据优先覆盖 clean、noise、reverb；dropout 和 far_field 暂作为测试观察场景。
 - 新增 bootstrap 数据生成入口和 MVP 训练配置后，再进入 Colab 训练。
 - 新增 `notebooks/04_train_lora_mvp_colab.ipynb`，将正式 600 step bootstrap 训练从 `03_train_lora_colab.ipynb` 中拆出，避免 smoke 与正式训练混用。
+
+已完成正式 LoRA MVP bootstrap 训练并同步 checkpoint。当前 adapter 位于
+`checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`，`summary.json` 显示
+`status=trained`、`steps=600`、`loss_last=0.41244810819625854`。下一步进入
+LoRA always-on held-out 评测，目标是产出 `outputs/lora_mvp_eval/` 下的
+prediction、scored、metrics、scenario CSV 和错误分析输出。

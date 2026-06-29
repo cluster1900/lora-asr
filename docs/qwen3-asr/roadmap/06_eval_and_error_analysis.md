@@ -38,7 +38,7 @@ ASR 训练不能只看少量样例。必须建立统一评测和错误分析流�
 - `evaluation/normalize_text.py`
 - `evaluation/analyze_errors.py`
 - `configs/eval/default_eval.yaml`
-- `notebooks/04_eval_colab.ipynb`
+- `notebooks/05_eval_lora_mvp_colab.ipynb`
 
 ## 执行步骤
 

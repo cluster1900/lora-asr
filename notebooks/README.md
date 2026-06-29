@@ -10,9 +10,9 @@
 - `02_mvp_150_eval_colab.ipynb`：读取本地生成并上传到 Drive 的 150 条 MVP 评测集，运行 Qwen3-ASR baseline 推理和场景级 WER/CER。
 - `03_train_lora_colab.ipynb`：执行 Qwen3-ASR 模块探测和 20 step Transformers + PEFT smoke training。
 - `04_train_lora_mvp_colab.ipynb`：执行正式 LoRA MVP bootstrap 训练，使用独立 clean/noise/reverb train manifest，默认 600 step。
+- `05_eval_lora_mvp_colab.ipynb`：加载正式 LoRA MVP adapter，在固定 MVP 150 held-out test 上运行 LoRA always-on 推理、WER/CER 评测和错误分析。
 - `02_make_dataset_colab.ipynb`
-- `05_eval_colab.ipynb`
-- `05_router_colab.ipynb`
+- `06_router_colab.ipynb`
 
 规则：
 
