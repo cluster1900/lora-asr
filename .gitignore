@@ -42,9 +42,6 @@ secrets/
 references/
 
 # Generated local data
-data/lora_mvp/
-data/jsonl/lora_mvp_*.local.jsonl
-data/jsonl/lora_mvp*.local.json
 
 # System files
 .DS_Store
