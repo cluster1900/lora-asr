@@ -1,0 +1,88 @@
+{
+  "config_path": "configs/train/qwen3_asr_lora_mvp_train.yaml",
+  "model_id": "Qwen/Qwen3-ASR-1.7B",
+  "manifest": "/content/drive/MyDrive/qwen3-asr/data/jsonl/lora_mvp_train.local.jsonl",
+  "output_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp",
+  "dtype": "float16",
+  "device_map": "cuda:0",
+  "quantization": "4bit",
+  "training_root": "model.thinker",
+  "language": "English",
+  "context": "",
+  "limit": 0,
+  "include_scenarios": [],
+  "max_steps": 600,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 16,
+  "learning_rate": 2e-05,
+  "max_audio_seconds": 20.0,
+  "seed": 20260629,
+  "config": {
+    "model": {
+      "id": "Qwen/Qwen3-ASR-1.7B",
+      "quantization": "4bit",
+      "backend": "transformers_peft"
+    },
+    "probe": {
+      "output_dir": "outputs/lora_probe/qwen3_asr_1_7b",
+      "dtype": "float16",
+      "device_map": "cuda:0",
+      "max_inference_batch_size": 1,
+      "max_new_tokens": 256
+    },
+    "data": {
+      "purpose": "lora_mvp_bootstrap_train",
+      "train_manifest": "data/jsonl/lora_mvp_train.local.jsonl",
+      "validation_manifest": "data/jsonl/lora_mvp_val.local.jsonl",
+      "held_out_test_manifest": "data/jsonl/baseline_mvp_150.local.jsonl",
+      "max_audio_seconds": 20,
+      "primary_train_scenarios": [
+        "clean",
+        "noise",
+        "reverb"
+      ],
+      "held_out_observation_scenarios": [
+        "dropout",
+        "far_field"
+      ]
+    },
+    "lora": {
+      "backend": "transformers_peft",
+      "r": 8,
+      "alpha": 16,
+      "dropout": 0.05,
+      "target_strategy": "audio_tower_attention_plus_projection_mvp_v1",
+      "target_groups": [
+        "audio_tower_attention",
+        "speech_projection"
+      ],
+      "include_regex": [
+        "^model\\.thinker\\.audio_tower\\.layers\\.[0-9]+\\.self_attn\\.(q_proj|k_proj|v_proj|out_proj)$",
+        "^model\\.thinker\\.audio_tower\\.(conv_out|proj1|proj2)$"
+      ],
+      "exclude_regex": [
+        "^model\\.thinker\\.lm_head$",
+        "^model\\.thinker\\.model\\.layers\\.",
+        "^model\\.thinker\\.audio_tower\\.(conv2d1|conv2d2|conv2d3)$"
+      ],
+      "expected_target_count": 99,
+      "estimated_trainable_params_r8": 1683456
+    },
+    "training": {
+      "batch_size": 1,
+      "gradient_accumulation_steps": 16,
+      "learning_rate": 2e-05,
+      "epochs": 1,
+      "seed": 20260629,
+      "max_steps": 600,
+      "optimizer": "adamw",
+      "peft_task_type": "none",
+      "gradient_checkpointing": false
+    },
+    "output": {
+      "checkpoint_dir": "checkpoints/qwen3-asr-1.7b-lora-mvp",
+      "save_steps": 200,
+      "keep_last_checkpoints": 3
+    }
+  }
+}
