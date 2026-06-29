@@ -1,0 +1,52 @@
+{
+  "overall": {
+    "group": "ALL",
+    "samples": 150,
+    "num_edits": 1318,
+    "ref_len": 2395,
+    "error_rate": 0.550313,
+    "empty_output_rate": 0.0
+  },
+  "by_scenario": [
+    {
+      "group": "clean",
+      "samples": 30,
+      "num_edits": 4,
+      "ref_len": 479,
+      "error_rate": 0.008351,
+      "empty_output_rate": 0.0
+    },
+    {
+      "group": "dropout",
+      "samples": 30,
+      "num_edits": 365,
+      "ref_len": 479,
+      "error_rate": 0.762004,
+      "empty_output_rate": 0.0
+    },
+    {
+      "group": "far_field",
+      "samples": 30,
+      "num_edits": 472,
+      "ref_len": 479,
+      "error_rate": 0.985386,
+      "empty_output_rate": 0.0
+    },
+    {
+      "group": "noise",
+      "samples": 30,
+      "num_edits": 216,
+      "ref_len": 479,
+      "error_rate": 0.450939,
+      "empty_output_rate": 0.0
+    },
+    {
+      "group": "reverb",
+      "samples": 30,
+      "num_edits": 261,
+      "ref_len": 479,
+      "error_rate": 0.544885,
+      "empty_output_rate": 0.0
+    }
+  ]
+}
