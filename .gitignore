@@ -17,16 +17,8 @@ logs/
 runs/
 wandb/
 tensorboard/
-outputs/*
-!outputs/baseline_mvp_150/
-!outputs/baseline_mvp_150/**
-!outputs/lora_probe/
-!outputs/lora_probe/**
 
 # Checkpoints and model weights
-checkpoints/*
-!checkpoints/qwen3-asr-1.7b-lora/
-!checkpoints/qwen3-asr-1.7b-lora/**
 ckpt/
 *.pt
 *.pth
