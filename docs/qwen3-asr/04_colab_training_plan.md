@@ -78,6 +78,45 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 - 若 Drive 中代码不是 git 仓库，必须明确报错并提示用户先确认目录处理方式。
 - 默认不得丢弃用户在 Drive 仓库里的本地修改；只有手动设置 `FORCE_RESET=True` 才允许强制对齐远端。
 
+## Notebook 00B: GitHub 输出提交与推送
+
+名称：
+
+- `notebooks/00_github_commit_push_colab.ipynb`
+
+目的：
+
+- 单独提交并推送 Colab 产生的受控实验输出，例如 `outputs/`、`data/`、`checkpoints/` 中需要保留的结果。
+- 避免把 clone/update 和 commit/push 混在同一个 notebook 中。
+- 解决 Colab 中 HTTPS push 报 `could not read Username` 的授权问题。
+
+背景：
+
+- Colab 训练会在 Google Drive 项目目录中产生 prediction、metrics、error analysis、checkpoint metadata 等输出。
+- 这些输出需要有选择地记录到 GitHub，方便在本地和后续 notebook 中复盘。
+- Colab 不能交互式输入 GitHub 用户名和密码，因此直接 `git push origin main` 可能报 `could not read Username`。
+
+授权方式：
+
+1. 在 GitHub 创建 fine-grained personal access token，至少给目标仓库 Contents read/write 权限。
+2. 在 Colab 左侧 Secrets 中新增 `GITHUB_TOKEN`，值为该 token。
+3. Notebook 中通过 `google.colab.userdata.get("GITHUB_TOKEN")` 读取 token。
+4. push 时临时使用带 token 的 HTTPS URL；不要执行 `git remote set-url` 写入 token。
+
+安全要求：
+
+- `COMMIT_AND_PUSH_OUTPUTS` 默认为 `False`。
+- 提交前必须打印 `git status --short`。
+- 默认提交路径只包含受控输出和文档相关目录，不提交 `.env`、`references/` 或私有文件。
+- 默认不强制添加 `.gitignore` 忽略的模型权重；如确实需要提交 ignored 文件，必须手动设置 `FORCE_ADD_IGNORED=True`。
+- 没有 staged changes 时跳过 commit/push。
+
+验收标准：
+
+- 未设置 token 或开关未打开时，不会产生 commit。
+- 设置 `COMMIT_AND_PUSH_OUTPUTS=True` 且有 staged changes 时，能创建 commit 并 push 到 `origin/main`。
+- notebook 输出不打印完整 token。
+
 ## Notebook 01: Baseline
 
 名称：

@@ -43,6 +43,7 @@ Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google
 - `train/check_unsloth_qwen3_asr.py`：检查 Unsloth 是否能加载 Qwen3-ASR 并精确匹配 audio tower target。
 - `train/train_qwen3_asr_lora.py`：使用 Transformers + PEFT 对 Qwen3-ASR 跑 LoRA smoke training。
 - `notebooks/00_clone_github_colab.ipynb`：Colab/Google Drive clone 或更新 GitHub 工程，并校验当前 commit 和关键修复。
+- `notebooks/00_github_commit_push_colab.ipynb`：Colab/Google Drive 中单独提交并推送受控实验输出，使用 Colab Secret `GITHUB_TOKEN` 授权。
 - `notebooks/01_baseline_colab.ipynb`：Colab/Google Drive baseline smoke notebook。
 - `notebooks/02_mvp_150_eval_colab.ipynb`：Colab/Google Drive MVP 150 baseline 评测 notebook。
 - `notebooks/03_train_lora_colab.ipynb`：Colab/Google Drive LoRA 探测和 PEFT smoke training 入口。
