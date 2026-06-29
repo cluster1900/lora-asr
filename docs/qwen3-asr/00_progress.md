@@ -4,9 +4,9 @@
 
 ## 当前状态
 
-当前阶段：推进 `05D LoRA MVP 正式训练闭环` 的评测环节。`05A` 训练前探测、`05B` Unsloth 兼容性检查和 `05C` Transformers + PEFT smoke training 均已完成；正式 LoRA MVP bootstrap 训练产物已经保存，下一步必须用固定 held-out test 验证 adapter 是否真的改善 ASR 指标。
+当前阶段：`05D LoRA MVP 正式训练闭环` 第一轮已经完成评测，结论是不通过。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练和 held-out MVP 150 评测均已完成；v1 adapter 没有改善目标 degraded 场景。
 
-现在的执行重点是：新增 LoRA adapter always-on 推理入口和 `05_eval_lora_mvp_colab.ipynb`，在 MVP 150 hard profile 上生成 LoRA prediction、WER/CER、错误分析和 base-vs-LoRA 对比。只有 LoRA 至少在 noise 或 reverb 有收益且 clean regression 被量化后，才进入 router。
+现在的执行重点是：暂停 router，进入 `05E LoRA MVP v2 ablation`。下一轮先做更保守的小实验，固定 held-out MVP 150 不变，排查 v1 是训练数据、target 组合、步数还是学习率导致 noise/reverb 变差。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -32,6 +32,7 @@
 - 已新增 `notebooks/00_clone_github_colab.ipynb`，用于在 Colab/Google Drive 中 clone 或更新 GitHub 工程，并确认当前 commit 与关键修复标记。
 - 已完成 `05C Transformers + PEFT smoke training` 的 Colab 20 step 验收：99 个 audio tower target、loss 非 NaN、adapter/processor/summary 已保存到本地 checkpoint 目录。该结果只作为训练通路验证，不作为 LoRA MVP 指标。
 - 已完成正式 LoRA MVP bootstrap 训练产物同步：`checkpoints/qwen3-asr-1.7b-lora-mvp/` 包含 adapter、processor、target_modules、training_config、loss_log 和 summary；`summary.json` 记录 `status=trained`、`steps=600`。
+- 已完成 v1 LoRA always-on held-out 评测：`outputs/lora_mvp_eval/` 包含 prediction、scored、metrics、scenario CSV 和错误分析输出。
 
 ## 进行中
 
@@ -40,14 +41,19 @@
   - 新增独立 bootstrap train/val 数据入口，第一版优先覆盖 clean、noise、reverb。
   - 训练仍使用已确认的 99 个 audio tower target，先验证 noise/reverb 是否相对 base 改善，再决定是否扩展 target 或进入 router。
   - 已新增 `notebooks/04_train_lora_mvp_colab.ipynb` 作为正式 MVP 训练入口；`03_train_lora_colab.ipynb` 继续只承担探测和 20 step smoke training。
-  - 正在补齐 LoRA always-on 推理与评测入口，用固定 MVP 150 held-out test 对比 base 与 LoRA。
+  - v1 评测已完成，结果不满足验收标准：noise/reverb 均相对 base 变差。
+- `05E LoRA MVP v2 ablation`：
+  - 不进入 router。
+  - 固定同一 held-out MVP 150 作为 test。
+  - 第一轮 v2 使用 attention-only target、noise/reverb-only 训练样本、更低学习率和更少 step，确认是否 speech projection、clean 混入或训练过量导致退化。
+  - 150 step 短跑必须按 `scenario + text_length_bucket` 均衡轮转，覆盖 noise/reverb 的 short 和 long 样本。
 
 ## 下一批里程碑
 
-1. 实现或验证 LoRA adapter 加载推理，至少跑通 1 条 clean 和 1 条 degraded 音频。
-2. 用固定 MVP 150 held-out test 集比较 base 与 LoRA，并记录 clean regression、noise/reverb 改善和 dropout/far_field 观察结果。
-3. 如果 noise/reverb 没有改善，先调整训练数据、步数或 target，不进入 router。
-4. 如果 LoRA 有收益，再进入 router MVP：训练 clean/degraded 分类器并比较 always-base、always-LoRA、router。
+1. 新增 v2 ablation 配置和 Colab 入口，先跑 attention-only + noise/reverb-only + conservative learning rate。
+2. 用固定 MVP 150 held-out test 集比较 base、v1 和 v2，记录 clean regression、noise/reverb 改善和 dropout/far_field 观察结果。
+3. 如果 v2 仍没有改善，继续做 target/data ablation，不进入 router。
+4. 只有当 LoRA always-on 至少在 noise 或 reverb 明确优于 base 后，再进入 router MVP。
 
 ## 待确认问题
 
@@ -255,3 +261,27 @@ RuntimeError: Input type (c10::Half) and bias type (float) should be the same
 `status=trained`、`steps=600`、`loss_last=0.41244810819625854`。下一步进入
 LoRA always-on held-out 评测，目标是产出 `outputs/lora_mvp_eval/` 下的
 prediction、scored、metrics、scenario CSV 和错误分析输出。
+
+完成 v1 LoRA always-on held-out 评测。评测文件位于 `outputs/lora_mvp_eval/`，
+输入为固定 MVP 150 hard profile，共 150 条，推理错误 0 条，empty output 0 条。
+
+base vs LoRA v1 结果：
+
+| scenario | base WER | LoRA v1 WER | absolute delta | relative delta |
+| --- | ---: | ---: | ---: | ---: |
+| overall | 0.483925 | 0.543215 | +0.059290 | +12.25% |
+| degraded-only | 0.602296 | 0.676931 | +0.074635 | +12.39% |
+| clean | 0.010438 | 0.008351 | -0.002087 | -20.00% |
+| noise | 0.336117 | 0.419624 | +0.083507 | +24.84% |
+| reverb | 0.415449 | 0.521921 | +0.106472 | +25.63% |
+| dropout | 0.759916 | 0.770355 | +0.010439 | +1.37% |
+| far_field | 0.897704 | 0.995825 | +0.098121 | +10.93% |
+
+结论：v1 不满足 LoRA MVP 验收标准。虽然 clean 小幅改善，但目标场景 noise 和
+reverb 均明显变差，degraded-only 也变差。逐样本对齐显示 150 条中 17 条改善、
+50 条变差、83 条持平；变差集中在 noise/reverb/far_field。当前不进入 router。
+
+下一步：进入 `05E LoRA MVP v2 ablation`，先做更保守的 attention-only、
+noise/reverb-only、小学习率、短步数实验。由于步数减少，训练采样必须显式平衡
+short/long，不允许因为原始 manifest 顺序导致 150 step 主要覆盖短句。评测仍使用
+同一 MVP 150 held-out test。

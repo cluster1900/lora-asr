@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 from importlib import metadata as importlib_metadata
 import json
 import math
@@ -127,6 +128,55 @@ def select_rows(rows: list[dict[str, Any]], include_scenarios: set[str], limit: 
         if limit > 0 and len(selected) >= limit:
             break
     return selected
+
+
+def balanced_round_robin_rows(rows: list[dict[str, Any]], bucket_fields: list[str]) -> list[dict[str, Any]]:
+    """按指定字段组合做均衡轮转。
+
+    v2 快速实验会减少 step 数。如果继续使用 manifest 原始顺序，前几十步可能
+    主要看到 short 样本，导致结论被数据顺序污染。这里把样本按
+    `scenario + text_length_bucket` 等字段分桶，再轮转取样。
+    """
+    if not bucket_fields:
+        return rows
+
+    buckets: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        key = tuple(str(row.get(field, "")) for field in bucket_fields)
+        buckets[key].append(row)
+    if len(buckets) <= 1:
+        return rows
+
+    ordered_keys = sorted(buckets)
+    max_len = max(len(items) for items in buckets.values())
+    ordered: list[dict[str, Any]] = []
+    for index in range(max_len):
+        for key in ordered_keys:
+            items = buckets[key]
+            if index < len(items):
+                ordered.append(items[index])
+    return ordered
+
+
+def prepare_training_rows(
+    rows: list[dict[str, Any]],
+    include_scenarios: set[str],
+    limit: int,
+    sampling_strategy: str,
+    sampling_bucket_fields: list[str],
+) -> list[dict[str, Any]]:
+    """筛选并按采样策略重排训练样本。"""
+    selected = select_rows(rows, include_scenarios, 0)
+    if sampling_strategy == "manifest_order":
+        ordered = selected
+    elif sampling_strategy == "scenario_bucket_round_robin":
+        ordered = balanced_round_robin_rows(selected, sampling_bucket_fields)
+    else:
+        raise ValueError(f"Unsupported sampling strategy: {sampling_strategy}")
+
+    if limit > 0:
+        return ordered[:limit]
+    return ordered
 
 
 def validate_audio_paths(
@@ -481,6 +531,13 @@ def parse_csv_set(value: str) -> set[str]:
     return {item.strip() for item in value.split(",") if item.strip()}
 
 
+def parse_csv_list(value: str) -> list[str]:
+    """解析逗号分隔的有序字段列表。"""
+    if not value.strip():
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/train/qwen3_asr_lora_mvp.yaml")
@@ -494,6 +551,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language", default="English")
     parser.add_argument("--context", default="")
     parser.add_argument("--include-scenarios", default="", help="Comma-separated scenario filter.")
+    parser.add_argument(
+        "--sampling-strategy",
+        default=None,
+        choices=["manifest_order", "scenario_bucket_round_robin"],
+        help="Training row ordering after scenario filtering.",
+    )
+    parser.add_argument(
+        "--sampling-bucket-fields",
+        default=None,
+        help="Comma-separated fields for scenario_bucket_round_robin, e.g. scenario,text_length_bucket.",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Only use first N selected rows when > 0.")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -530,6 +598,10 @@ def apply_arg_defaults(args: argparse.Namespace, config: dict[str, Any]) -> argp
     args.peft_task_type = str(training_config.get("peft_task_type", "none")).lower()
     args.gradient_checkpointing = bool(training_config.get("gradient_checkpointing", True))
     args.seed = int(training_config.get("seed", 42))
+    args.sampling_strategy = args.sampling_strategy or str(training_config.get("sampling_strategy", "manifest_order"))
+    bucket_fields = training_config.get("sampling_bucket_fields", [])
+    if args.sampling_bucket_fields is None:
+        args.sampling_bucket_fields = ",".join(str(item) for item in bucket_fields)
     return args
 
 
@@ -552,11 +624,26 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rows = read_jsonl(manifest_path)
-    selected_rows = select_rows(rows, parse_csv_set(args.include_scenarios), args.limit)
+    include_scenarios = parse_csv_set(args.include_scenarios)
+    sampling_bucket_fields = parse_csv_list(args.sampling_bucket_fields or "")
+    selected_rows = prepare_training_rows(
+        rows=rows,
+        include_scenarios=include_scenarios,
+        limit=args.limit,
+        sampling_strategy=args.sampling_strategy,
+        sampling_bucket_fields=sampling_bucket_fields,
+    )
     if not selected_rows:
         raise ValueError("No training rows selected.")
 
-    print(f"[data] manifest={manifest_path} selected_rows={len(selected_rows)}")
+    print(
+        "[data] manifest={manifest} selected_rows={rows} sampling={sampling} buckets={buckets}".format(
+            manifest=manifest_path,
+            rows=len(selected_rows),
+            sampling=args.sampling_strategy,
+            buckets=",".join(sampling_bucket_fields),
+        )
+    )
     checked_audio = validate_audio_paths(selected_rows, manifest_path, args.audio_root)
     print(f"[data] verified_audio_paths={checked_audio}")
     print(f"[load] model={args.model_id} quantization={args.quantization} dtype={args.dtype}")
@@ -589,7 +676,9 @@ def main() -> None:
         "language": args.language,
         "context": args.context,
         "limit": args.limit,
-        "include_scenarios": sorted(parse_csv_set(args.include_scenarios)),
+        "include_scenarios": sorted(include_scenarios),
+        "sampling_strategy": args.sampling_strategy,
+        "sampling_bucket_fields": sampling_bucket_fields,
         "max_steps": args.max_steps,
         "batch_size": args.batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
@@ -657,11 +746,20 @@ def main() -> None:
             "step": step,
             "loss": loss_value,
             "scenario": row.get("scenario", ""),
+            "text_length_bucket": row.get("text_length_bucket", ""),
             "utterance_id": row.get("utterance_id", ""),
             "answer_tokens": int((batch["labels"] != -100).sum().detach().cpu().item()),
         }
         append_jsonl(log_path, record)
-        print(f"[step {step}/{args.max_steps}] loss={loss_value:.6f} scenario={record['scenario']}")
+        print(
+            "[step {step}/{max_steps}] loss={loss:.6f} scenario={scenario} bucket={bucket}".format(
+                step=step,
+                max_steps=args.max_steps,
+                loss=loss_value,
+                scenario=record["scenario"],
+                bucket=record["text_length_bucket"],
+            )
+        )
 
     adapter_dir = output_dir / "adapter"
     if not args.no_save_adapter:

@@ -17,7 +17,7 @@ clean/noise 音频
   -> overall 与 scenario-level 指标
 ```
 
-Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。训练前探测已确认官方 `qwen-asr` wrapper 暴露 `Qwen3ASRForConditionalGeneration` 根节点，第一版 LoRA smoke target 收敛为 audio tower attention + speech projection。Unsloth 兼容性检查已失败，当前训练框架回退为 Transformers + PEFT；20 step smoke training 已跑通。正式 LoRA MVP bootstrap 训练产物已经保存，当前重点是 adapter 加载推理和固定 held-out base-vs-LoRA 评测。
+Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。训练前探测已确认官方 `qwen-asr` wrapper 暴露 `Qwen3ASRForConditionalGeneration` 根节点，第一版 LoRA smoke target 收敛为 audio tower attention + speech projection。Unsloth 兼容性检查已失败，当前训练框架回退为 Transformers + PEFT；20 step smoke training 已跑通。正式 LoRA v1 bootstrap 训练和 held-out 评测已完成，但 noise/reverb 目标场景变差，因此当前进入 v2 快速 ablation，不进入 router。
 
 Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google Drive 中的工程代码已经更新到 GitHub 最新提交，再继续执行 baseline 或训练 notebook。
 
@@ -50,6 +50,7 @@ Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google
 - `notebooks/03_train_lora_colab.ipynb`：Colab/Google Drive LoRA 探测和 PEFT smoke training 入口。
 - `notebooks/04_train_lora_mvp_colab.ipynb`：Colab/Google Drive 正式 LoRA MVP bootstrap 训练入口，默认 600 step。
 - `notebooks/05_eval_lora_mvp_colab.ipynb`：Colab/Google Drive LoRA MVP held-out 评测入口，对比 base 与 LoRA。
+- `notebooks/06_train_lora_mvp_v2_colab.ipynb`：Colab/Google Drive LoRA MVP v2 快速 ablation 入口，默认 attention-only、noise/reverb-only、长短句均衡采样。
 - `configs/baseline/qwen3_asr_baseline.yaml`：baseline smoke 配置。
 
 ## 快速开始
@@ -261,6 +262,6 @@ train/        后续 LoRA/QLoRA 训练入口
 
 按路线图继续执行：
 
-1. 执行 [05 LoRA 训练 MVP](docs/qwen3-asr/roadmap/05_lora_training_mvp.md) 的 `05D` 评测：用固定 MVP 150 held-out test 集比较 base 与 LoRA。
-2. 重点检查 noise/reverb 改善、clean regression、dropout/far_field 观察结果。
-3. 若 LoRA 有收益，再进入 [07 Router MVP](docs/qwen3-asr/roadmap/07_router_mvp.md)。
+1. 执行 [05 LoRA 训练 MVP](docs/qwen3-asr/roadmap/05_lora_training_mvp.md) 的 `05E`：跑 v2 attention-only、noise/reverb-only、长短句均衡采样短实验。
+2. 用固定 MVP 150 held-out test 集比较 base、v1 和 v2。
+3. 只有当 LoRA always-on 至少在 noise 或 reverb 优于 base 后，再进入 [07 Router MVP](docs/qwen3-asr/roadmap/07_router_mvp.md)。

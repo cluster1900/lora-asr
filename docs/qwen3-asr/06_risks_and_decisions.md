@@ -120,6 +120,25 @@
 - 新增 `configs/train/qwen3_asr_lora_mvp_train.yaml` 作为正式 MVP 训练配置。
 - 评测仍使用 `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json` 作为 base 对照。
 
+### D011: v1 LoRA 不进入 router，先做 v2 ablation
+
+决策：
+
+- v1 LoRA always-on 没有通过 MVP 验收，不进入 router。
+- 下一步新增 v2 ablation：attention-only、noise/reverb-only、更低学习率、更少 step。
+
+原因：
+
+- v1 clean WER 小幅改善，但目标场景 noise 和 reverb 分别相对 base 变差 24.84% 和 25.63%。
+- degraded-only WER 从 0.602296 变为 0.676931，相对变差 12.39%。
+- router 的价值建立在 LoRA 对 degraded 样本有收益的前提上；当前 always-LoRA 不优于 base。
+
+影响：
+
+- `05E` 先做训练策略和 target ablation。
+- 暂不实现 router 阈值、router 训练或 router 推理。
+- v1 checkpoint 和输出保留为失败对照，不覆盖。
+
 ## 风险
 
 ### R001: Qwen3-ASR 在强退化音频上仍可能失败
@@ -159,6 +178,19 @@
 - 检查 Qwen3-ASR 模块名。
 - 做 ablation：仅后层 LLM、仅音频投影、联合 target。
 - 按 scenario 追踪结果。
+
+### R003C: LoRA 可能改善 clean 但损害 degraded
+
+影响：
+
+- v1 已出现该现象：clean WER 小幅改善，但 noise/reverb/degraded-only 变差。
+- 如果只看 loss 或 clean 指标，可能误判训练成功。
+
+缓解：
+
+- LoRA MVP 验收必须以 fixed held-out MVP 150 的 scenario-level WER 为准。
+- 在 LoRA 没有赢 base 之前，不进入 router。
+- 做 target/data/step/lr ablation，并记录每一轮 base-vs-LoRA 对比。
 
 ### R003A: 官方 qwen-asr wrapper 可能不直接暴露训练所需模块
 

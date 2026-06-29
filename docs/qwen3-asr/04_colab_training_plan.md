@@ -341,11 +341,37 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 - clean WER 相对 base 的退化被量化，第一版警戒线为相对退化不超过 5%。
 - dropout 与 far_field 作为观察场景完整记录。
 
-## Notebook 06: Router
+## Notebook 06: LoRA MVP v2 快速 ablation
 
 名称：
 
-- `notebooks/06_router_colab.ipynb`
+- `notebooks/06_train_lora_mvp_v2_colab.ipynb`
+
+目的：
+
+- 在 v1 LoRA 未通过 held-out 验收后，快速定位训练策略问题。
+- 默认运行 attention-only、noise/reverb-only、低学习率、150 step 的 v2 短跑。
+- 训练采样按 `scenario + text_length_bucket` 均衡轮转，确保 short/long 音频都被覆盖。
+- 训练完成后立即在 MVP 150 held-out test 上评测，并对比 base、v1 和 v2。
+
+通过标准：
+
+- preflight target count 等于 96。
+- loss 有限，adapter 可保存。
+- loss log 同时覆盖 noise/reverb 和 short/long。
+- held-out eval 生成 prediction、scored、metrics、scenario CSV 和错误分析。
+
+验收标准：
+
+- noise 或 reverb 至少一个场景相对 base 改善。
+- clean regression 被量化。
+- 如果 v2 仍未赢 base，继续做 target/data/lr ablation，不进入 router。
+
+## Notebook 07: Router
+
+名称：
+
+- `notebooks/07_router_colab.ipynb`
 
 目的：
 
@@ -412,5 +438,6 @@ THE TRANSCRIPT TEXT
 - `03_train_lora_colab.ipynb` 产出可加载 LoRA adapter。
 - `04_train_lora_mvp_colab.ipynb` 产出正式 LoRA MVP adapter。
 - `05_eval_lora_mvp_colab.ipynb` 产出 LoRA always-on overall 和 scenario-level 指标。
-- `06_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
+- `06_train_lora_mvp_v2_colab.ipynb` 产出 v2 ablation 指标。
+- `07_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
 - 所有 notebook 的输入、输出和依赖都能追溯到配置文件。

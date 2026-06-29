@@ -279,3 +279,21 @@ Colab 运行测试：
 - noise 或 reverb 至少一个场景 WER 相对 base 改善。
 - clean regression 量化记录；第一版警戒线为相对退化不超过 5%。
 - dropout/far_field 即使不改善也要作为观察结果记录。
+
+### v1 LoRA MVP 评测结论
+
+v1 已完成 held-out MVP 150 评测，但不满足验收标准：
+
+- overall WER：base 0.483925，LoRA v1 0.543215，相对变差 12.25%。
+- degraded-only WER：base 0.602296，LoRA v1 0.676931，相对变差 12.39%。
+- clean WER：base 0.010438，LoRA v1 0.008351，小幅改善。
+- noise WER：base 0.336117，LoRA v1 0.419624，相对变差 24.84%。
+- reverb WER：base 0.415449，LoRA v1 0.521921，相对变差 25.63%。
+
+因此当前阶段不能进入 router。下一轮测试对象是 v2 ablation：
+
+- target count 应从 99 降到 96，只训练 audio tower attention。
+- 训练样本只选择 noise/reverb。
+- 训练采样必须按 `scenario + text_length_bucket` 均衡轮转，避免短步数实验只覆盖短句。
+- 使用固定 MVP 150 held-out test 继续对比 base、v1 和 v2。
+- 通过标准仍然是 noise 或 reverb 至少一个场景相对 base 改善。

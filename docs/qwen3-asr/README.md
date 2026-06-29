@@ -22,7 +22,7 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 
 ## 当前范围
 
-当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出第一批分析文件，`05A LoRA 训练前探测`、`05B Unsloth 兼容性检查` 和 `05C Transformers + PEFT smoke training` 已完成。正式 LoRA MVP bootstrap 训练产物已保存，现在进入 `05D` 的 adapter 推理与 held-out 指标评测。
+当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出第一批分析文件，`05A LoRA 训练前探测`、`05B Unsloth 兼容性检查` 和 `05C Transformers + PEFT smoke training` 已完成。正式 LoRA v1 bootstrap 训练和 held-out 评测已完成，但 v1 没有改善 noise/reverb，当前进入 `05E LoRA MVP v2 ablation`。
 
 已完成：
 
@@ -39,8 +39,9 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 - 已完成 20 step PEFT smoke training，证明 99 个 audio tower target 可挂载、loss 非 NaN、adapter 可保存。
 - 已新增 LoRA MVP bootstrap train/val 数据生成入口，正式训练不直接复用 MVP 150 held-out test。
 - 已完成正式 LoRA MVP bootstrap 训练产物同步，`checkpoints/qwen3-asr-1.7b-lora-mvp/summary.json` 记录 `status=trained` 和 `steps=600`。
+- 已完成 v1 held-out 评测，结论是不通过：overall 和 degraded-only 均变差，noise/reverb 均变差。
 
-下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05D` 评测部分，实现或验证 LoRA adapter 推理，并在固定 MVP 150 held-out test 上比较 base 与 LoRA。
+下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05E`，跑 v2 attention-only、noise/reverb-only、长短句均衡采样短实验，并在固定 MVP 150 held-out test 上比较 base、v1 和 v2。
 
 MVP 会按路线图继续完成：
 
