@@ -367,6 +367,20 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 - clean regression 被量化。
 - 如果 v2 仍未赢 base，继续做 target/data/lr ablation，不进入 router。
 
+当前执行结果：
+
+- v2 已完成 150 step 训练，target count 为 96，adapter 和 processor 均已保存。
+- loss log 覆盖 noise/reverb 和 short/long：noise long 38、noise short 38、reverb long 37、reverb short 37。
+- held-out MVP 150 推理和评测已完成，empty output rate 为 0。
+- v2 相比 v1 在 dropout 和 far_field 上略有改善，clean 与 v1 持平，但 noise/reverb 仍比 v1 和 base 更差。
+- 因此 v2 不通过 LoRA MVP 验收，继续保留 router 暂停状态。
+
+v2 结论对下一轮训练的影响：
+
+- 单纯减少 step、降低学习率、移除 clean 样本和移除 speech projection 不能解决目标场景退化。
+- 后续快速迭代应继续保留固定 held-out MVP 150，并优先测试更小学习率/更早停止点、audio tower 后层 attention-only、训练目标格式和数据难度，而不是直接扩大训练规模。
+- 每一轮仍必须输出 base/v1/当前版本的 scenario-level 对比，避免只看 loss 判断训练成功。
+
 ## Notebook 07: Router
 
 名称：

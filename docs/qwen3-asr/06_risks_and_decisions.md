@@ -139,6 +139,26 @@
 - 暂不实现 router 阈值、router 训练或 router 推理。
 - v1 checkpoint 和输出保留为失败对照，不覆盖。
 
+### D012: v2 attention-only 短跑仍不进入 router
+
+决策：
+
+- v2 LoRA attention-only 短跑不通过 MVP 验收，不进入 router。
+- 下一轮继续在 LoRA always-on 层面做快速 ablation。
+
+原因：
+
+- v2 采用更保守设置：96 个 audio tower attention target、noise/reverb-only 训练、学习率 1e-5、150 step、`scenario + text_length_bucket` 均衡采样。
+- v2 相比 v1 在 dropout 和 far_field 上略有改善，clean 持平，但目标场景 noise/reverb 没有改善。
+- fixed MVP 150 上，noise WER 为 0.438413，reverb WER 为 0.532359，均差于 base 和 v1。
+- 这说明 v1 的主要问题不能只归因于 speech projection、clean 样本混入、训练步数过多或短跑长度覆盖不足。
+
+影响：
+
+- router 继续暂停，因为 LoRA 对 degraded 目标场景尚无明确收益。
+- 后续优先验证更早停止点、更小学习率、后层 audio attention target、训练目标格式和数据难度。
+- v2 输出保留为 ablation 对照，不覆盖 v1 或 base。
+
 ## 风险
 
 ### R001: Qwen3-ASR 在强退化音频上仍可能失败
@@ -184,6 +204,7 @@
 影响：
 
 - v1 已出现该现象：clean WER 小幅改善，但 noise/reverb/degraded-only 变差。
+- v2 继续验证了该风险：clean 未退化，dropout/far_field 略稳，但目标 noise/reverb 仍相对 base 变差。
 - 如果只看 loss 或 clean 指标，可能误判训练成功。
 
 缓解：

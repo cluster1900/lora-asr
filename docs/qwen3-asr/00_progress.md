@@ -4,9 +4,9 @@
 
 ## 当前状态
 
-当前阶段：`05D LoRA MVP 正式训练闭环` 第一轮已经完成评测，结论是不通过。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练和 held-out MVP 150 评测均已完成；v1 adapter 没有改善目标 degraded 场景。
+当前阶段：`05E LoRA MVP v2 ablation` 第一轮短跑已经完成评测，结论仍是不通过。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练、v1 held-out MVP 150 评测、v2 attention-only 短跑和 v2 held-out MVP 150 评测均已完成；v1/v2 adapter 都没有改善目标 noise/reverb 场景。
 
-现在的执行重点是：暂停 router，进入 `05E LoRA MVP v2 ablation`。下一轮先做更保守的小实验，固定 held-out MVP 150 不变，排查 v1 是训练数据、target 组合、步数还是学习率导致 noise/reverb 变差。
+现在的执行重点是：继续暂停 router，在同一 held-out MVP 150 上做更快的问题定位。v2 已经排除一部分假设：仅移除 speech projection、移除 clean 训练样本、降低学习率、减少步数，并用 `scenario + text_length_bucket` 平衡短长文本，仍不能让 noise/reverb 优于 base。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -33,27 +33,23 @@
 - 已完成 `05C Transformers + PEFT smoke training` 的 Colab 20 step 验收：99 个 audio tower target、loss 非 NaN、adapter/processor/summary 已保存到本地 checkpoint 目录。该结果只作为训练通路验证，不作为 LoRA MVP 指标。
 - 已完成正式 LoRA MVP bootstrap 训练产物同步：`checkpoints/qwen3-asr-1.7b-lora-mvp/` 包含 adapter、processor、target_modules、training_config、loss_log 和 summary；`summary.json` 记录 `status=trained`、`steps=600`。
 - 已完成 v1 LoRA always-on held-out 评测：`outputs/lora_mvp_eval/` 包含 prediction、scored、metrics、scenario CSV 和错误分析输出。
+- 已完成 v2 LoRA attention-only ablation 训练与 held-out 评测：`checkpoints/qwen3-asr-1.7b-lora-mvp-v2-attn-noise-reverb/` 和 `outputs/lora_mvp_v2_eval/` 已同步，loss 有限、adapter 可保存、推理 empty output 为 0。
 
 ## 进行中
 
-- `05D LoRA MVP 正式训练闭环`：
-  - 固定 `outputs/baseline_mvp_150/` 和 `data/jsonl/baseline_mvp_150.local.jsonl` 作为 held-out test 对照，不直接用于正式 LoRA 训练。
-  - 新增独立 bootstrap train/val 数据入口，第一版优先覆盖 clean、noise、reverb。
-  - 训练仍使用已确认的 99 个 audio tower target，先验证 noise/reverb 是否相对 base 改善，再决定是否扩展 target 或进入 router。
-  - 已新增 `notebooks/04_train_lora_mvp_colab.ipynb` 作为正式 MVP 训练入口；`03_train_lora_colab.ipynb` 继续只承担探测和 20 step smoke training。
-  - v1 评测已完成，结果不满足验收标准：noise/reverb 均相对 base 变差。
 - `05E LoRA MVP v2 ablation`：
   - 不进入 router。
   - 固定同一 held-out MVP 150 作为 test。
-  - 第一轮 v2 使用 attention-only target、noise/reverb-only 训练样本、更低学习率和更少 step，确认是否 speech projection、clean 混入或训练过量导致退化。
-  - 150 step 短跑必须按 `scenario + text_length_bucket` 均衡轮转，覆盖 noise/reverb 的 short 和 long 样本。
+  - 第一轮 v2 已完成：attention-only target、noise/reverb-only 训练样本、更低学习率、更少 step、`scenario + text_length_bucket` 均衡轮转。
+  - v2 结果比 v1 在 dropout/far_field 上略稳，但 noise/reverb 仍差于 v1 和 base，因此仍不满足 LoRA MVP 验收标准。
+  - 下一轮重点从“单纯少训一点”转为验证训练目标、target 深度、数据难度和早停点。
 
 ## 下一批里程碑
 
-1. 新增 v2 ablation 配置和 Colab 入口，先跑 attention-only + noise/reverb-only + conservative learning rate。
-2. 用固定 MVP 150 held-out test 集比较 base、v1 和 v2，记录 clean regression、noise/reverb 改善和 dropout/far_field 观察结果。
-3. 如果 v2 仍没有改善，继续做 target/data ablation，不进入 router。
-4. 只有当 LoRA always-on 至少在 noise 或 reverb 明确优于 base 后，再进入 router MVP。
+1. 对 v2 输出做逐样本错误对齐，确认哪些样本从 v1 改善、哪些样本继续恶化。
+2. 新增下一轮快速 ablation：保留短步数，但显式比较 50/100/150 step 或更小学习率，并保持 short/long 均衡。
+3. 增加 target 深度对照，例如只训练 audio tower 后半层 attention，避免全 24 层 attention 对 ASR 表征造成整体扰动。
+4. 继续固定同一 MVP 150 held-out test；只有当 LoRA always-on 至少在 noise 或 reverb 明确优于 base 后，再进入 router MVP。
 
 ## 待确认问题
 
@@ -285,3 +281,32 @@ reverb 均明显变差，degraded-only 也变差。逐样本对齐显示 150 条
 noise/reverb-only、小学习率、短步数实验。由于步数减少，训练采样必须显式平衡
 short/long，不允许因为原始 manifest 顺序导致 150 step 主要覆盖短句。评测仍使用
 同一 MVP 150 held-out test。
+
+完成 v2 LoRA attention-only 短跑和 held-out 评测。当前 adapter 位于
+`checkpoints/qwen3-asr-1.7b-lora-mvp-v2-attn-noise-reverb/adapter/`，`summary.json`
+显示 `status=trained`、`steps=150`、`loss_last=0.5158780813217163`、训练耗时约
+166.8 秒。训练实际采样按 `scenario + text_length_bucket` 轮转：noise long 38、
+noise short 38、reverb long 37、reverb short 37，满足短长文本覆盖要求。
+
+v2 相比 v1 的实验优化：
+
+- LoRA target 从 99 个变为 96 个，只保留 audio tower attention，移除 speech projection。
+- 训练场景从 clean/noise/reverb 改为 noise/reverb-only，避免 clean 样本稀释目标 degraded 场景。
+- 学习率从 2e-5 降到 1e-5，训练步数从 600 降到 150，用于降低过训和破坏性更新风险。
+- 采样从普通顺序训练改为 `scenario + text_length_bucket` 均衡轮转，避免短跑只覆盖某一类长度。
+
+base vs LoRA v1 vs LoRA v2 结果：
+
+| scenario | base WER | LoRA v1 WER | LoRA v2 WER | v2 - v1 | v2 - base |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| overall | 0.483925 | 0.543215 | 0.545720 | +0.002505 | +0.061795 |
+| clean | 0.010438 | 0.008351 | 0.008351 | +0.000000 | -0.002087 |
+| noise | 0.336117 | 0.419624 | 0.438413 | +0.018789 | +0.102296 |
+| reverb | 0.415449 | 0.521921 | 0.532359 | +0.010438 | +0.116910 |
+| dropout | 0.759916 | 0.770355 | 0.764092 | -0.006263 | +0.004176 |
+| far_field | 0.897704 | 0.995825 | 0.985386 | -0.010439 | +0.087682 |
+
+逐样本对齐显示，v2 相比 v1：150 条中 12 条改善、14 条变差、124 条持平。
+改善主要体现在 dropout/far_field 的少量样本和 clean 稳定性；noise/reverb 作为
+训练目标场景没有改善，反而分别比 v1 更差 4.48% 和 2.00%。因此 v2 仍不满足
+LoRA MVP 验收标准，当前不进入 router。
