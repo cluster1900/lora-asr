@@ -1,6 +1,6 @@
 # Qwen3-ASR 鲁棒 ASR 项目方案
 
-最后更新：2026-06-19
+最后更新：2026-06-29
 
 本目录用于记录一个基于 Qwen3-ASR-1.7B 的独立鲁棒语音识别项目方案。
 
@@ -22,7 +22,7 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 
 ## 当前范围
 
-当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出第一批分析文件，`05A LoRA 训练前探测` 已完成，`05B Unsloth 兼容性检查` 已完成且结果为不兼容。现在进入 `05C Transformers + PEFT LoRA smoke training`。
+当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出第一批分析文件，`05A LoRA 训练前探测`、`05B Unsloth 兼容性检查` 和 `05C Transformers + PEFT smoke training` 已完成。现在进入 `05D LoRA MVP 正式训练闭环`。
 
 已完成：
 
@@ -36,17 +36,18 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 - 已新增 `train/inspect_qwen3_asr_modules.py` 和 `notebooks/03_train_lora_colab.ipynb`，用于 LoRA 训练前模块探测。
 - 已保存 `outputs/lora_probe/qwen3_asr_1_7b/` 探测输出，并确定第一版 smoke target：audio tower attention + speech projection。
 - 已新增 `train/check_unsloth_qwen3_asr.py`，并确认 Unsloth 当前无法直接加载 `Qwen/Qwen3-ASR-1.7B`。
+- 已完成 20 step PEFT smoke training，证明 99 个 audio tower target 可挂载、loss 非 NaN、adapter 可保存。
+- 已新增 LoRA MVP bootstrap train/val 数据生成入口，正式训练不直接复用 MVP 150 held-out test。
 
-下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05C`，实现 Transformers + PEFT LoRA smoke training 入口。
+下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05D`，生成独立 train/val，跑第一版 MVP 训练，实现或验证 LoRA adapter 推理，并在固定 MVP 150 held-out test 上比较 base 与 LoRA。
 
 MVP 会按路线图继续完成：
 
 1. 基于已完成的 Qwen3-ASR-1.7B baseline 和错误分析确定 LoRA 目标场景。
 2. 基于探测结果确定第一版 LoRA target。
-3. 跑通 5-20 step smoke training。
-4. 训练第一版 QLoRA ASR adapter。
-5. 评估 WER/CER、典型失败模式和 clean regression。
-6. 根据结果决定是否进入 router 和扩大训练规模。
+3. 使用独立 bootstrap train/val 训练第一版 QLoRA ASR adapter。
+4. 评估 WER/CER、典型失败模式和 clean regression。
+5. 根据结果决定是否进入 router 和扩大训练规模。
 
 最终目标是完成一个类似 Mega-ASR 的鲁棒 ASR 产品：具备鲁棒 ASR LoRA、音频质量 router、统一推理入口、数据增强管线、评测体系和发布文档。但实现方式必须独立于 Mega-ASR，基于 Qwen3-ASR-1.7B 自行开发。
 

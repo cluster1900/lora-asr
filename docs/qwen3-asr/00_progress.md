@@ -1,10 +1,12 @@
 # 开发进度
 
-最后更新：2026-06-20
+最后更新：2026-06-29
 
 ## 当前状态
 
-当前阶段：`05 LoRA 训练 MVP` 已完成训练前探测和 Unsloth 兼容性检查，正在执行 `05C Transformers + PEFT LoRA smoke training`。
+当前阶段：正式启动 `05 LoRA 训练 MVP`。`05A` 训练前探测、`05B` Unsloth 兼容性检查和 `05C` Transformers + PEFT smoke training 均已完成；但这些只证明训练链路可行，不等于 LoRA MVP 已完成。
+
+现在进入 `05D LoRA MVP 正式训练闭环`：先建立独立 train/val manifest，不复用 MVP 150 held-out test；再跑第一版 MVP 训练、adapter 加载推理和 base-vs-LoRA 评测。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -28,17 +30,22 @@
 - 已新增 `scripts/create_mvp_eval_audio.py` 和 `notebooks/02_mvp_150_eval_colab.ipynb`，用于生成并评测 clean/noise/reverb/far_field/dropout 各 30 条的 baseline MVP 集。
 - 已提交 `data/mvp_eval/audio/` 下 150 条 MVP smoke 音频，方便 Colab 直接 `git pull` 后运行 baseline、评测和 LoRA smoke training。
 - 已新增 `notebooks/00_clone_github_colab.ipynb`，用于在 Colab/Google Drive 中 clone 或更新 GitHub 工程，并确认当前 commit 与关键修复标记。
+- 已完成 `05C Transformers + PEFT smoke training` 的 Colab 20 step 验收：99 个 audio tower target、loss 非 NaN、adapter/processor/summary 已保存到本地 checkpoint 目录。该结果只作为训练通路验证，不作为 LoRA MVP 指标。
 
 ## 进行中
 
-- `05 LoRA 训练 MVP`：`05A LoRA 训练前探测` 已完成，`05B Unsloth 兼容性检查` 已完成且结果为不兼容。当前进入 `05C Transformers + PEFT LoRA smoke training`，继续使用已确认的 audio tower 99 个 target。
+- `05D LoRA MVP 正式训练闭环`：
+  - 固定 `outputs/baseline_mvp_150/` 和 `data/jsonl/baseline_mvp_150.local.jsonl` 作为 held-out test 对照，不直接用于正式 LoRA 训练。
+  - 新增独立 bootstrap train/val 数据入口，第一版优先覆盖 clean、noise、reverb。
+  - 训练仍使用已确认的 99 个 audio tower target，先验证 noise/reverb 是否相对 base 改善，再决定是否扩展 target 或进入 router。
 
 ## 下一批里程碑
 
-1. 在 Colab Free GPU 中跑 5-20 step smoke test。
-2. 验证 adapter 保存、加载和最小推理。
-3. 用同一套 MVP 150 test 集比较 base 与 LoRA，并记录 clean regression。
-4. 如果 smoke loss 和 adapter 验证正常，扩展到 noise/reverb 优先的小规模训练集。
+1. 生成独立 `train/val` LoRA MVP bootstrap manifest，并记录 stats 与 split 泄漏检查。
+2. 在 Colab GPU 中跑 200-1000 step 第一版 MVP 训练，保存 adapter、config、loss log 和 summary。
+3. 实现或验证 LoRA adapter 加载推理，至少跑通 1 条 clean 和 1 条 degraded 音频。
+4. 用固定 MVP 150 held-out test 集比较 base 与 LoRA，并记录 clean regression、noise/reverb 改善和 dropout/far_field 观察结果。
+5. 如果 noise/reverb 没有改善，先调整训练数据、步数或 target，不进入 router。
 
 ## 待确认问题
 
@@ -229,3 +236,13 @@ RuntimeError: Input type (c10::Half) and bias type (float) should be the same
 - `adapter/adapter_model.safetensors`、`adapter/adapter_config.json` 和 `processor/` 均已生成。
 
 注意：`summary.json` 中的 `estimated_lora_params` 在 4bit `Linear4bit` packed weight shape 下会被放大，不作为验收指标；本阶段以 PEFT 实际统计的 `trainable_parameter_summary.trainable_params` 为准。
+
+### 2026-06-29
+
+重新界定 LoRA MVP 状态：`05C` 已完成的是训练通路 smoke，不是正式 LoRA MVP。正式 LoRA MVP 从 `05D` 开始，要求独立 train/val 数据、固定 held-out test、base-vs-LoRA 指标对比和 clean regression 记录同时成立。
+
+本轮启动项：
+
+- 固定 MVP 150 hard profile 为 held-out test，不直接作为训练集。
+- 第一版 LoRA MVP 训练数据优先覆盖 clean、noise、reverb；dropout 和 far_field 暂作为测试观察场景。
+- 新增 bootstrap 数据生成入口和 MVP 训练配置后，再进入 Colab 训练。

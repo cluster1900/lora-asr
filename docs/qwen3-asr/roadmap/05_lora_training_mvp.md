@@ -1,6 +1,6 @@
 # 05 LoRA 训练 MVP
 
-最后更新：2026-06-19
+最后更新：2026-06-29
 
 ## 背景
 
@@ -17,8 +17,12 @@ Baseline 和数据 MVP 完成后，需要训练第一版 Qwen3-ASR 鲁棒 ASR Lo
 `05A LoRA 训练前探测` 已完成。本小阶段确认了 Qwen3-ASR 的真实模块结构、
 LoRA target 候选和 Colab 资源可行性。`05B Unsloth 兼容性检查` 已完成，结果为
 不兼容：Unsloth 当前无法通过 Transformers AutoConfig 加载 `model_type=qwen3_asr`。
-下一步进入 `05C Transformers + PEFT LoRA smoke training`：跑 5-20 step，验证
-target 可训练、loss 正常下降、adapter 可保存加载。
+`05C Transformers + PEFT LoRA smoke training` 已完成 20 step 验收，证明 99 个
+audio tower target 可挂载、loss 非 NaN、adapter 可保存。
+
+当前从 `05D LoRA MVP 正式训练闭环` 开始。注意：`05C` 不是 LoRA MVP 成功，
+只是不再被训练入口、target 和 Colab 依赖阻塞。`05D` 才开始验证 LoRA 是否
+真的改善 ASR 指标。
 
 ## 当前 Baseline 对照
 
@@ -32,11 +36,108 @@ MVP 150 hard profile 的 Qwen3-ASR base 结果：
 - degraded-only WER：约 0.602296。
 - empty output rate：所有场景均为 0.0。
 
-第一版 LoRA MVP 不应直接追求所有 hard degraded 场景都大幅改善。建议目标分层：
+第一版 LoRA MVP 不应直接追求所有 hard degraded 场景都大幅改善。目标分层：
 
 - 第一优化目标：noise、reverb。它们错误明显但没有完全崩溃，更适合验证 LoRA 是否能学到鲁棒性。
 - 观察目标：dropout、far_field。它们当前 WER 很高，第一版只要求记录是否改善，不作为唯一成败标准。
 - 硬门槛：clean regression。clean WER 已经约 1.04%，LoRA 后必须量化 clean 是否退化。
+
+## 05D 正式 LoRA MVP 边界
+
+### 背景
+
+20 step smoke training 使用固定小样本，只能证明训练链路可运行。正式 LoRA MVP
+需要独立训练数据、固定测试集、adapter 推理和指标对比，否则无法判断模型是否
+真的学到鲁棒性。
+
+### 范围
+
+本阶段做：
+
+- 生成独立 bootstrap train/val manifest。
+- 第一版训练只覆盖 clean、noise、reverb，优先验证可训练退化场景。
+- 固定 MVP 150 hard profile 作为 held-out test。
+- 对比 base 与 LoRA always-on，不做 router。
+- 记录 clean regression、noise/reverb 改善、dropout/far_field 观察指标。
+
+本阶段不做：
+
+- 不复用 MVP 150 held-out test 作为正式训练集。
+- 不声明达到或超过 Mega-ASR。
+- 不做 RL。
+- 不做 router 阈值或 router 训练。
+- 不把 Mega-ASR 上游 wrapper、训练入口或 target 规则引入本项目。
+
+### 数据设计
+
+第一版 bootstrap 数据使用本项目合成链路生成，目标是启动可复现训练闭环，而不是
+替代真实数据集。
+
+默认 split：
+
+- train：clean、noise、reverb 各 120 条。
+- val：clean、noise、reverb 各 30 条。
+- test：继续使用已固定的 MVP 150 hard profile。
+
+split 规则：
+
+- train 与 val 使用不同文本 index 和 `base_utterance_id`。
+- held-out test 使用 `baseline_mvp_150`，不参与训练和调参。
+- 每条样本记录 `split`、`scenario`、`is_degraded`、`seed`、`profile`、`base_utterance_id`、`utterance_id`、`reference_word_count`。
+
+第一版只训练 clean/noise/reverb 的原因：
+
+- clean 用于控制 clean regression。
+- noise/reverb 当前 base WER 分别为 0.336117 和 0.415449，错误明显但没有完全崩溃，适合验证 LoRA 是否有效。
+- dropout/far_field 暂不训练，避免第一版被过强合成退化拉偏；它们保留在 held-out test 中观察泛化。
+
+### MVP 启动命令
+
+本地或 Colab 生成 bootstrap train/val：
+
+```bash
+python3 scripts/create_lora_mvp_dataset.py \
+  --profile medium \
+  --train-items-per-scenario 120 \
+  --val-items-per-scenario 30 \
+  --scenarios clean,noise,reverb \
+  --force
+```
+
+第一版训练命令：
+
+```bash
+python train/train_qwen3_asr_lora.py \
+  --config configs/train/qwen3_asr_lora_mvp_train.yaml \
+  --manifest data/jsonl/lora_mvp_train.local.jsonl \
+  --audio-root . \
+  --output-dir checkpoints/qwen3-asr-1.7b-lora-mvp \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --quantization 4bit \
+  --language English \
+  --max-steps 600
+```
+
+### 05D 通过标准
+
+- train/val manifest 都可生成并通过路径校验。
+- train/val 的 `base_utterance_id` 无交集。
+- train/val 不包含 `baseline_mvp_150` 的 held-out 音频路径。
+- 训练 target 仍为 99 个 audio tower 模块。
+- 训练 loss 全部为有限值。
+- adapter、processor、target_modules、training_config、loss_log、summary 均已保存。
+- adapter 可重新加载并至少推理 1 条 clean、1 条 noise 或 reverb。
+
+### 05D 验收标准
+
+- 用固定 MVP 150 test 跑出 LoRA always-on prediction JSONL。
+- 使用同一评测脚本生成 scored JSONL、metrics JSON、scenario CSV。
+- noise 或 reverb 至少一个场景 WER 相对 base 改善。
+- clean WER 相对 base 的退化被量化；第一版警戒线为相对退化不超过 5%。
+- dropout 和 far_field 结果被记录为观察项，即使未改善也不能省略。
+- 若没有达到改善，进度文档必须记录失败结论和下一轮调整方向。
 
 ## 输入
 
@@ -270,6 +371,7 @@ seed: 42
 - checkpoint 可保存。
 - adapter 可重新加载并推理。
 - 推理输出可进入 WER/CER 评测。
+- 正式 MVP 训练必须使用独立 train/val manifest，不能直接训练 held-out MVP 150 test。
 
 ## 验收标准
 

@@ -1,6 +1,6 @@
 # 测试方案
 
-最后更新：2026-06-19
+最后更新：2026-06-29
 
 ## 目标
 
@@ -206,3 +206,41 @@ Colab 测试：
 - adapter 可保存到 `checkpoints/qwen3-asr-1.7b-lora/`。
 - adapter 可重新加载。
 - 至少 1 条 clean 和 1 条 degraded 音频能完成 LoRA 推理。
+
+## LoRA MVP 正式训练测试
+
+`05D` 开始验证 LoRA 是否真的改善 ASR 指标。它与 `05C` 的区别是：必须使用
+独立 train/val 数据训练，并在固定 held-out MVP 150 test 上与 base 对比。
+
+### 数据测试
+
+- `scripts/create_lora_mvp_dataset.py --help` 可执行。
+- 用小参数生成 smoke train/val 时，manifest 行数等于 `split_count * scenario_count`。
+- 每条样本包含 `audio`、`answer`、`language`、`scenario`、`split`、`source`、`is_degraded`、`base_utterance_id`、`seed`。
+- 每条样本的音频路径存在。
+- train 与 val 的 `base_utterance_id` 无交集。
+- train/val 不包含 MVP 150 held-out test 的音频路径。
+
+### 训练测试
+
+- `configs/train/qwen3_asr_lora_mvp_train.yaml` 可解析。
+- 训练 target 匹配数量仍为 99。
+- 可训练参数量以 PEFT 实际统计为准，约 1,683,456。
+- MVP 训练 loss 全部有限。
+- 输出目录包含 `adapter/`、`processor/`、`target_modules.json`、`training_config.json`、`loss_log.jsonl`、`summary.json`。
+
+### 推理测试
+
+- LoRA adapter 可重新加载。
+- 至少 1 条 clean 和 1 条 noise/reverb 可完成推理。
+- 推理失败记录到 JSONL 的 `error` 字段，不中断整批任务。
+- LoRA prediction JSONL 可被 `evaluation/eval_wer.py` 评分。
+
+### 验收测试
+
+- 在固定 MVP 150 held-out test 上跑 LoRA always-on。
+- 与 `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json` 对比。
+- 报告 clean、noise、reverb、dropout、far_field 五个场景。
+- noise 或 reverb 至少一个场景 WER 相对 base 改善。
+- clean regression 量化记录；第一版警戒线为相对退化不超过 5%。
+- dropout/far_field 即使不改善也要作为观察结果记录。

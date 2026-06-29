@@ -1,6 +1,6 @@
 # 风险与决策
 
-最后更新：2026-06-19
+最后更新：2026-06-29
 
 ## 已定决策
 
@@ -101,6 +101,25 @@
 - `05C` 进入 Transformers + PEFT smoke training。
 - qwen-asr 仍作为 baseline 和评测推理入口保留。
 
+### D010: MVP 150 固定为 held-out test，不作为正式 LoRA 训练集
+
+决策：
+
+- `baseline_mvp_150` 继续作为固定 held-out test。
+- 正式 LoRA MVP 从独立 bootstrap train/val manifest 开始训练。
+
+原因：
+
+- 20 step smoke training 曾使用 MVP 150 样本验证训练链路，但这不应用于判断模型效果。
+- 如果正式训练继续使用同一批测试样本，base-vs-LoRA 对比会高估收益。
+- 第一版 LoRA MVP 的核心问题是“能否在未见 held-out 场景上改善 noise/reverb，同时控制 clean regression”。
+
+影响：
+
+- 新增 `scripts/create_lora_mvp_dataset.py` 生成 train/val。
+- 新增 `configs/train/qwen3_asr_lora_mvp_train.yaml` 作为正式 MVP 训练配置。
+- 评测仍使用 `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json` 作为 base 对照。
+
 ## 风险
 
 ### R001: Qwen3-ASR 在强退化音频上仍可能失败
@@ -190,6 +209,18 @@
 - 训练中混入 clean 数据。
 - 使用 router mode。
 - 把 clean regression 阈值作为发布门槛。
+
+### R007: Bootstrap 合成训练集过拟合合成 TTS 和规则退化
+
+影响：
+
+- LoRA 可能学习到 macOS `say` 的声音特征或 `medium` profile 的固定伪影，而不是真实鲁棒 ASR 能力。
+
+缓解：
+
+- 第一版只把 bootstrap 数据作为训练闭环启动集。
+- 固定 MVP 150 hard profile 作为 held-out test，并保留 dropout/far_field 观察项。
+- 达到第一版指标后，再引入 LibriSpeech/Common Voice 和真实噪声/RIR 数据。
 
 ### R006: 归一化不一致会误导评测
 

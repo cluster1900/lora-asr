@@ -1,6 +1,6 @@
 # Colab 训练方案
 
-最后更新：2026-06-20
+最后更新：2026-06-29
 
 ## 目标
 
@@ -139,6 +139,11 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 官方 `qwen-asr` wrapper 的内部模块结构需要以当前环境真实加载结果为准，不能
 复用 Mega-ASR 或其他工程的 target 规则。
 
+`05C` smoke training 已完成 20 step 验收。正式 LoRA MVP 从 `05D` 开始：
+先生成独立 bootstrap train/val，再使用 `configs/train/qwen3_asr_lora_mvp_train.yaml`
+跑第一版 200-1000 step 训练，最后在固定 MVP 150 held-out test 上比较 base 与
+LoRA。
+
 历史 Unsloth 兼容性检查结果：
 
 - `compatible=false`。
@@ -151,7 +156,7 @@ Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。�
 - 当前 notebook 固定 `qwen-asr==0.0.6`、`transformers==4.57.6`、`accelerate==1.12.0`，避免破坏 Qwen3-ASR 官方 wrapper 已验证过的依赖组合。
 - Colab 预装包中 `pandas`、`requests` 容易被升级到冲突版本，因此 notebook 固定 `pandas==2.2.2`、`requests==2.32.4`。
 - PEFT 注入 LoRA 时会探测 `torchao`。部分 Colab runtime 预装 `torchao==0.10.0`，而当前 PEFT 只支持 `torchao>0.16.0`，会在 `get_peft_model()` 阶段报错。当前 notebook 默认卸载 `torchao`，因为本 smoke training 不依赖 torchao。
-- 训练 manifest 不包含音频本体；执行 LoRA smoke training 前，`data/mvp_eval/audio/` 必须已经同步到 Google Drive 项目目录。notebook 会在加载模型前检查前 20 条训练样本的音频路径。
+- 训练 manifest 不包含音频本体；执行 LoRA smoke training 前，`data/mvp_eval/audio/` 必须已经同步到 Google Drive 项目目录。执行正式 LoRA MVP 前，应先运行 `scripts/create_lora_mvp_dataset.py` 生成 `data/lora_mvp/audio/` 和 train/val manifest。
 - 如果安装后出现 pip resolver warning，先确认目标脚本是否能运行，再决定是否重启 runtime；warning 不一定等于 cell 失败。
 
 初始配置：
@@ -181,8 +186,8 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 0. Probe：加载模型并导出 `named_modules()`、LoRA target 候选和摘要。
 1. PEFT compatibility：按正则精确匹配 99 个 audio tower target。
 2. Smoke test：20 条样本，5-20 steps，当前入口为 `train/train_qwen3_asr_lora.py`。
-3. MVP train：10k-20k 样本，1 epoch。
-4. Scenario-balanced train：按声学场景做加权采样。
+3. MVP bootstrap train：clean/noise/reverb 独立 train/val，200-1000 step。
+4. Scenario-balanced train：按声学场景做加权采样，后续再扩到真实数据。
 
 输出：
 
@@ -196,6 +201,17 @@ smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audi
 - `checkpoints/qwen3-asr-1.7b-lora/loss_log.jsonl`
 - `checkpoints/qwen3-asr-1.7b-lora/summary.json`
 - `checkpoints/qwen3-asr-1.7b-lora/adapter/`
+
+正式 LoRA MVP bootstrap 输出：
+
+- `data/jsonl/lora_mvp_train.local.jsonl`
+- `data/jsonl/lora_mvp_val.local.jsonl`
+- `data/jsonl/lora_mvp_stats.local.json`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/target_modules.json`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/training_config.json`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/loss_log.jsonl`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/summary.json`
+- `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`
 
 ## Notebook 04: 评测
 

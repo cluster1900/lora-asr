@@ -15,7 +15,7 @@
 - `check_unsloth_qwen3_asr.py`：Unsloth 兼容性检查脚本。当前结果为不兼容，后续训练回退 Transformers + PEFT。
 - `lora_targets.py`：候选 target 分组规则，只做辅助分析，不直接代表最终训练配置。
 - `peft_targets.py`：PEFT LoRA target 匹配与校验工具，使用配置中的 include/exclude regex 精确限制训练模块。
-- `train_qwen3_asr_lora.py`：Transformers + PEFT smoke training 入口，当前只支持 batch size 1 的 5-20 step 小闭环。
+- `train_qwen3_asr_lora.py`：Transformers + PEFT LoRA 训练入口，当前仍是 batch size 1 的自定义训练循环；已完成 20 step smoke training，可用于第一版 MVP 600 step bootstrap 训练。
 
 推荐命令：
 
@@ -35,7 +35,7 @@ python train/check_unsloth_qwen3_asr.py \
   --output-json outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json
 ```
 
-当前 `unsloth_compatibility.json` 中 `compatible=false`，原因是 Unsloth 走标准 Transformers AutoConfig 路径时无法识别 `model_type=qwen3_asr`。下一步实现 PEFT smoke training。
+当前 `unsloth_compatibility.json` 中 `compatible=false`，原因是 Unsloth 走标准 Transformers AutoConfig 路径时无法识别 `model_type=qwen3_asr`。训练 backend 已回退为 Transformers + PEFT。
 
 Transformers + PEFT smoke training：
 
@@ -77,6 +77,24 @@ Colab 环境注意：
 - `loss_log.jsonl`：每一步 loss、场景和样本 id。
 - `summary.json`：smoke training 摘要。
 - `adapter/`：PEFT adapter。
+
+LoRA MVP 第一版训练：
+
+```bash
+python train/train_qwen3_asr_lora.py \
+  --config configs/train/qwen3_asr_lora_mvp_train.yaml \
+  --manifest data/jsonl/lora_mvp_train.local.jsonl \
+  --audio-root . \
+  --output-dir checkpoints/qwen3-asr-1.7b-lora-mvp \
+  --model-id Qwen/Qwen3-ASR-1.7B \
+  --dtype float16 \
+  --device-map cuda:0 \
+  --quantization 4bit \
+  --language English \
+  --max-steps 600
+```
+
+正式 MVP 训练前应先运行 `scripts/create_lora_mvp_dataset.py` 生成独立 train/val。固定 MVP 150 只作为 held-out test，不作为正式训练输入。
 
 禁止：
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Qwen3-ASR Transformers + PEFT LoRA smoke training.
+"""Qwen3-ASR Transformers + PEFT LoRA training.
 
-这个入口只服务 `05C` 小闭环：加载官方 qwen-asr 模型，按配置中的正则精确
-挂载 audio tower LoRA，跑 5-20 step smoke test，并保存 adapter 与训练元数据。
-它不是最终大规模训练器，后续再在这个闭环上扩展数据采样、验证集评测和断点续训。
+这个入口服务 `05C` smoke training 和 `05D` 第一版 LoRA MVP bootstrap 训练：
+加载官方 qwen-asr 模型，按配置中的正则精确挂载 audio tower LoRA，运行自定义
+训练循环，并保存 adapter 与训练元数据。它仍不是最终大规模训练器，后续还需要
+扩展验证集评测、周期性 checkpoint 和断点续训。
 """
 
 from __future__ import annotations
@@ -519,7 +520,7 @@ def apply_arg_defaults(args: argparse.Namespace, config: dict[str, Any]) -> argp
     args.quantization = args.quantization or model_config.get("quantization", "none")
     args.manifest = args.manifest or data_config.get("train_manifest")
     args.output_dir = args.output_dir or output_config.get("checkpoint_dir", "checkpoints/qwen3-asr-1.7b-lora")
-    args.max_steps = args.max_steps or int(training_config.get("smoke_test_steps", 20))
+    args.max_steps = args.max_steps or int(training_config.get("max_steps", training_config.get("smoke_test_steps", 20)))
     args.batch_size = args.batch_size or int(training_config.get("batch_size", 1))
     args.gradient_accumulation_steps = args.gradient_accumulation_steps or int(
         training_config.get("gradient_accumulation_steps", 1)

@@ -1,6 +1,6 @@
 # 数据方案
 
-最后更新：2026-06-07
+最后更新：2026-06-29
 
 ## 目标
 
@@ -182,6 +182,98 @@ MVP 建议：
 - 5 类退化：noise、reverb、far-field、clipping、dropout。
 - 每条 clean utterance 生成 2-3 条 degraded 样本。
 - 保留固定 held-out test set。
+
+## LoRA MVP Bootstrap 数据
+
+### 背景
+
+`05C` 已经证明 Qwen3-ASR 可以挂载 PEFT LoRA 并完成 20 step smoke training。
+正式 LoRA MVP 不能继续直接使用 MVP 150 评测集训练，否则后续 base-vs-LoRA
+对比会失去 held-out 意义。因此需要新增一批独立 train/val manifest，用来启动
+第一版监督训练闭环。
+
+### 范围
+
+本批 bootstrap 数据只用于 LoRA MVP 启动：
+
+- 做 train/val，不做最终 test。
+- 默认覆盖 clean、noise、reverb。
+- 使用本项目合成音频和退化代码。
+- 保留固定随机种子、文本 index、base utterance id 和增强参数。
+
+本批数据不用于声明产品级鲁棒性，不替代真实语音数据或真实 noisy holdout。
+
+### 默认配置
+
+- train：clean、noise、reverb 各 120 条。
+- val：clean、noise、reverb 各 30 条。
+- profile：`medium`，避免一开始只学习 hard profile 的极端伪影。
+- seed：`20260629`。
+- held-out test：继续使用 `data/jsonl/baseline_mvp_150.local.jsonl` 和 `outputs/baseline_mvp_150/` 中的 base 指标。
+
+默认输出：
+
+- `data/lora_mvp/audio/train/`
+- `data/lora_mvp/audio/val/`
+- `data/jsonl/lora_mvp_train.local.jsonl`
+- `data/jsonl/lora_mvp_val.local.jsonl`
+- `data/jsonl/lora_mvp_stats.local.json`
+
+### 数据格式
+
+每条样本至少包含：
+
+```json
+{
+  "audio": "data/lora_mvp/audio/train/noise/noise_0001.wav",
+  "answer": "Please confirm the meeting room before the weekly review begins.",
+  "language": "en",
+  "scenario": "noise",
+  "split": "train",
+  "source": "macos_say_plus_noise",
+  "is_degraded": true,
+  "utterance_id": "train_utt_0001_noise",
+  "base_utterance_id": "train_utt_0001",
+  "degradation": "noise",
+  "profile": "medium",
+  "seed": 20260730,
+  "sample_rate": 16000,
+  "text_length_bucket": "short",
+  "reference_word_count": 9
+}
+```
+
+### 切分与泄漏规则
+
+- train 与 val 的 `base_utterance_id` 不得重叠。
+- train/val 不得包含 `baseline_mvp_150` 的音频路径。
+- 同一个 split 内允许同一 base utterance 生成 clean、noise、reverb 多个场景，因为这是训练鲁棒映射的目标；但同一个 base utterance 不跨 split。
+- held-out MVP 150 不进入训练和调参，只用于最终 base-vs-LoRA 对比。
+
+### 生成命令
+
+```bash
+python3 scripts/create_lora_mvp_dataset.py \
+  --profile medium \
+  --train-items-per-scenario 120 \
+  --val-items-per-scenario 30 \
+  --scenarios clean,noise,reverb \
+  --force
+```
+
+### 测试
+
+- JSONL 每行可解析。
+- 每条样本的音频路径存在。
+- train/val scenario counts 与命令行参数一致。
+- train/val `base_utterance_id` 无交集。
+- stats 文件记录 seed、profile、split counts、scenario counts、duration 和退化质量统计。
+
+### 验收
+
+- Colab/本地可复现生成同一批 manifest。
+- LoRA 训练配置引用 train manifest，验证或后续 early stopping 使用 val manifest。
+- 固定 MVP 150 held-out test 与 bootstrap train/val 明确分离。
 
 ## 测试标准
 
