@@ -251,6 +251,21 @@
 - 训练脚本开始实际支持 `output.save_steps` 和 `output.keep_last_checkpoints`，会写出中间 adapter 与 `saved_checkpoints` 元数据。
 - router 继续暂停，直到 checkpoint sweep 中至少一个候选满足 target 场景 10% 改善和 clean 无明显退化。
 
+结果：
+
+- v4 checkpoint sweep 已完成，160/320/480/final 600 step 均完成 held-out MVP 150 评测。
+- 没有 checkpoint 达到 10% 相对 WER 改善门槛。
+- v4 600 的 reverb WER 为 0.507307，相对 4bit base recheck 改善约 6.90%，是当前 reverb 最好结果。
+- v4 600 的 noise+reverb 合并 WER 为 0.463466，略好于 v3 的 0.464509。
+- v4 600 的 far_field WER 为 1.135699，明显差于 base recheck 的 0.985386 和 v3 的 0.995825。
+- v3 仍是 overall、noise 和 degraded-only 的当前最优 LoRA。
+
+后续决策：
+
+- 单纯增加 target-focus step 暂停。
+- 当前不进入 router。
+- 下一轮应优先测试数据/目标/正则约束或 target 结构，而不是继续增加 step。
+
 ## 风险
 
 ### R001: Qwen3-ASR 在强退化音频上仍可能失败

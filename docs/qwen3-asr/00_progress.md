@@ -6,7 +6,7 @@
 
 当前阶段：`Base recheck` 已完成，历史 base 口径被确认与当前 LoRA 评测口径不一致。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练、v1 held-out MVP 150 评测、v2 attention-only 短跑、v2 held-out MVP 150 评测、4bit base recheck 和 v3 target-focus 训练评测均已完成。
 
-现在的执行重点是：继续优化 LoRA，把 noise/reverb 相对 4bit base recheck 的改善推到 10% 以上。v3 已验证“v1 target 组合 + noise/reverb-only + 长短均衡采样”是目前最有效方向：noise 相对改善约 8.33%，noise+reverb 合并改善约 6.71%，但仍未达到 10% 门槛，router 继续暂停。下一轮 v4 采用 checkpoint sweep：保留 v3 方向，训练到 600 step，并在 optimizer update 对齐的 160/320/480 step 保存中间 adapter，再连同 final 600 step 一起做 held-out 评测。
+现在的执行重点是：继续优化 LoRA，把 noise/reverb 相对 4bit base recheck 的改善推到 10% 以上。v3 已验证“v1 target 组合 + noise/reverb-only + 长短均衡采样”是目前最有效方向：noise 相对改善约 8.33%，noise+reverb 合并改善约 6.71%，但仍未达到 10% 门槛。v4 checkpoint sweep 已完成，证明单纯延长 target-focus 训练不能稳定突破 10%；600 step 对 reverb 有小幅增益，但 far_field 明显回退，router 继续暂停。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -57,17 +57,17 @@
   - 实际 450 step 覆盖 noise long 113、noise short 113、reverb long 112、reverb short 112。
   - 相对 4bit base recheck，v3 overall 改善约 1.82%，noise 改善约 8.33%，reverb 改善约 5.36%，noise+reverb 合并改善约 6.71%；clean 无退化，dropout/far_field 仍未改善。
 - `05G LoRA MVP v4 checkpoint sweep`：
-  - 已新增配置和 Colab 入口，待 Colab 执行。
+  - 已完成 Colab 训练和 160/320/480/final 600 step held-out 评测。
   - 保留 v3 的 99 target、noise/reverb-only 和 `scenario + text_length_bucket` 均衡采样。
   - `max_steps=600`，`save_steps=160`，用于评测 160/320/480/final 600 step。
   - `save_steps=160` 是为了对齐 `gradient_accumulation_steps=16` 的完整 optimizer update，避免保存半个累积周期的 adapter。
-  - 目标不是直接扩大训练规模，而是找到 v3 方向下最合适的停止点。
+  - 结果显示没有 checkpoint 达到 10% 改善门槛。v4_0600 的 reverb WER 最低，为 0.507307，相对 base recheck 改善约 6.90%；noise+reverb 合并 WER 为 0.463466，略好于 v3 的 0.464509，但 far_field WER 升到 1.135699，导致 overall 和 degraded-only 明显差于 v3。
 
 ## 下一批里程碑
 
-1. 在 Colab 执行 `notebooks/08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb`。
-2. 比较 160/320/480/600 step 的 held-out MVP 150 指标，优先看 noise、reverb、noise+reverb 和 clean。
-3. 若某个 checkpoint 达到 noise 或 reverb 10% 相对 WER 改善且 clean 无退化，再进入 router 前检查。
+1. 暂停单纯增加 step 的路线；v4 已证明该方向会牺牲 far_field，且仍不足 10%。
+2. 下一轮优先做数据/损失/target 方向的 ablation，例如加入少量 hard far_field/dropout 作为负向约束，或调整训练数据难度以匹配 held-out hard profile。
+3. 继续以 v3 作为当前最稳 LoRA 对照；v4_0600 只作为 reverb 略优但泛化风险更高的对照。
 4. 只有 noise 或 reverb 达到 10% 相对 WER 改善、clean 无退化，并且错误分析没有新增明显重复/幻觉风险时，才进入 router。
 
 ## 待确认问题

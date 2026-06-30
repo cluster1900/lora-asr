@@ -463,3 +463,52 @@ noise 或 reverb 推过 10% 相对改善，还是会开始过拟合。
 - clean WER 不相对 4bit base recheck 退化超过 5%。
 - dropout/far_field 若继续退化，必须记录并在 router 前检查中作为风险。
 - 若所有 checkpoint 都未达到 10%，不进入 router，下一轮继续做 target/data/lr ablation。
+
+### v4 LoRA MVP Checkpoint Sweep 测试结论
+
+v4 已完成 160/320/480/final 600 step checkpoint sweep。训练输出位于
+`checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/`，评测输出位于
+`outputs/lora_mvp_v4_eval/step_*/`。
+
+训练覆盖：
+
+- target count：99。
+- 训练步数：600。
+- loss log：600 行。
+- 采样覆盖：noise long 150、noise short 150、reverb long 150、reverb short 150。
+- 推理错误：0。
+- empty output rate：0。
+
+按 4bit base recheck 口径，对比结果如下：
+
+| scenario | base recheck | v3 | v4 160 | v4 320 | v4 480 | v4 600 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| overall | 0.550313 | 0.540292 | 0.546973 | 0.548643 | 0.579123 | 0.567850 |
+| clean | 0.008351 | 0.008351 | 0.008351 | 0.008351 | 0.008351 | 0.008351 |
+| noise | 0.450939 | 0.413361 | 0.440501 | 0.448852 | 0.423800 | 0.419624 |
+| reverb | 0.544885 | 0.515658 | 0.532359 | 0.536534 | 0.532359 | 0.507307 |
+| noise+reverb | 0.497912 | 0.464509 | 0.486430 | 0.492693 | 0.478079 | 0.463466 |
+| dropout | 0.762004 | 0.768267 | 0.764092 | 0.764092 | 0.764092 | 0.768267 |
+| far_field | 0.985386 | 0.995825 | 0.989562 | 0.985386 | 1.167015 | 1.135699 |
+| degraded-only | 0.685804 | 0.673278 | 0.681628 | 0.683716 | 0.721816 | 0.707724 |
+
+相对 base recheck 的关键变化：
+
+- v4 600 的 reverb WER 相对改善约 6.90%，是目前 reverb 最好结果。
+- v4 600 的 noise+reverb 合并 WER 相对改善约 6.92%，略好于 v3 的 6.71%。
+- v4 600 的 noise WER 相对改善约 6.94%，弱于 v3 的 8.33%。
+- v4 480/600 的 far_field 明显退化，分别为 1.167015 和 1.135699，说明后段训练开始牺牲未训练观察场景。
+- v3 仍是 overall、noise 和 degraded-only 的当前最优版本。
+
+逐样本观察：
+
+- v4 600 vs base：noise 总 edit 减少 15，reverb 总 edit 减少 18，但 far_field 总 edit 增加 72。
+- v4 600 vs v3：reverb 总 edit 减少 4，noise 总 edit 增加 3，far_field 总 edit 增加 67。
+- far_field 退化集中在少量长句幻觉/重复输出样本，例如 `utt_0024_far_field` 从 v3 的 25 edits 变为 v4 600 的 114 edits。
+
+结论：
+
+- v4 没有任何 checkpoint 达到 10% 相对 WER 改善门槛。
+- 单纯延长 v3 target-focus 训练不能稳定突破目标；后段训练会增强 reverb，但牺牲 far_field 泛化。
+- 当前不进入 router。
+- 下一轮应从数据/目标/正则约束或 target 结构继续 ablation，而不是继续增加 step。
