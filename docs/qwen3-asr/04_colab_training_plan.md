@@ -487,11 +487,60 @@ python scripts/run_qwen3_asr_base_recheck.py \
 - 相对 4bit base recheck，v3 的 noise WER 从 0.450939 降到 0.413361，相对改善约 8.33%；reverb WER 从 0.544885 降到 0.515658，相对改善约 5.36%；clean WER 持平为 0.008351。
 - v3 是当前 LoRA 最优版本，但尚未达到 10% 相对 WER 改善门槛；router 继续暂停。
 
-## Notebook 07: Router
+## Notebook 08: LoRA MVP v4 Checkpoint Sweep
 
 名称：
 
-- `notebooks/08_router_colab.ipynb`
+- `notebooks/08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb`
+
+目的：
+
+- 延续 v3 已验证有效的 target-focus 方向，不改变 target 和训练场景。
+- 训练到 600 step，并保存中间 adapter，比较不同停止点在 held-out MVP 150 上的 WER。
+- 避免只看最终 checkpoint，把“多训是否有效”变成可复现的 checkpoint sweep。
+
+默认配置：
+
+- `configs/train/qwen3_asr_lora_mvp_v4_checkpoint_sweep.yaml`
+- output：`checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep`
+- eval output：`outputs/lora_mvp_v4_eval`
+- target count：99
+- scenario filter：noise,reverb
+- learning rate：2e-5
+- max steps：600
+- save steps：160
+- sampling：`scenario_bucket_round_robin`
+- base 对照：`outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
+
+为什么 `save_steps=160`：
+
+- 当前训练使用 `gradient_accumulation_steps=16`。
+- 160/320/480 都刚好落在完整 optimizer update 之后。
+- 这样中间 checkpoint 不会保存半个梯度累积周期，和最终 600 step 的比较更干净。
+
+输出：
+
+- final adapter：`checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/adapter/`
+- 中间 adapter：
+  - `checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0160/adapter/`
+  - `checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0320/adapter/`
+  - `checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0480/adapter/`
+- 每个 checkpoint 的 held-out 评测输出位于 `outputs/lora_mvp_v4_eval/step_*/`。
+
+验收标准：
+
+- preflight target count 等于 99。
+- loss log 覆盖 noise/reverb 的 short 和 long。
+- 至少 160/320/480/final 600 四个 checkpoint 完成 MVP 150 推理和评测。
+- comparison 表必须同时展示 base recheck、v1、v2、v3 和 v4 checkpoint sweep。
+- 如果任一 checkpoint 达到 noise 或 reverb 相对 4bit base recheck 10% WER 改善，且 clean 无明显退化，则进入 router 前检查。
+- 如果没有 checkpoint 达到 10%，继续 target/data/lr ablation，不进入 router。
+
+## Notebook 09: Router
+
+名称：
+
+- `notebooks/09_router_colab.ipynb`
 
 目的：
 
@@ -559,5 +608,7 @@ THE TRANSCRIPT TEXT
 - `04_train_lora_mvp_colab.ipynb` 产出正式 LoRA MVP adapter。
 - `05_eval_lora_mvp_colab.ipynb` 产出 LoRA always-on overall 和 scenario-level 指标。
 - `06_train_lora_mvp_v2_colab.ipynb` 产出 v2 ablation 指标。
-- `07_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
+- `07_train_lora_mvp_v3_colab.ipynb` 产出 v3 target-focus 指标。
+- `08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb` 产出 v4 checkpoint sweep 指标。
+- `09_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
 - 所有 notebook 的输入、输出和依赖都能追溯到配置文件。

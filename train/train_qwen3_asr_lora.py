@@ -56,6 +56,14 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def remove_tree(path: Path) -> None:
+    """删除本脚本创建的 checkpoint 子目录。"""
+    import shutil
+
+    if path.exists():
+        shutil.rmtree(path)
+
+
 def load_config(path: Path) -> dict[str, Any]:
     """读取 YAML 训练配置。"""
     import yaml
@@ -569,6 +577,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--max-audio-seconds", type=float, default=None)
     parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--save-steps", type=int, default=None, help="Save intermediate adapter every N steps.")
+    parser.add_argument("--keep-last-checkpoints", type=int, default=None, help="Keep only last N intermediate checkpoints.")
     parser.add_argument("--preflight-only", action="store_true", help="Load model and attach LoRA, then stop.")
     parser.add_argument("--no-save-adapter", action="store_true")
     return parser.parse_args()
@@ -595,6 +605,12 @@ def apply_arg_defaults(args: argparse.Namespace, config: dict[str, Any]) -> argp
     )
     args.learning_rate = args.learning_rate or float(training_config.get("learning_rate", 2e-5))
     args.max_audio_seconds = args.max_audio_seconds or float(data_config.get("max_audio_seconds", 20))
+    args.save_steps = args.save_steps if args.save_steps is not None else int(output_config.get("save_steps", 0) or 0)
+    args.keep_last_checkpoints = (
+        args.keep_last_checkpoints
+        if args.keep_last_checkpoints is not None
+        else int(output_config.get("keep_last_checkpoints", 0) or 0)
+    )
     args.peft_task_type = str(training_config.get("peft_task_type", "none")).lower()
     args.gradient_checkpointing = bool(training_config.get("gradient_checkpointing", True))
     args.seed = int(training_config.get("seed", 42))
@@ -684,6 +700,8 @@ def main() -> None:
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "learning_rate": args.learning_rate,
         "max_audio_seconds": args.max_audio_seconds,
+        "save_steps": args.save_steps,
+        "keep_last_checkpoints": args.keep_last_checkpoints,
         "seed": args.seed,
         "config": config,
     }
@@ -712,7 +730,9 @@ def main() -> None:
 
     optimizer.zero_grad(set_to_none=True)
     losses: list[float] = []
+    saved_checkpoints: list[dict[str, Any]] = []
     started = time.perf_counter()
+    checkpoint_root = output_dir / "checkpoints"
 
     default_language = normalize_language(args.language)
     for step in range(1, args.max_steps + 1):
@@ -761,6 +781,34 @@ def main() -> None:
             )
         )
 
+        should_save_checkpoint = (
+            not args.no_save_adapter
+            and args.save_steps > 0
+            and (step % args.save_steps == 0)
+            and step < args.max_steps
+        )
+        if should_save_checkpoint:
+            checkpoint_dir = checkpoint_root / f"step-{step:04d}"
+            adapter_checkpoint_dir = checkpoint_dir / "adapter"
+            processor_checkpoint_dir = checkpoint_dir / "processor"
+            if checkpoint_dir.exists():
+                remove_tree(checkpoint_dir)
+            peft_model.save_pretrained(adapter_checkpoint_dir)
+            processor.save_pretrained(processor_checkpoint_dir)
+            checkpoint_summary = {
+                "step": step,
+                "loss": loss_value,
+                "adapter_dir": str(adapter_checkpoint_dir),
+                "processor_dir": str(processor_checkpoint_dir),
+            }
+            write_json(checkpoint_dir / "summary.json", checkpoint_summary)
+            saved_checkpoints.append(checkpoint_summary)
+
+            if args.keep_last_checkpoints > 0 and len(saved_checkpoints) > args.keep_last_checkpoints:
+                stale = saved_checkpoints.pop(0)
+                stale_parent = Path(stale["adapter_dir"]).parent
+                remove_tree(stale_parent)
+
     adapter_dir = output_dir / "adapter"
     if not args.no_save_adapter:
         peft_model.save_pretrained(adapter_dir)
@@ -774,6 +822,7 @@ def main() -> None:
         "loss_last": losses[-1] if losses else math.nan,
         "steps": len(losses),
         "adapter_dir": str(adapter_dir) if not args.no_save_adapter else "",
+        "saved_checkpoints": saved_checkpoints,
         "target_modules": lora_summary,
     }
     write_json(output_dir / "summary.json", summary)

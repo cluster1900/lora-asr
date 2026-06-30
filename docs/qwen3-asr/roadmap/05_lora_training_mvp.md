@@ -262,6 +262,37 @@ v3 验收标准：
 - clean WER 不相对 4bit base recheck 退化超过 5%。
 - dropout/far_field 继续作为观察项；若未改善，不进入 router。
 
+### 05G LoRA MVP v4 checkpoint sweep
+
+背景：
+
+- v3 是当前最优 LoRA，noise 相对 4bit base recheck 改善约 8.33%，但仍未达到 10% 门槛。
+- v3 的训练方向已经有效，下一步应先判断最佳停止点，而不是同时改变 target、数据和学习率。
+- 当前 `gradient_accumulation_steps=16`，中间 checkpoint 应尽量落在完整 optimizer update 后。
+
+默认配置：
+
+- 配置：`configs/train/qwen3_asr_lora_mvp_v4_checkpoint_sweep.yaml`
+- Colab 入口：`notebooks/08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb`
+- train manifest：`data/jsonl/lora_mvp_train.local.jsonl`
+- scenario filter：`noise,reverb`
+- output：`checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep`
+- eval output：`outputs/lora_mvp_v4_eval`
+- target：audio tower attention + speech projection，共 99 个模块
+- 学习率：`2e-5`
+- max steps：`600`
+- save steps：`160`
+- sampling：`scenario_bucket_round_robin`，按 `noise/reverb × short/long` 四个桶轮转。
+
+v4 验收标准：
+
+- target count 等于 99。
+- loss log 覆盖 noise/reverb 的 short/long。
+- `summary.json` 记录 160/320/480 step 中间 checkpoint。
+- 160/320/480/final 600 step 至少四个 checkpoint 都完成 held-out MVP 150 推理和评测。
+- 任一 checkpoint 的 noise 或 reverb 相对 4bit base recheck WER 改善达到或超过 10%，且 clean 无明显退化，才进入 router 前检查。
+- 若没有 checkpoint 达到 10%，继续 target/data/lr ablation，不进入 router。
+
 ### LoRA held-out 推理评测入口
 
 LoRA MVP 训练完成后，下一步不是继续调参，而是先完成 adapter 加载推理和固定

@@ -230,6 +230,27 @@
 - 当前不进入 router，继续做 v3b/v4 ablation。
 - 下一轮优先保留 99 target 和长短均衡采样，再测试更合适的训练步数、学习率或中间 checkpoint 选择。
 
+### D015: v4 先做 checkpoint sweep，而不是直接换 target 或进入 router
+
+决策：
+
+- v4 保留 v3 的 99 个 target、noise/reverb-only 训练、`scenario + text_length_bucket` 均衡采样和 `learning_rate=2e-5`。
+- v4 将 `max_steps` 扩到 600，并保存 160/320/480 step 中间 adapter，加上 final 600 step 一起评测。
+- `save_steps=160` 用于对齐 `gradient_accumulation_steps=16` 的完整 optimizer update。
+
+原因：
+
+- v3 已经是当前最优方向，noise 相对 4bit base recheck 改善约 8.33%，距离 10% 门槛很近。
+- 直接换 target 或扩大到 dropout/far_field 会引入多个变量，难以判断收益来源。
+- 只看 final checkpoint 可能错过最佳停止点，也可能把过训误判为训练方向无效。
+
+影响：
+
+- 新增 `configs/train/qwen3_asr_lora_mvp_v4_checkpoint_sweep.yaml`。
+- 新增 `notebooks/08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb`。
+- 训练脚本开始实际支持 `output.save_steps` 和 `output.keep_last_checkpoints`，会写出中间 adapter 与 `saved_checkpoints` 元数据。
+- router 继续暂停，直到 checkpoint sweep 中至少一个候选满足 target 场景 10% 改善和 clean 无明显退化。
+
 ## 风险
 
 ### R001: Qwen3-ASR 在强退化音频上仍可能失败

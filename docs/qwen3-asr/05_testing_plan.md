@@ -435,3 +435,31 @@ v3 已完成 held-out MVP 150 评测。训练和评测输出如下：
 - noise 已接近 10% 相对改善，但 reverb 和 noise+reverb 合并仍不足。
 - 由于未达到 MVP 10% 门槛，且 dropout/far_field 没改善，当前不进入 router。
 - 下一轮继续做 v3b/v4 ablation，优先在保留 99 target 与长短均衡采样的前提下，测试更合适的训练步数、学习率或中间 checkpoint 选择。
+
+### v4 LoRA MVP Checkpoint Sweep 测试目标
+
+v4 的目的不是改变训练方向，而是回答 v3 后的关键问题：target-focus 多训一点是否能把
+noise 或 reverb 推过 10% 相对改善，还是会开始过拟合。
+
+范围：
+
+- base 对照仍为 `outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`。
+- target、训练场景、学习率和采样策略沿用 v3。
+- 训练到 600 step。
+- 保存并评测 160/320/480/final 600 step checkpoint。
+- held-out test 仍为固定 MVP 150。
+
+通过标准：
+
+- `target_modules.json` 中 target count 等于 99。
+- `loss_log.jsonl` 覆盖 noise/reverb × short/long 四个桶。
+- `summary.json` 记录 `saved_checkpoints`，且每个 checkpoint 的 adapter 目录存在。
+- 每个 checkpoint 都产出 prediction JSONL、scored JSONL、metrics JSON、scenario CSV 和 error analysis。
+- 汇总表包含 base recheck、v1、v2、v3 和每个 v4 checkpoint 的 WER。
+
+验收标准：
+
+- 任一 checkpoint 的 noise 或 reverb 相对 4bit base recheck WER 下降达到或超过 10%，或 noise+reverb 合并下降达到或超过 10%。
+- clean WER 不相对 4bit base recheck 退化超过 5%。
+- dropout/far_field 若继续退化，必须记录并在 router 前检查中作为风险。
+- 若所有 checkpoint 都未达到 10%，不进入 router，下一轮继续做 target/data/lr ablation。

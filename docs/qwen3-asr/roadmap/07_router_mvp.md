@@ -33,7 +33,7 @@
 - `router/infer_router.py`
 - `router/model.py`
 - `configs/train/router_mvp.yaml`
-- `notebooks/07_router_colab.ipynb`
+- `notebooks/09_router_colab.ipynb`
 
 ## 执行步骤
 
