@@ -1,6 +1,6 @@
 # Colab 训练方案
 
-最后更新：2026-06-29
+最后更新：2026-06-30
 
 ## 目标
 
@@ -477,6 +477,15 @@ python scripts/run_qwen3_asr_base_recheck.py \
 - noise 或 reverb 至少一个场景相对 4bit base recheck 接近或达到 10% 相对 WER 改善。
 - clean WER 不相对 base recheck 退化超过 5%。
 - dropout/far_field 必须记录；若仍不改善，继续暂停 router。
+
+当前执行结果：
+
+- v3 已完成 450 step 训练，输出位于 `checkpoints/qwen3-asr-1.7b-lora-mvp-v3-target-focus/`。
+- target count 为 99，训练配置保留 v1 的 audio tower attention + speech projection target。
+- loss log 共 450 行，覆盖 noise long 113、noise short 113、reverb long 112、reverb short 112。
+- held-out MVP 150 推理和评测已完成，输出位于 `outputs/lora_mvp_v3_eval/`，empty output rate 为 0。
+- 相对 4bit base recheck，v3 的 noise WER 从 0.450939 降到 0.413361，相对改善约 8.33%；reverb WER 从 0.544885 降到 0.515658，相对改善约 5.36%；clean WER 持平为 0.008351。
+- v3 是当前 LoRA 最优版本，但尚未达到 10% 相对 WER 改善门槛；router 继续暂停。
 
 ## Notebook 07: Router
 

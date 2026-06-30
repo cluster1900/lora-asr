@@ -1,6 +1,6 @@
 # 测试方案
 
-最后更新：2026-06-29
+最后更新：2026-06-30
 
 ## 目标
 
@@ -397,3 +397,41 @@ v3 的目的不是证明训练通路，而是把已观察到的弱收益放大�
 - noise 或 reverb 至少一个场景相对 4bit base recheck 接近或达到 10% 相对 WER 下降。
 - clean WER 不相对 4bit base recheck 退化超过 5%。
 - 如果只有 noise+reverb 合并改善、但单场景未接近 10%，继续 ablation，不进入 router。
+
+### v3 LoRA MVP 测试结论
+
+v3 已完成 held-out MVP 150 评测。训练和评测输出如下：
+
+- checkpoint：`checkpoints/qwen3-asr-1.7b-lora-mvp-v3-target-focus/`
+- eval：`outputs/lora_mvp_v3_eval/`
+- 训练步数：450。
+- 训练采样：noise/reverb × short/long 均衡轮转。
+- 推理错误：0。
+- empty output rate：0。
+
+按 4bit base recheck 口径，对比结果如下：
+
+| scenario | base recheck WER | LoRA v1 WER | LoRA v2 WER | LoRA v3 WER | v3 vs base |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| overall | 0.550313 | 0.543215 | 0.545720 | 0.540292 | -1.82% |
+| clean | 0.008351 | 0.008351 | 0.008351 | 0.008351 | +0.00% |
+| noise | 0.450939 | 0.419624 | 0.438413 | 0.413361 | -8.33% |
+| reverb | 0.544885 | 0.521921 | 0.532359 | 0.515658 | -5.36% |
+| dropout | 0.762004 | 0.770355 | 0.764092 | 0.768267 | +0.82% |
+| far_field | 0.985386 | 0.995825 | 0.985386 | 0.995825 | +1.06% |
+| noise+reverb | 0.497912 | 0.470772 | 0.485386 | 0.464509 | -6.71% |
+
+逐样本对齐结果：
+
+- v3 vs base recheck：150 条中 12 条改善、10 条变差、128 条持平，总 edit 减少 24。
+- noise：7 条改善、3 条变差、20 条持平，总 edit 减少 18。
+- reverb：3 条改善、3 条变差、24 条持平，总 edit 减少 14。
+- clean：全部持平，无 clean regression。
+- dropout/far_field：仍有轻微退化，不作为 router 放行依据。
+
+结论：
+
+- v3 是当前最优 LoRA，证明 target-focus 方向有效。
+- noise 已接近 10% 相对改善，但 reverb 和 noise+reverb 合并仍不足。
+- 由于未达到 MVP 10% 门槛，且 dropout/far_field 没改善，当前不进入 router。
+- 下一轮继续做 v3b/v4 ablation，优先在保留 99 target 与长短均衡采样的前提下，测试更合适的训练步数、学习率或中间 checkpoint 选择。

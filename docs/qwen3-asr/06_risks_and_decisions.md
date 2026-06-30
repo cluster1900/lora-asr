@@ -1,6 +1,6 @@
 # 风险与决策
 
-最后更新：2026-06-29
+最后更新：2026-06-30
 
 ## 已定决策
 
@@ -214,6 +214,21 @@
 - 新增 `configs/train/qwen3_asr_lora_mvp_v3_target_focus.yaml`。
 - 新增 `notebooks/07_train_lora_mvp_v3_colab.ipynb`。
 - router 继续暂停；只有 noise 或 reverb 相对 4bit base recheck 接近或达到 10% 改善，才进入 router 前检查。
+
+结果：
+
+- v3 已完成 450 step 训练和 MVP 150 held-out 评测。
+- 相对 4bit base recheck，overall WER 从 0.550313 降到 0.540292，相对改善约 1.82%。
+- noise WER 从 0.450939 降到 0.413361，相对改善约 8.33%，是当前最接近 10% 门槛的单场景结果。
+- reverb WER 从 0.544885 降到 0.515658，相对改善约 5.36%。
+- noise+reverb 合并 WER 从 0.497912 降到 0.464509，相对改善约 6.71%。
+- clean WER 持平为 0.008351，无 clean regression；dropout/far_field 仍轻微退化。
+
+后续决策：
+
+- v3 证明 target-focus 方向有效，但未满足 10% 相对 WER 改善门槛。
+- 当前不进入 router，继续做 v3b/v4 ablation。
+- 下一轮优先保留 99 target 和长短均衡采样，再测试更合适的训练步数、学习率或中间 checkpoint 选择。
 
 ## 风险
 

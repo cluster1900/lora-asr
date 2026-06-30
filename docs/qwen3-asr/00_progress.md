@@ -1,12 +1,12 @@
 # 开发进度
 
-最后更新：2026-06-29
+最后更新：2026-06-30
 
 ## 当前状态
 
-当前阶段：`Base recheck` 已完成，历史 base 口径被确认与当前 LoRA 评测口径不一致。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练、v1 held-out MVP 150 评测、v2 attention-only 短跑、v2 held-out MVP 150 评测和 4bit base recheck 均已完成。
+当前阶段：`Base recheck` 已完成，历史 base 口径被确认与当前 LoRA 评测口径不一致。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练、v1 held-out MVP 150 评测、v2 attention-only 短跑、v2 held-out MVP 150 评测、4bit base recheck 和 v3 target-focus 训练评测均已完成。
 
-现在的执行重点是：继续优化 LoRA，把 noise/reverb 相对 4bit base recheck 的改善推到 10% 以上。由于 v1 的 99 个 target 已经带来约 5.45% 的 noise+reverb 相对收益，而 v2 的 attention-only 短跑收益更弱，下一轮 `v3 target-focus` 回到 v1 的 target 组合，同时只聚焦 noise/reverb，并用 `scenario + text_length_bucket` 均衡长短样本。
+现在的执行重点是：继续优化 LoRA，把 noise/reverb 相对 4bit base recheck 的改善推到 10% 以上。v3 已验证“v1 target 组合 + noise/reverb-only + 长短均衡采样”是目前最有效方向：noise 相对改善约 8.33%，noise+reverb 合并改善约 6.71%，但仍未达到 10% 门槛，router 继续暂停。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -36,7 +36,7 @@
 - 已完成 v2 LoRA attention-only ablation 训练与 held-out 评测：`checkpoints/qwen3-asr-1.7b-lora-mvp-v2-attn-noise-reverb/` 和 `outputs/lora_mvp_v2_eval/` 已同步，loss 有限、adapter 可保存、推理 empty output 为 0。
 - 已新增 base recheck 入口：`scripts/run_qwen3_asr_base_recheck.py` 和 `configs/baseline/qwen3_asr_base_recheck_mvp_150.yaml`，用于不覆盖历史 baseline 的前提下重跑 base 并生成对比表。
 - 已完成 base recheck 输出同步：`outputs/base_recheck_mvp_150/` 包含 prediction、scored、metrics、scenario CSV、error analysis 和 base/LoRA 对比表。
-- 已确定下一轮 v3 方向：使用 v1 的 attention + speech projection target，保留 4bit base recheck 口径，训练样本聚焦 noise/reverb，目标是把 noise 或 reverb 推到 10% 相对 WER 改善附近。
+- 已完成 v3 target-focus 训练与 held-out 评测：`checkpoints/qwen3-asr-1.7b-lora-mvp-v3-target-focus/` 和 `outputs/lora_mvp_v3_eval/` 已同步。v3 是当前最优 LoRA：overall WER 0.540292，noise WER 0.413361，reverb WER 0.515658，clean WER 0.008351。
 
 ## 进行中
 
@@ -51,17 +51,18 @@
   - 固定同一 held-out MVP 150 作为 test。
   - v1/v2 在 base recheck 口径下对 noise/reverb 有小幅收益，但幅度不足 10%，仍需要继续快速迭代。
 - `05F LoRA MVP v3 target-focus`：
-  - 准备新增配置和 Colab 入口。
+  - 已完成训练和 MVP 150 held-out 评测。
   - target 使用 v1 的 99 个 audio tower attention + speech projection。
   - train scenario 只使用 noise/reverb，采样按 `scenario + text_length_bucket` 均衡轮转。
-  - 默认 `learning_rate=2e-5`、`max_steps=450`，比 v2 更强、比无约束扩大训练更可控。
+  - 实际 450 step 覆盖 noise long 113、noise short 113、reverb long 112、reverb short 112。
+  - 相对 4bit base recheck，v3 overall 改善约 1.82%，noise 改善约 8.33%，reverb 改善约 5.36%，noise+reverb 合并改善约 6.71%；clean 无退化，dropout/far_field 仍未改善。
 
 ## 下一批里程碑
 
-1. 新增 v3 target-focus 配置和 Colab 入口。
-2. 在 Colab 上跑 v3 训练和 MVP 150 held-out 评测。
-3. 用 base recheck、v1、v2、v3 对比 noise/reverb、clean、dropout/far_field。
-4. 若 v3 达到 noise 或 reverb 10% 相对 WER 改善且 clean 无退化，再考虑 router；否则继续做 v3b/v4 ablation。
+1. 做 v3b/v4 快速 ablation，优先围绕 noise/reverb 继续放大收益到 10% 以上。
+2. 保留 v3 的 99 target 和 `scenario + text_length_bucket` 均衡采样作为当前默认强基线。
+3. 优先尝试更接近 10% 目标的低风险改动：适度增加 target-focus 步数或引入 checkpoint/eval 中间点，而不是立即扩大到 dropout/far_field。
+4. 只有 noise 或 reverb 达到 10% 相对 WER 改善、clean 无退化，并且错误分析没有新增明显重复/幻觉风险时，才进入 router。
 
 ## 待确认问题
 
