@@ -1,0 +1,6 @@
+{
+  "step": 160,
+  "loss": 0.5384670495986938,
+  "adapter_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v5-late-audio-mlp/checkpoints/step-0160/adapter",
+  "processor_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v5-late-audio-mlp/checkpoints/step-0160/processor"
+}
