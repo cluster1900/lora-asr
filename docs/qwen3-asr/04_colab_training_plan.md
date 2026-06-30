@@ -570,21 +570,51 @@ python scripts/run_qwen3_asr_base_recheck.py \
 - 如果任一 checkpoint 达到 noise、reverb 或 noise+reverb 相对 4bit base recheck 10% WER 改善，且 clean/far_field 无明显退化，才进入 router 前检查。
 - 如果 v5 仍未超过 v3，下一轮转向数据或损失约束，不继续盲目扩大 target。
 
-## Notebook 10: Router
+## Notebook 10: v6A Hard-Profile 数据构建
 
 名称：
 
-- `notebooks/10_router_colab.ipynb`
+- `notebooks/10_make_hard_profile_dataset_colab.ipynb`
 
 目的：
 
-- 训练并校准 clean/degraded 音频分类器。
+- 在 Google Drive 项目目录中，从已存在的 `lora_mvp` clean 音频派生 v6A hard-profile train/val。
+- 用最少步骤补齐 hard profile 与复合场景数据，而不是继续做 target-only ablation。
+- 生成下一步 Notebook 11 base difficulty scoring 可直接读取的 manifest。
+
+默认配置：
+
+- `configs/data/v6a_hard_profile.yaml`
+- source train manifest：`data/jsonl/lora_mvp_train.local.jsonl`
+- source val manifest：`data/jsonl/lora_mvp_val.local.jsonl`
+- output audio：`data/v6a_hard_profile/audio/`
+- train output：`data/jsonl/v6a_hard_profile_train.local.jsonl`
+- val output：`data/jsonl/v6a_hard_profile_val.local.jsonl`
+- stats output：`data/jsonl/v6a_hard_profile_stats.local.json`
+- scenarios：clean、noise、reverb、noise_reverb、far_field、dropout、far_field_noise
+- profile：hard
+- variants per utterance：2
 
 输出：
 
-- router checkpoint。
-- threshold config。
-- routing evaluation report。
+- v6A hard-profile train/val 音频。
+- v6A train/val JSONL manifest。
+- 数据统计和退化质量统计。
+
+测试标准：
+
+- preflight 必须确认 `data/lora_mvp/audio/`、source manifest 和配置文件存在。
+- smoke 模式生成 2 个 train clean 源和 1 个 val clean 源，行数应为 14/7。
+- full 模式生成行数应为 1680/420，除非手动改配置。
+- manifest 中所有音频路径存在。
+- train/val `base_utterance_id` 无交集。
+- manifest 不包含 `baseline_mvp_150` 或 `data/mvp_eval/audio`。
+
+验收标准：
+
+- Notebook 输出 `v6A hard-profile data ready`。
+- stats 中记录 seed、profile、scenario counts、source clean 数量和退化统计。
+- 生成数据后不直接开始训练，下一步进入 Notebook 11 difficulty scoring。
 
 ## Notebook 10+: v6 大阶段训练编排
 

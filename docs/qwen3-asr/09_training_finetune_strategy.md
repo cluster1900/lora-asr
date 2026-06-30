@@ -285,8 +285,22 @@ notebook 文件名继续递增编号，避免实验版本号和 notebook 序号�
 范围：
 
 - 新增 hard-profile train/val 数据。
+- Notebook 10 先从已提交的 `lora_mvp` clean 音频派生 7 类 hard-profile 场景，默认 1680 train / 420 val。
+- Notebook 11 再对 v6A train/val 跑 4bit base inference，生成 `base_wer` 和 `difficulty_bucket`。
 - 训练 target 回到 v3 的 99 target。
 - 不训练 audio MLP，不训练 text decoder。
+
+最小执行步骤：
+
+1. `10_make_hard_profile_dataset_colab.ipynb` 生成 v6A hard-profile manifest 和 stats。
+2. `11_score_base_difficulty_colab.ipynb` 给 v6A manifest 打 base WER 分桶，过滤明显过难或过易样本。
+3. `12_train_lora_v6a_hard_profile_colab.ipynb` 使用 v3 99 target 训练，并在固定 MVP 150 上评测。
+
+调整规则：
+
+- 如果 Notebook 10 stats 显示 clipping 或 active silence 过高，先把 `variants_per_utterance` 保持 1-2，并降低 hard profile 强度，不直接训练。
+- 如果 Notebook 11 中 `wer_70_plus` 占比过高，v6A 训练先排除或小比例采样该 bucket。
+- 如果 v6A 没有超过 v3，不继续扩大 target，优先扩展真实 clean/noise/RIR 数据源。
 
 验收：
 

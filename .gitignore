@@ -18,6 +18,11 @@ runs/
 wandb/
 tensorboard/
 
+# Regenerable v6A hard-profile data
+data/v6a_hard_profile/
+data/jsonl/v6a_hard_profile_*.local.jsonl
+data/jsonl/v6a_hard_profile_*.local.json
+
 # Checkpoints and model weights
 ckpt/
 *.pt

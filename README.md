@@ -17,7 +17,7 @@ clean/noise 音频
   -> overall 与 scenario-level 指标
 ```
 
-Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。训练前探测已确认官方 `qwen-asr` wrapper 暴露 `Qwen3ASRForConditionalGeneration` 根节点，第一版 LoRA smoke target 收敛为 audio tower attention + speech projection。Unsloth 兼容性检查已失败，当前训练框架回退为 Transformers + PEFT；20 step smoke training 已跑通。正式 LoRA v1 bootstrap 训练和 held-out 评测已完成，但 noise/reverb 目标场景变差，因此当前进入 v2 快速 ablation，不进入 router。
+Qwen3-ASR-1.7B 已在 Colab GPU runtime 中完成 MVP 150 hard profile baseline 评测。训练前探测已确认官方 `qwen-asr` wrapper 暴露 `Qwen3ASRForConditionalGeneration` 根节点，第一版 LoRA smoke target 收敛为 audio tower attention + speech projection。Unsloth 兼容性检查已失败，当前训练框架回退为 Transformers + PEFT；20 step smoke training 已跑通。v1-v5 训练和 held-out 评测已完成，当前最优小闭环仍是 v3。v6 开始转向 hard-profile 数据对齐：先用 Notebook 10 生成 v6A hard-profile train/val，再做 base WER 分桶和 v6A 训练。
 
 Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google Drive 中的工程代码已经更新到 GitHub 最新提交，再继续执行 baseline 或训练 notebook。
 
@@ -35,6 +35,7 @@ Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google
 - `scripts/create_smoke_audio.py`：本地生成 clean/noise smoke 音频和本地 manifest。
 - `scripts/create_mvp_eval_audio.py`：本地生成 150 条 MVP 评测音频，覆盖 clean、noise、reverb、far_field、dropout。
 - `scripts/create_lora_mvp_dataset.py`：生成正式 LoRA MVP 启动用 bootstrap train/val manifest，默认覆盖 clean、noise、reverb。
+- `scripts/create_v6a_hard_profile_dataset.py`：从已有 `lora_mvp` clean 音频派生 v6A hard-profile train/val manifest，默认覆盖 7 类场景。
 - `data/mvp_eval/audio/`：已提交 150 条 MVP smoke 音频，供 Colab 直接拉取后训练前检查和 smoke training 使用。
 - `inference/qwen3_asr_base_infer.py`：读取 JSONL manifest，调用 Qwen3-ASR baseline 生成 ASR prediction JSONL。
 - `inference/qwen3_asr_lora_infer.py`：加载 Qwen3-ASR base 与 PEFT adapter，生成 LoRA always-on ASR prediction JSONL。
@@ -51,6 +52,7 @@ Colab 侧推荐先运行 `notebooks/00_clone_github_colab.ipynb`，确认 Google
 - `notebooks/04_train_lora_mvp_colab.ipynb`：Colab/Google Drive 正式 LoRA MVP bootstrap 训练入口，默认 600 step。
 - `notebooks/05_eval_lora_mvp_colab.ipynb`：Colab/Google Drive LoRA MVP held-out 评测入口，对比 base 与 LoRA。
 - `notebooks/06_train_lora_mvp_v2_colab.ipynb`：Colab/Google Drive LoRA MVP v2 快速 ablation 入口，默认 attention-only、noise/reverb-only、长短句均衡采样。
+- `notebooks/10_make_hard_profile_dataset_colab.ipynb`：Colab/Google Drive v6A hard-profile 数据构建入口。
 - `configs/baseline/qwen3_asr_baseline.yaml`：baseline smoke 配置。
 
 ## 快速开始
@@ -236,6 +238,31 @@ Colab 中推荐直接执行：
 notebooks/05_eval_lora_mvp_colab.ipynb
 ```
 
+### 8. 生成 v6A hard-profile train/val
+
+v5 后不继续盲目扩大 target，先生成 hard-profile 多场景数据：
+
+```text
+notebooks/10_make_hard_profile_dataset_colab.ipynb
+```
+
+脚本入口：
+
+```bash
+python3 scripts/create_v6a_hard_profile_dataset.py \
+  --config configs/data/v6a_hard_profile.yaml \
+  --force
+```
+
+默认输出：
+
+- `data/v6a_hard_profile/audio/`
+- `data/jsonl/v6a_hard_profile_train.local.jsonl`
+- `data/jsonl/v6a_hard_profile_val.local.jsonl`
+- `data/jsonl/v6a_hard_profile_stats.local.json`
+
+这些输出是可再生的本地/Drive 数据，默认不提交到 git。生成完成后，下一步是 Notebook 11 base difficulty scoring，再进入 Notebook 12 v6A 训练。
+
 ## 目录结构
 
 ```text
@@ -262,6 +289,7 @@ train/        后续 LoRA/QLoRA 训练入口
 
 按路线图继续执行：
 
-1. 执行 [05 LoRA 训练 MVP](docs/qwen3-asr/roadmap/05_lora_training_mvp.md) 的 `05E`：跑 v2 attention-only、noise/reverb-only、长短句均衡采样短实验。
-2. 用固定 MVP 150 held-out test 集比较 base、v1 和 v2。
-3. 只有当 LoRA always-on 至少在 noise 或 reverb 优于 base 后，再进入 [07 Router MVP](docs/qwen3-asr/roadmap/07_router_mvp.md)。
+1. 执行 `notebooks/10_make_hard_profile_dataset_colab.ipynb`，生成 v6A hard-profile train/val。
+2. 新增 Notebook 11，对 v6A manifest 跑 4bit base inference 并生成 difficulty bucket。
+3. 新增 Notebook 12，回到 v3 的 99 target 训练 v6A。
+4. 只有 noise 或 reverb 达到 10% 相对 WER 改善、clean 无退化，并且错误分析没有新增明显重复/幻觉风险时，才进入 router。

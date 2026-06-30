@@ -15,8 +15,11 @@
 - `07_train_lora_mvp_v3_colab.ipynb`：执行 LoRA MVP v3 target-focus，默认使用 v1 的 99 个 target、noise/reverb-only、长短均衡采样，目标是相对 4bit base recheck 接近或超过 10% 改善。
 - `08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb`：执行 LoRA MVP v4 checkpoint sweep，沿用 v3 方向训练到 600 step，并评测 160/320/480/final 600 step checkpoint。
 - `09_train_lora_mvp_v5_late_audio_mlp_colab.ipynb`：执行 LoRA MVP v5 late audio MLP ablation，在 99 个音频侧 target 基础上新增 audio tower 12-23 层 `fc1/fc2`，评测 160/320/final 480 step checkpoint。
+- `10_make_hard_profile_dataset_colab.ipynb`：生成 v6A hard-profile train/val 数据，默认从 `lora_mvp` clean 音频派生 7 类场景，并输出 stats。
+- `11_score_base_difficulty_colab.ipynb`：规划中，对 v6A manifest 跑 4bit base inference 并生成 difficulty bucket。
+- `12_train_lora_v6a_hard_profile_colab.ipynb`：规划中，回到 v3 的 99 target 训练 hard-profile data alignment。
 - `02_make_dataset_colab.ipynb`
-- `10_router_colab.ipynb`
+- `16_router_colab.ipynb`：规划中，只有 LoRA 达到门槛后再训练 router。
 
 规则：
 

@@ -283,6 +283,113 @@ v3/v4/v5 的结果说明，当前 medium-profile bootstrap 数据无法支撑目
 v5 增加 audio MLP target 后仍未超过 v3，说明下一步应优先补数据难度和场景覆盖，
 再扩大 target 或训练 text decoder。
 
+## v6A Hard-Profile Tier 1 数据构建
+
+### 背景
+
+当前 LoRA 训练集只有 medium profile 的 clean/noise/reverb，而 held-out MVP 150
+是 hard profile，存在训练难度和评测难度错配。为了用最少步骤验证数据对齐是否
+比继续扩 target 更有效，v6A 先复用已提交的 `lora_mvp` clean 音频作为源音频，
+在 Colab/Drive 中派生 hard profile 多场景 train/val。
+
+### 范围
+
+本阶段做：
+
+- 从 `data/jsonl/lora_mvp_train.local.jsonl` 和 `data/jsonl/lora_mvp_val.local.jsonl`
+  中只读取 `scenario=clean` 的源样本。
+- 生成 clean、noise、reverb、noise_reverb、far_field、dropout、far_field_noise。
+- 默认 hard profile、固定 seed、每个源 utterance 生成 2 个 variant。
+- 输出新的 v6A train/val manifest、音频和 stats。
+
+本阶段不做：
+
+- 不使用 `data/jsonl/baseline_mvp_150.local.jsonl` 或 `data/mvp_eval/audio/` 训练。
+- 不引入 Mega-ASR 上游代码。
+- 不在 Notebook 10 内跑 base inference 或训练；difficulty scoring 交给 Notebook 11，
+  LoRA 训练交给 Notebook 12。
+
+### 设计
+
+输入：
+
+- `configs/data/v6a_hard_profile.yaml`
+- `data/jsonl/lora_mvp_train.local.jsonl`
+- `data/jsonl/lora_mvp_val.local.jsonl`
+- `data/lora_mvp/audio/`
+
+默认输出：
+
+- `data/v6a_hard_profile/audio/`
+- `data/jsonl/v6a_hard_profile_train.local.jsonl`
+- `data/jsonl/v6a_hard_profile_val.local.jsonl`
+- `data/jsonl/v6a_hard_profile_stats.local.json`
+
+默认规模：
+
+- train：120 个 clean 源 utterance x 7 个 scenario x 2 个 variant = 1680 条。
+- val：30 个 clean 源 utterance x 7 个 scenario x 2 个 variant = 420 条。
+
+1680 条 train 低于长期 Tier 1 的 2k-5k 建议，但它是 v6A-min 的最小闭环。若
+Notebook 10 stats 和 Notebook 11 difficulty bucket 显示数据可用，可把
+`variants_per_utterance` 提到 3，得到 2520 条 train 后再跑正式 v6A。
+
+每条样本保留：
+
+- `audio`、`answer`、`language`、`scenario`、`split`
+- `source`、`is_degraded`、`utterance_id`、`base_utterance_id`
+- `source_audio`、`source_manifest`、`variant_index`
+- `degradation`、`profile`、`seed`、`sample_rate`
+- `text_length_bucket`、`reference_word_count`
+- `approx_snr_db`、`rms_ratio`、`active_near_silence_ratio`、`clipping_ratio`
+
+### 命令
+
+```bash
+python3 scripts/create_v6a_hard_profile_dataset.py \
+  --config configs/data/v6a_hard_profile.yaml \
+  --force
+```
+
+小样本 smoke：
+
+```bash
+python3 scripts/create_v6a_hard_profile_dataset.py \
+  --config configs/data/v6a_hard_profile.yaml \
+  --max-train-base-utterances 2 \
+  --max-val-base-utterances 1 \
+  --variants-per-utterance 1 \
+  --output-dir /tmp/mega-asr-v6a/audio \
+  --train-manifest /tmp/mega-asr-v6a/train.jsonl \
+  --val-manifest /tmp/mega-asr-v6a/val.jsonl \
+  --stats /tmp/mega-asr-v6a/stats.json \
+  --force
+```
+
+### 测试
+
+- JSONL 每行可解析。
+- 每条样本的音频路径存在。
+- train/val `base_utterance_id` 无交集。
+- 输出 manifest 不包含 `baseline_mvp_150` 或 `data/mvp_eval/audio`。
+- scenario counts 与 `scenarios x variants_per_utterance x clean_source_count` 一致。
+- stats 记录 source clean 数量、seed、profile、scenario counts、duration 和退化质量统计。
+
+### 验收
+
+- `notebooks/10_make_hard_profile_dataset_colab.ipynb` 能在 Google Drive 项目目录中生成 v6A manifest。
+- smoke 命令可在本地生成 14 条 train 和 7 条 val，并通过路径与 split 校验。
+- 生成数据不会覆盖固定 MVP 150 held-out test。
+- Notebook 10 完成后，下一步只进入 Notebook 11 base difficulty scoring；不直接跳到训练。
+
+### 影响
+
+- v6A 训练将从 medium profile noise/reverb-only，转为 hard profile 多场景数据。
+- 该数据仍由 TTS clean 源和规则退化构成，只能验证训练链路和难度对齐，不能声明达到
+  Mega-ASR 或真实鲁棒 ASR 水平。
+- 若 v6A 只改善合成 hard profile 而不改善固定 MVP 150 或后续真实 holdout，应回到数据源扩展，
+  而不是继续扩大 LoRA target。
+
 ### 数据分层
 
 Tier 1：hard-profile MVP train/val

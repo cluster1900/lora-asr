@@ -71,18 +71,20 @@
   - 结果显示 v5 没有超过 v3。v5_0480 的 noise+reverb 相对 base recheck 改善约 5.87%，v3 为 6.71%。
   - v5 没有像 v4_0600 那样造成 far_field 大幅崩溃，但 dropout/far_field 仍无实质改善。
 - `v6A hard-profile data alignment`：
-  - 下一步。
+  - 已完成 Notebook 10 数据构建入口和本地 smoke/full 验证。
   - 回到 v3 的 99 target，不继续扩大 target。
-  - 新增 hard-profile train/val，并对样本打 base WER difficulty bucket。
+  - 先从已提交的 `lora_mvp` clean 音频派生 hard-profile train/val，默认覆盖 clean、noise、reverb、noise_reverb、far_field、dropout、far_field_noise。
+  - Notebook 10 只生成数据和 stats；Notebook 11 再对样本打 base WER difficulty bucket；Notebook 12 才开始训练。
   - 验证数据难度对齐是否能突破 v3。
 
 ## 下一批里程碑
 
-1. 实现 v6A hard-profile data alignment 数据生成和 difficulty manifest。
-2. 使用 v3 的 99 target 训练 v6A，不训练 audio MLP 或 text decoder。
-3. 若 v6A 超过 v3，再做 v6B mixed constraint，加入 dropout/far_field hard negative。
-4. 若 v6A 仍未超过 v3，暂停模型 target ablation，优先扩展真实语音和噪声/RIR 数据源。
-5. 只有 noise 或 reverb 达到 10% 相对 WER 改善、clean 无退化，并且错误分析没有新增明显重复/幻觉风险时，才进入 router。
+1. 在 Colab 执行 `10_make_hard_profile_dataset_colab.ipynb`，生成 Drive 内的 v6A hard-profile train/val manifest 和 stats。
+2. 完成 `11_score_base_difficulty_colab.ipynb`，给 v6A 样本补 `base_prediction`、`base_wer`、`difficulty_bucket` 和 `failure_tags`。
+3. 使用 v3 的 99 target 训练 v6A，不训练 audio MLP 或 text decoder。
+4. 若 v6A 超过 v3，再做 v6B mixed constraint，加入 dropout/far_field hard negative。
+5. 若 v6A 仍未超过 v3，暂停模型 target ablation，优先扩展真实语音和噪声/RIR 数据源。
+6. 只有 noise 或 reverb 达到 10% 相对 WER 改善、clean 无退化，并且错误分析没有新增明显重复/幻觉风险时，才进入 router。
 
 ## 待确认问题
 
@@ -106,6 +108,14 @@
 完成 v5 late audio MLP 结果复盘。v5 target count 为 123，可训练参数约 2.67M；step 0480 是 v5 最优，overall WER 0.541127，noise WER 0.419624，reverb WER 0.517745，noise+reverb WER 0.468685。相对 4bit base，v5_0480 的 noise+reverb 改善约 5.87%，未超过 v3 的 6.71%。结论：当前主瓶颈不是 audio-side target 容量，而是 hard-profile 数据、场景覆盖、base WER 分桶和反幻觉训练目标。
 
 新增 `09_training_finetune_strategy.md`。后续路线统一定义为 v6 大阶段：v6A hard-profile data alignment、v6B mixed constraint、v6C A2S-style encoder/aligner curriculum、v6D text decoder pilot，最后再恢复 router；notebook 文件编号继续递增。
+
+完成 `10_make_hard_profile_dataset_colab.ipynb` 和
+`scripts/create_v6a_hard_profile_dataset.py`。v6A-min 决策：先复用已提交的
+`lora_mvp` clean 音频，派生 hard profile 的 clean、noise、reverb、noise_reverb、
+far_field、dropout、far_field_noise，默认 1680 train / 420 val；这样可以用最少
+步骤验证 hard-profile 数据对齐是否比继续扩 target 更有效。本地 smoke 生成
+14 train / 7 val 已通过；默认 full 生成 1680 train / 420 val 已通过，且音频路径存在、
+train/val source base 无泄漏、未引用固定 MVP 150 held-out test。
 
 ### 2026-06-07
 

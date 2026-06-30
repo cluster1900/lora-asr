@@ -199,6 +199,17 @@ python scripts/run_qwen3_asr_base_recheck.py \
 - 训练数据的 scenario 分布、difficulty bucket 分布和退化统计。
 - top improvements 和 top regressions。
 
+v6A 数据构建通过标准：
+
+- `scripts/create_v6a_hard_profile_dataset.py --help` 可执行。
+- smoke 生成 14 条 train、7 条 val，并且所有 `audio` 路径存在。
+- full 默认生成 1680 条 train、420 条 val。
+- train/val `base_utterance_id` 无交集。
+- train/val `source_base_utterance_id` 无交集。
+- 输出 scenario 包含 clean、noise、reverb、noise_reverb、far_field、dropout、far_field_noise。
+- 输出 manifest 不包含 `baseline_mvp_150` 或 `data/mvp_eval/audio`。
+- stats 文件包含 seed、profile、variants_per_utterance、source_manifest、scenario_counts 和 degradation_stats。
+
 v6A 通过标准：
 
 - noise 或 reverb 至少一个场景相对 4bit base recheck 改善超过 10%。
