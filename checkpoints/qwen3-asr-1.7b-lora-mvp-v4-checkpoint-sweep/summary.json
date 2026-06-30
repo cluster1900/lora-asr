@@ -1,0 +1,734 @@
+{
+  "status": "trained",
+  "elapsed_seconds": 370.0809,
+  "loss_min": 6.9651105150114745e-06,
+  "loss_max": 1.2428410053253174,
+  "loss_last": 0.0012517670402303338,
+  "steps": 600,
+  "adapter_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/adapter",
+  "saved_checkpoints": [
+    {
+      "step": 160,
+      "loss": 0.5421444177627563,
+      "adapter_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0160/adapter",
+      "processor_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0160/processor"
+    },
+    {
+      "step": 320,
+      "loss": 0.011021552607417107,
+      "adapter_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0320/adapter",
+      "processor_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0320/processor"
+    },
+    {
+      "step": 480,
+      "loss": 0.11557237803936005,
+      "adapter_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0480/adapter",
+      "processor_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0480/processor"
+    }
+  ],
+  "target_modules": {
+    "count": 99,
+    "estimated_lora_params": 446694168,
+    "targets": [
+      {
+        "raw_name": "audio_tower.layers.0.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.0.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.0.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.0.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.0.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.0.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.0.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.0.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.1.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.1.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.1.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.1.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.1.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.1.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.1.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.1.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.2.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.2.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.2.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.2.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.2.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.2.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.2.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.2.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.3.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.3.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.3.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.3.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.3.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.3.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.3.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.3.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.4.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.4.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.4.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.4.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.4.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.4.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.4.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.4.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.5.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.5.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.5.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.5.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.5.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.5.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.5.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.5.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.6.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.6.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.6.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.6.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.6.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.6.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.6.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.6.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.7.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.7.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.7.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.7.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.7.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.7.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.7.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.7.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.8.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.8.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.8.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.8.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.8.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.8.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.8.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.8.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.9.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.9.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.9.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.9.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.9.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.9.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.9.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.9.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.10.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.10.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.10.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.10.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.10.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.10.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.10.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.10.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.11.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.11.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.11.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.11.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.11.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.11.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.11.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.11.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.12.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.12.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.12.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.12.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.12.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.12.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.12.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.12.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.13.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.13.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.13.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.13.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.13.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.13.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.13.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.13.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.14.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.14.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.14.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.14.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.14.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.14.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.14.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.14.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.15.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.15.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.15.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.15.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.15.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.15.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.15.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.15.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.16.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.16.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.16.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.16.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.16.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.16.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.16.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.16.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.17.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.17.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.17.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.17.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.17.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.17.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.17.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.17.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.18.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.18.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.18.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.18.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.18.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.18.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.18.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.18.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.19.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.19.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.19.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.19.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.19.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.19.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.19.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.19.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.20.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.20.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.20.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.20.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.20.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.20.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.20.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.20.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.21.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.21.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.21.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.21.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.21.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.21.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.21.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.21.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.22.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.22.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.22.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.22.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.22.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.22.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.22.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.22.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.23.self_attn.k_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.23.self_attn.k_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.23.self_attn.v_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.23.self_attn.v_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.23.self_attn.q_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.23.self_attn.q_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.layers.23.self_attn.out_proj",
+        "prefixed_name": "model.thinker.audio_tower.layers.23.self_attn.out_proj",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.conv_out",
+        "prefixed_name": "model.thinker.audio_tower.conv_out",
+        "class_name": "Linear4bit",
+        "weight_shape": "3932160x1",
+        "lora_params": 31457288
+      },
+      {
+        "raw_name": "audio_tower.proj1",
+        "prefixed_name": "model.thinker.audio_tower.proj1",
+        "class_name": "Linear4bit",
+        "weight_shape": "524288x1",
+        "lora_params": 4194312
+      },
+      {
+        "raw_name": "audio_tower.proj2",
+        "prefixed_name": "model.thinker.audio_tower.proj2",
+        "class_name": "Linear4bit",
+        "weight_shape": "1048576x1",
+        "lora_params": 8388616
+      }
+    ],
+    "target_root_prefix": "model.thinker",
+    "trainable_parameter_summary": {
+      "total_params": 1178592896,
+      "trainable_params": 1683456,
+      "trainable_ratio": 0.0014283608918002507
+    }
+  }
+}

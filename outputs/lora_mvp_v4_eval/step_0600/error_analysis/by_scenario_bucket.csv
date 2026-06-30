@@ -1,0 +1,11 @@
+scenario,text_length_bucket,samples,num_edits,ref_len,error_rate,empty_output_rate,hallucination_like_rate,repeat_like_rate,too_long_rate,too_short_rate
+clean,long,15,4,372,0.010753,0.0,0.0,0.0,0.0,0.0
+clean,short,15,0,107,0.0,0.0,0.0,0.0,0.0,0.0
+dropout,long,15,291,372,0.782258,0.0,0.466667,0.0,0.0,0.866667
+dropout,short,15,77,107,0.719626,0.0,0.333333,0.0,0.0,0.733333
+far_field,long,15,436,372,1.172043,0.0,1.0,0.4,0.066667,0.4
+far_field,short,15,108,107,1.009346,0.0,0.6,0.133333,0.066667,0.066667
+noise,long,15,183,372,0.491935,0.0,0.066667,0.066667,0.0,0.0
+noise,short,15,18,107,0.168224,0.0,0.066667,0.0,0.0,0.0
+reverb,long,15,198,372,0.532258,0.0,0.2,0.133333,0.0,0.066667
+reverb,short,15,45,107,0.420561,0.0,0.066667,0.0,0.0,0.066667

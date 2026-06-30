@@ -1,0 +1,6 @@
+scenario,samples,num_edits,ref_len,error_rate,empty_output_rate,hallucination_like_rate,repeat_like_rate,too_long_rate,too_short_rate
+clean,30,4,479,0.008351,0.0,0.0,0.0,0.0,0.0
+dropout,30,366,479,0.764092,0.0,0.4,0.0,0.0,0.8
+far_field,30,474,479,0.989562,0.0,0.8,0.3,0.066667,0.2
+noise,30,211,479,0.440501,0.0,0.066667,0.0,0.0,0.0
+reverb,30,255,479,0.532359,0.0,0.133333,0.033333,0.0,0.033333

@@ -1,0 +1,6 @@
+{
+  "step": 480,
+  "loss": 0.11557237803936005,
+  "adapter_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0480/adapter",
+  "processor_dir": "/content/drive/MyDrive/qwen3-asr/checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0480/processor"
+}
