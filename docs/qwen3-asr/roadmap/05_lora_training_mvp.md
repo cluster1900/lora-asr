@@ -1,6 +1,6 @@
 # 05 LoRA 训练 MVP
 
-最后更新：2026-06-29
+最后更新：2026-06-30
 
 ## 背景
 
@@ -22,8 +22,9 @@ audio tower target 可挂载、loss 非 NaN、adapter 可保存。
 
 当前 `05D LoRA MVP 正式训练闭环` 第一轮已经完成。注意：`05C` 不是 LoRA MVP
 成功，只是不再被训练入口、target 和 Colab 依赖阻塞。4bit base recheck 完成后，
-v1/v2 被确认对 noise/reverb 有弱收益，但未达到 10% 改善门槛。因此现在进入
-`05F LoRA MVP v3 target-focus`，继续优化 target 场景，不进入 router。
+v1/v2/v3/v4 均确认 LoRA 对 noise/reverb 有收益，但还没有稳定达到 10% 改善门槛。
+因此现在进入 `05H LoRA MVP v5 late audio MLP`，继续只在音频侧扩大 target，不进入
+router。
 
 ## 当前 Baseline 对照
 
@@ -292,6 +293,49 @@ v4 验收标准：
 - 160/320/480/final 600 step 至少四个 checkpoint 都完成 held-out MVP 150 推理和评测。
 - 任一 checkpoint 的 noise 或 reverb 相对 4bit base recheck WER 改善达到或超过 10%，且 clean 无明显退化，才进入 router 前检查。
 - 若没有 checkpoint 达到 10%，继续 target/data/lr ablation，不进入 router。
+
+### 05H LoRA MVP v5 late audio MLP
+
+背景：
+
+- v3 是当前最稳的 LoRA：noise 相对 4bit base recheck 改善约 8.33%，noise+reverb
+  合并改善约 6.71%。
+- v4 证明单纯延长训练不能稳定突破 10%；600 step 对 reverb 有小幅增益，但 far_field
+  明显回退。
+- 当前 99 target 已覆盖 audio attention 和 speech projection，但没有训练 audio tower
+  MLP；这可能限制了模型对噪声和混响的非线性声学补偿能力。
+
+范围：
+
+- 本轮只新增 `audio_tower.layers.12-23.fc1/fc2`，共 24 个 late audio MLP target。
+- 继续训练 noise/reverb，不混入 clean。
+- 继续使用固定 MVP 150 held-out test。
+- 不训练 text decoder attention、text decoder MLP、`lm_head` 或 speech conv。
+- 不进入 router，除非 v5 checkpoint 明确达到 target 场景收益并控制 clean/far_field 风险。
+
+默认配置：
+
+- 配置：`configs/train/qwen3_asr_lora_mvp_v5_late_audio_mlp.yaml`
+- Colab 入口：`notebooks/09_train_lora_mvp_v5_late_audio_mlp_colab.ipynb`
+- train manifest：`data/jsonl/lora_mvp_train.local.jsonl`
+- scenario filter：`noise,reverb`
+- output：`checkpoints/qwen3-asr-1.7b-lora-mvp-v5-late-audio-mlp`
+- eval output：`outputs/lora_mvp_v5_eval`
+- target：audio tower attention + speech projection + late audio tower MLP，共 123 个模块
+- 学习率：`1.5e-5`
+- max steps：`480`
+- save steps：`160`
+- sampling：`scenario_bucket_round_robin`，按 `noise/reverb × short/long` 四个桶轮转。
+
+v5 验收标准：
+
+- preflight target count 等于 123。
+- preflight 必须确认 24 个新增 MLP target 全部来自 audio tower 的 12-23 层，且只包含 `fc1/fc2`。
+- preflight 必须确认没有命中 text decoder、`lm_head` 或 speech conv。
+- 160/320/final 480 step 至少三个 checkpoint 完成 held-out MVP 150 推理和评测。
+- comparison 表必须同时展示 4bit base recheck、v3、v4_600 和 v5 checkpoint sweep。
+- 任一 checkpoint 的 noise、reverb 或 noise+reverb 相对 4bit base recheck WER 改善达到或超过 10%，clean 不明显退化，且 far_field 不比 v3 明显回退，才进入 router 前检查。
+- 若 v5 无法超过 v3 或引入 far_field/重复输出风险，下一轮优先做数据或损失约束，例如加入少量 hard far_field/dropout 作为负向约束。
 
 ### LoRA held-out 推理评测入口
 

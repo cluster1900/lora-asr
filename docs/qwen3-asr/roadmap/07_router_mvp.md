@@ -1,6 +1,6 @@
 # 07 Router MVP
 
-最后更新：2026-06-29
+最后更新：2026-06-30
 
 ## 背景
 
@@ -33,7 +33,7 @@
 - `router/infer_router.py`
 - `router/model.py`
 - `configs/train/router_mvp.yaml`
-- `notebooks/09_router_colab.ipynb`
+- `notebooks/10_router_colab.ipynb`
 
 ## 执行步骤
 

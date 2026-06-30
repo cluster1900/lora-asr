@@ -266,6 +266,29 @@
 - 当前不进入 router。
 - 下一轮应优先测试数据/目标/正则约束或 target 结构，而不是继续增加 step。
 
+### D016: v5 优先测试 late audio MLP，不训练 text decoder
+
+决策：
+
+- v5 在当前 99 个 audio attention + speech projection target 基础上，只加入 `audio_tower.layers.12-23.fc1/fc2`。
+- v5 不训练 text decoder attention、text decoder MLP、`lm_head` 或 speech conv。
+- v5 使用较低学习率和 checkpoint sweep，默认 `learning_rate=1.5e-5`、`max_steps=480`、`save_steps=160`。
+
+原因：
+
+- v3 证明 audio attention + speech projection 有效，但收益不足 10%。
+- v4 证明单纯增加 step 会牺牲 far_field，说明需要改变 capacity 或约束，而不是继续拉长训练。
+- audio tower MLP 负责音频表征的非线性变换，可能比继续训练 attention 更适合学习噪声/混响补偿。
+- 只选后半层 audio MLP 是为了降低破坏低层声学特征的风险。
+- text decoder 和 `lm_head` 更可能放大语言补全和幻觉式输出，小数据阶段暂不训练。
+
+影响：
+
+- 新增 `configs/train/qwen3_asr_lora_mvp_v5_late_audio_mlp.yaml`。
+- 新增 `notebooks/09_train_lora_mvp_v5_late_audio_mlp_colab.ipynb`。
+- router notebook 顺延为 `notebooks/10_router_colab.ipynb`。
+- v5 验收必须同时看 target 场景收益和 far_field regression；若 far_field 明显回退，不进入 router。
+
 ## 风险
 
 ### R001: Qwen3-ASR 在强退化音频上仍可能失败

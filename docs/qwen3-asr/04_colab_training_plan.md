@@ -536,11 +536,45 @@ python scripts/run_qwen3_asr_base_recheck.py \
 - 如果任一 checkpoint 达到 noise 或 reverb 相对 4bit base recheck 10% WER 改善，且 clean 无明显退化，则进入 router 前检查。
 - 如果没有 checkpoint 达到 10%，继续 target/data/lr ablation，不进入 router。
 
-## Notebook 09: Router
+## Notebook 09: LoRA MVP v5 Late Audio MLP
 
 名称：
 
-- `notebooks/09_router_colab.ipynb`
+- `notebooks/09_train_lora_mvp_v5_late_audio_mlp_colab.ipynb`
+
+目的：
+
+- 在 v3/v4 的 99 个 audio attention + speech projection target 基础上，只新增 audio tower 后半层 MLP target。
+- 验证更多音频侧非线性容量是否能把 noise/reverb 相对 4bit base recheck 的 WER 改善推到 10% 以上。
+- 同时检查 far_field 是否继续回退，避免把有害 checkpoint 带入 router。
+
+默认配置：
+
+- `configs/train/qwen3_asr_lora_mvp_v5_late_audio_mlp.yaml`
+- output：`checkpoints/qwen3-asr-1.7b-lora-mvp-v5-late-audio-mlp`
+- eval output：`outputs/lora_mvp_v5_eval`
+- target count：123
+- 新增 target：`audio_tower.layers.12-23.fc1/fc2`，共 24 个。
+- scenario filter：noise,reverb
+- learning rate：1.5e-5
+- max steps：480
+- save steps：160
+- sampling：`scenario_bucket_round_robin`
+
+验收标准：
+
+- preflight target count 等于 123。
+- preflight 必须确认没有命中 text decoder、`lm_head` 或 speech conv。
+- 至少 160/320/final 480 三个 checkpoint 完成 MVP 150 推理和评测。
+- comparison 表必须同时展示 base recheck、v3、v4_600 和 v5 checkpoint sweep。
+- 如果任一 checkpoint 达到 noise、reverb 或 noise+reverb 相对 4bit base recheck 10% WER 改善，且 clean/far_field 无明显退化，才进入 router 前检查。
+- 如果 v5 仍未超过 v3，下一轮转向数据或损失约束，不继续盲目扩大 target。
+
+## Notebook 10: Router
+
+名称：
+
+- `notebooks/10_router_colab.ipynb`
 
 目的：
 
@@ -610,5 +644,6 @@ THE TRANSCRIPT TEXT
 - `06_train_lora_mvp_v2_colab.ipynb` 产出 v2 ablation 指标。
 - `07_train_lora_mvp_v3_colab.ipynb` 产出 v3 target-focus 指标。
 - `08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb` 产出 v4 checkpoint sweep 指标。
-- `09_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
+- `09_train_lora_mvp_v5_late_audio_mlp_colab.ipynb` 产出 v5 late audio MLP checkpoint sweep 指标。
+- `10_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
 - 所有 notebook 的输入、输出和依赖都能追溯到配置文件。

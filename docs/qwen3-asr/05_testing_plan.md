@@ -512,3 +512,34 @@ v4 已完成 160/320/480/final 600 step checkpoint sweep。训练输出位于
 - 单纯延长 v3 target-focus 训练不能稳定突破目标；后段训练会增强 reverb，但牺牲 far_field 泛化。
 - 当前不进入 router。
 - 下一轮应从数据/目标/正则约束或 target 结构继续 ablation，而不是继续增加 step。
+
+### v5 LoRA MVP Late Audio MLP 测试目标
+
+v5 的目的不是扩大到语言侧，而是验证是否需要训练更多音频侧层。当前只训练
+audio attention + speech projection，能够改善 noise/reverb，但 v4 说明单纯加
+step 会牺牲 far_field。v5 因此只新增后半段 audio tower MLP，让 LoRA 有更多
+声学非线性补偿能力，同时避免 text decoder 和 `lm_head` 带来的语言幻觉风险。
+
+范围：
+
+- base 对照仍为 `outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`。
+- 继承 v3/v4 的 99 个 audio attention + speech projection target。
+- 新增 `audio_tower.layers.12-23.fc1/fc2`，共 24 个 late audio MLP target。
+- 不训练 text decoder attention、text decoder MLP、`lm_head` 或 speech conv。
+- 训练场景仍为 noise/reverb，采样仍为 `scenario + text_length_bucket` 均衡轮转。
+- 默认 checkpoint sweep：160/320/final 480 step。
+
+通过标准：
+
+- preflight target count 等于 123。
+- `target_modules.json` 中新增 target 只能来自 `model.thinker.audio_tower.layers.12-23.fc1/fc2`。
+- `loss_log.jsonl` 覆盖 noise/reverb × short/long 四个桶。
+- 每个 checkpoint 都产出 prediction JSONL、scored JSONL、metrics JSON、scenario CSV 和 error analysis。
+- 汇总表包含 base recheck、v3、v4 600 和 v5 checkpoint sweep。
+
+验收标准：
+
+- 任一 v5 checkpoint 的 noise 或 reverb 相对 4bit base recheck WER 下降达到或超过 10%，或 noise+reverb 合并下降达到或超过 10%。
+- clean WER 不相对 4bit base recheck 退化超过 5%。
+- far_field 不得出现 v4 480/600 那类明显回退；若 far_field WER 明显高于 v3，不进入 router。
+- 若 v5 无法超过 v3 或引入 far_field/重复输出风险，下一轮转向数据/损失约束，而不是继续增加 target。
