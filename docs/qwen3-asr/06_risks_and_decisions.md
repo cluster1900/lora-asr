@@ -289,6 +289,64 @@
 - router notebook 顺延为 `notebooks/10_router_colab.ipynb`。
 - v5 验收必须同时看 target 场景收益和 far_field regression；若 far_field 明显回退，不进入 router。
 
+结果：
+
+- v5 checkpoint sweep 已完成，160/320/final 480 step 均完成 held-out MVP 150 评测。
+- v5 step 0480 是 v5 最优，overall WER 0.541127，noise WER 0.419624，reverb WER 0.517745，noise+reverb WER 0.468685。
+- 相对 4bit base recheck，v5_0480 的 noise+reverb 改善约 5.87%，弱于 v3 的 6.71%。
+- v5 没有像 v4_0600 那样造成 far_field 大幅崩溃，但 dropout/far_field 仍没有实质改善。
+
+后续决策：
+
+- v5 证明 late audio MLP 扩容不是当前主解。
+- 暂停继续扩大 audio-side target。
+- 下一轮转向 hard-profile 数据对齐和 WER difficulty bucket。
+
+### D017: Mega-ASR 差距排查后的优化重心
+
+决策：
+
+- 后续不再把“继续延长当前 99 target noise/reverb-only 训练”作为主路径。
+- 下一轮优先验证 hard-profile 数据对齐、dropout/far_field 约束和 A2S-style 小闭环。
+- router 继续暂停，直到 LoRA 在目标场景达到 10% 相对改善且观察场景没有明显恶化。
+
+原因：
+
+- Mega-ASR 公开材料显示，其提升来自 2.4M 样本、7 类原子声学条件、54 类复合场景、A2S-SFT、DG-WGPO 和 router 的系统组合。
+- 本项目当前 train 只有 360 条，且训练 noise/reverb 为 medium profile，而 held-out MVP 150 为 hard profile，存在明显退化强度错配。
+- 当前最强小闭环 v3 只训练约 1.68M 参数，约占当前加载模型参数 0.14%，主要覆盖 audio attention + speech projection；这能带来局部 noise/reverb 改善，但不足以解决严重 far_field/dropout 下的重复和幻觉式输出。
+- v4 checkpoint sweep 已证明单纯延长 step 不能稳定突破 10%，并会引发 far_field 明显回退。
+- v5 已证明增加后半层 audio MLP 不能超过 v3。
+
+影响：
+
+- 新实验的首要验收不只看 noise/reverb，也必须看 far_field/dropout 和重复/过长输出风险。
+- 文档和实验表格必须继续使用 4bit base recheck 作为主对照。
+- 若后续训练 text decoder 或扩大到 `all` 类 target，必须同步提高 clean regression 和 hallucination 风险监控。
+
+### D018: v6 起采用阶段化训练微调方案
+
+决策：
+
+- 新增 `docs/qwen3-asr/09_training_finetune_strategy.md` 作为 v6 大阶段的主训练方案。
+- v6A 回到 v3 的 99 target，优先验证 hard-profile data alignment 和 base WER difficulty bucket。
+- v6B 再加入 dropout/far_field mixed constraint。
+- v6C 做 A2S-style encoder/aligner curriculum。
+- v6D 才做 text decoder pilot，且默认单独 adapter、低学习率、可回滚。
+- Notebook 文件编号继续递增，不用 notebook 编号表示实验版本。
+
+原因：
+
+- v5 的 123 target 和约 2.67M 可训练参数没有超过 v3，说明 target 容量不是当前第一瓶颈。
+- 当前训练/测试 profile 错配明显，且训练数据没有 base WER 分桶，无法模拟 Mega-ASR 的 A2S-SFT 难度递进。
+- dropout/far_field 长期只作为观察集，导致目标场景提升时容易出现未训练场景回退。
+
+影响：
+
+- 后续 notebook 和配置应按数据版本和 v6 子阶段命名，不再只按 target 命名。
+- 每轮训练必须保存 difficulty manifest、scenario/difficulty 分布、失败标签和统一 comparison 表。
+- 只有 v6A/v6B 达到 10% target 场景改善并控制 clean/far_field/dropout 后，才继续 text decoder 和 router。
+
 ## 风险
 
 ### R001: Qwen3-ASR 在强退化音频上仍可能失败
@@ -328,6 +386,32 @@
 - 检查 Qwen3-ASR 模块名。
 - 做 ablation：仅后层 LLM、仅音频投影、联合 target。
 - 按 scenario 追踪结果。
+
+### R003D: 当前微调与 Mega-ASR 系统工程存在量级差距
+
+影响：
+
+- 使用数百条 TTS 合成 bootstrap 和小范围 audio-side LoRA，很难复现 Mega-ASR 公开报告的接近 30% 鲁棒 ASR 提升。
+- 如果忽略数据规模、场景覆盖、A2S-SFT、DG-WGPO 和 router 的差异，可能会把合理的小幅收益误判为训练代码失败。
+
+缓解：
+
+- 把 Mega-ASR 作为目标能力形态而不是短期数值 baseline。
+- 每轮实验明确标注训练数据量、退化 profile、target 范围、可训练参数量和 base 对照口径。
+- 先追求固定 MVP 150 上 target 场景 10% 相对改善，再逐步扩展到复合场景和 router。
+
+### R003E: 训练/测试退化强度错配会压低收益
+
+影响：
+
+- 当前训练 noise/reverb 是 medium profile，测试是 hard profile；模型可能只学到温和退化修正，无法迁移到更重退化。
+- 继续调 learning rate 或 step 可能收益有限，并可能加重 far_field/dropout 回退。
+
+缓解：
+
+- 新增 hard-profile train/val，并记录各场景平均 SNR、RMS ratio 和 near-silence ratio。
+- 每轮评测同时保留 clean、target degraded 和观察 degraded 场景。
+- 对 hard negative 加入少量 dropout/far_field 约束，避免目标场景提升换来未训练场景幻觉增加。
 
 ### R003C: LoRA 可能改善 clean 但损害 degraded
 

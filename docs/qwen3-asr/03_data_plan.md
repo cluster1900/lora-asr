@@ -1,6 +1,6 @@
 # 数据方案
 
-最后更新：2026-06-29
+最后更新：2026-06-30
 
 ## 目标
 
@@ -274,6 +274,66 @@ python3 scripts/create_lora_mvp_dataset.py \
 - Colab/本地可复现生成同一批 manifest。
 - LoRA 训练配置引用 train manifest，验证或后续 early stopping 使用 val manifest。
 - 固定 MVP 150 held-out test 与 bootstrap train/val 明确分离。
+
+## Scale-Up 数据设计
+
+### 背景
+
+v3/v4/v5 的结果说明，当前 medium-profile bootstrap 数据无法支撑目标鲁棒性。
+v5 增加 audio MLP target 后仍未超过 v3，说明下一步应优先补数据难度和场景覆盖，
+再扩大 target 或训练 text decoder。
+
+### 数据分层
+
+Tier 1：hard-profile MVP train/val
+
+- train：2k-5k 条。
+- val：300-500 条。
+- 场景：clean、noise、reverb、dropout、far_field、noise_reverb、far_field_noise。
+- 用途：v6A/v6B，验证 hard-profile 数据对齐和 mixed constraint。
+
+Tier 2：多源真实语音 + 合成退化
+
+- train：20k-50k 条。
+- val/test：2k-5k 条。
+- clean 来源：LibriSpeech、Common Voice；中文阶段再加入 AISHELL/WenetSpeech。
+- noise/RIR 来源：MUSAN、DNS Challenge、ESC-50、UrbanSound8K、公开 RIR。
+- 用途：降低 macOS TTS 和固定合成伪影过拟合。
+
+Tier 3：复合场景扩展
+
+- train：100k+ 条。
+- 场景：从 7 类原子条件扩展到 20-50 个复合场景。
+- 用途：向 Mega-ASR 的 full-scenario robust ASR 能力形态靠近。
+
+### 难度标注
+
+从 v6 开始，训练 manifest 需要先经过 base inference 生成 difficulty manifest。
+每条样本新增：
+
+- `base_prediction`
+- `base_wer`
+- `difficulty_bucket`
+- `failure_tags`
+- `approx_snr_db`
+- `rms_ratio`
+- `active_near_silence_ratio`
+
+推荐 difficulty bucket：
+
+- `wer_0_10`
+- `wer_10_30`
+- `wer_30_50`
+- `wer_50_70`
+- `wer_70_plus`
+
+### 采样原则
+
+- v6 以 `wer_10_30` 和 `wer_30_50` 为主。
+- `wer_50_70` 少量加入，用于提高 hard robustness。
+- `wer_70_plus` 默认只做观察或小比例 hard negative，避免小数据阶段学到幻觉补全。
+- clean retention 不低于 10%-15%。
+- dropout/far_field 作为约束样本加入，不再只放在 held-out 观察中。
 
 ## 测试标准
 

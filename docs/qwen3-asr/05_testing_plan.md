@@ -187,6 +187,37 @@ python scripts/run_qwen3_asr_base_recheck.py \
 - 在混合 clean/degraded 测试集上，router 模式优于 always-base 和 always-LoRA。
 - 结果能在至少两个源数据集上成立。
 
+## v6 大阶段测试矩阵
+
+从 v6 hard-profile data alignment 开始，每轮训练必须同时报告：
+
+- 4bit base recheck、v3、当前候选 checkpoint 的对比。
+- overall、clean、noise、reverb、noise+reverb、dropout、far_field、degraded WER。
+- repeat_like、too_long、too_short、hallucination_like。
+- clean regression。
+- target_modules 数量和 trainable 参数量。
+- 训练数据的 scenario 分布、difficulty bucket 分布和退化统计。
+- top improvements 和 top regressions。
+
+v6A 通过标准：
+
+- noise 或 reverb 至少一个场景相对 4bit base recheck 改善超过 10%。
+- noise+reverb 合并改善超过 v3 的 6.71%。
+- clean WER 不高于 4bit base recheck。
+- far_field/dropout 相对 base 恶化不超过 2%。
+
+v6B mixed constraint 通过标准：
+
+- target 场景不明显丢失 v6A 收益。
+- far_field repeat_like_rate 不高于 base。
+- dropout too_short_rate 不高于 base。
+
+text decoder pilot 通过标准：
+
+- 高 WER reverb/far_field 样本有改善。
+- clean WER 不退化。
+- repeat_like_rate 和 too_long_rate 不高于 audio-only 最优 checkpoint。
+
 ## 人工错误分析
 
 每次评测后抽样：

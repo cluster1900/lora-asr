@@ -586,6 +586,23 @@ python scripts/run_qwen3_asr_base_recheck.py \
 - threshold config。
 - routing evaluation report。
 
+## Notebook 10+: v6 大阶段训练编排
+
+v5 之后不再为每个 target ablation 临时增加一个只改参数的 notebook。后续 notebook
+应围绕数据版本和训练阶段组织：
+
+- `10_make_hard_profile_dataset_colab.ipynb`：生成 Tier 1 hard-profile train/val/test，并输出退化统计。
+- `11_score_base_difficulty_colab.ipynb`：对 train/val/test 跑 base inference，生成 `base_prediction`、`base_wer`、`difficulty_bucket` 和 `failure_tags`。
+- `12_train_lora_v6a_hard_profile_colab.ipynb`：使用 v3 的 99 target 训练 hard-profile data alignment。
+- `13_train_lora_v6b_mixed_constraint_colab.ipynb`：加入 dropout/far_field mixed constraint。
+- `14_train_lora_v6c_a2s_curriculum_colab.ipynb`：按 WER bucket 执行 A2S-style encoder/aligner curriculum。
+- `15_train_lora_v6d_text_decoder_pilot_colab.ipynb`：小范围 text decoder pilot，默认单独 adapter。
+- `16_router_colab.ipynb`：在 LoRA 达标后训练 router。
+
+每个 v6 大阶段训练 notebook 必须读取配置文件，不把数据比例、difficulty bucket、
+target 范围和验收阈值只写在 notebook cell 中。每轮必须产出 comparison 表，
+至少包含 `4bit base recheck`、`v3` 和当前 checkpoint。
+
 ## 训练目标格式
 
 baseline 推理不使用聊天 prompt，而是使用 `Qwen3ASRModel.transcribe(audio=..., language=...)`。训练阶段使用底层 forward + labels，因此需要显式构造 prompt 和 answer mask。
@@ -645,5 +662,6 @@ THE TRANSCRIPT TEXT
 - `07_train_lora_mvp_v3_colab.ipynb` 产出 v3 target-focus 指标。
 - `08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb` 产出 v4 checkpoint sweep 指标。
 - `09_train_lora_mvp_v5_late_audio_mlp_colab.ipynb` 产出 v5 late audio MLP checkpoint sweep 指标。
-- `10_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
+- v6 大阶段 notebook 产出 hard-profile 数据、difficulty manifest、阶段训练 checkpoint 和统一 comparison 表。
+- `16_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
 - 所有 notebook 的输入、输出和依赖都能追溯到配置文件。

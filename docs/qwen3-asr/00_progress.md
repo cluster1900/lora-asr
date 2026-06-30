@@ -4,9 +4,9 @@
 
 ## 当前状态
 
-当前阶段：`Base recheck` 已完成，历史 base 口径被确认与当前 LoRA 评测口径不一致。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练、v1 held-out MVP 150 评测、v2 attention-only 短跑、v2 held-out MVP 150 评测、4bit base recheck 和 v3 target-focus 训练评测均已完成。
+当前阶段：`Base recheck` 已完成，历史 base 口径被确认与当前 LoRA 评测口径不一致。`05A` 训练前探测、`05B` Unsloth 兼容性检查、`05C` Transformers + PEFT smoke training、正式 v1 bootstrap 训练、v1/v2/v3/v4/v5 held-out MVP 150 评测和 4bit base recheck 均已完成。
 
-现在的执行重点是：继续优化 LoRA，把 noise/reverb 相对 4bit base recheck 的改善推到 10% 以上。v3 已验证“v1 target 组合 + noise/reverb-only + 长短均衡采样”是目前最有效方向：noise 相对改善约 8.33%，noise+reverb 合并改善约 6.71%，但仍未达到 10% 门槛。v4 checkpoint sweep 已完成，证明单纯延长 target-focus 训练不能稳定突破 10%；600 step 对 reverb 有小幅增益，但 far_field 明显回退，router 继续暂停。下一轮 v5 测试 late audio MLP：在当前 99 target 基础上，只加入 audio tower 后半层 MLP，评估更多音频侧非线性容量是否能提升 noise/reverb，同时控制 far_field 回退。
+现在的执行重点是：从单轮 target ablation 转向系统化训练微调设计。v3 已验证“v1 target 组合 + noise/reverb-only + 长短均衡采样”是当前最强小闭环：noise 相对改善约 8.33%，noise+reverb 合并改善约 6.71%。v4 证明单纯延长 step 会带来 far_field 回退；v5 证明 late audio MLP 扩容没有超过 v3。已新增完整训练微调设计方案，后续统一归入 v6 大阶段，下一步 v6A 应优先做 hard-profile data alignment、base WER 分桶和 mixed constraint，而不是继续扩大 audio-side target。
 
 我们已经把 Mega-ASR 作为参考项目进行了初步分析，并决定设计一个独立的 Qwen3-ASR-1.7B 鲁棒 ASR 训练路径。第一个里程碑是 Colab 友好的 MVP，包含我们自己的数据管线、训练代码、推理封装和评测工具。
 
@@ -37,6 +37,9 @@
 - 已新增 base recheck 入口：`scripts/run_qwen3_asr_base_recheck.py` 和 `configs/baseline/qwen3_asr_base_recheck_mvp_150.yaml`，用于不覆盖历史 baseline 的前提下重跑 base 并生成对比表。
 - 已完成 base recheck 输出同步：`outputs/base_recheck_mvp_150/` 包含 prediction、scored、metrics、scenario CSV、error analysis 和 base/LoRA 对比表。
 - 已完成 v3 target-focus 训练与 held-out 评测：`checkpoints/qwen3-asr-1.7b-lora-mvp-v3-target-focus/` 和 `outputs/lora_mvp_v3_eval/` 已同步。v3 是当前最优 LoRA：overall WER 0.540292，noise WER 0.413361，reverb WER 0.515658，clean WER 0.008351。
+- 已完成 Mega-ASR 差距排查并新增 `docs/qwen3-asr/08_mega_asr_gap_analysis.md`。公开材料显示 Mega-ASR 是 2.4M 样本、7 类原子条件、54 类复合场景、A2S-SFT、DG-WGPO 和 router 的系统工程；本项目当前 train 只有 360 条，且训练 noise/reverb 为 medium profile，测试为 hard profile。
+- 已完成 v5 late audio MLP checkpoint sweep。v5 step 0480 是 v5 最优，overall WER 0.541127，noise WER 0.419624，reverb WER 0.517745，noise+reverb WER 0.468685；相对 4bit base 的 noise+reverb 改善约 5.87%，弱于 v3 的 6.71%。
+- 已新增 `docs/qwen3-asr/09_training_finetune_strategy.md`，明确后续统一归入 v6 大阶段，内部按 v6A/v6B/v6C/v6D 推进；notebook 编号继续递增。
 
 ## 进行中
 
@@ -63,17 +66,23 @@
   - `save_steps=160` 是为了对齐 `gradient_accumulation_steps=16` 的完整 optimizer update，避免保存半个累积周期的 adapter。
   - 结果显示没有 checkpoint 达到 10% 改善门槛。v4_0600 的 reverb WER 最低，为 0.507307，相对 base recheck 改善约 6.90%；noise+reverb 合并 WER 为 0.463466，略好于 v3 的 0.464509，但 far_field WER 升到 1.135699，导致 overall 和 degraded-only 明显差于 v3。
 - `05H LoRA MVP v5 late audio MLP`：
-  - 准备新增配置和 Colab 入口。
+  - 已完成 Colab 训练和 160/320/final 480 step held-out 评测。
   - target 在 v3/v4 的 99 个 audio attention + speech projection 基础上，新增 `audio_tower.layers.12-23.fc1/fc2` 共 24 个后半层 audio MLP target，合计 123 个 target。
-  - 不训练 text decoder、lm_head 或 speech conv，避免小数据下语言补全和低层声学前端风险。
-  - 默认 `learning_rate=1.5e-5`、`max_steps=480`、`save_steps=160`，用 checkpoint sweep 比较 160/320/final 480。
+  - 结果显示 v5 没有超过 v3。v5_0480 的 noise+reverb 相对 base recheck 改善约 5.87%，v3 为 6.71%。
+  - v5 没有像 v4_0600 那样造成 far_field 大幅崩溃，但 dropout/far_field 仍无实质改善。
+- `v6A hard-profile data alignment`：
+  - 下一步。
+  - 回到 v3 的 99 target，不继续扩大 target。
+  - 新增 hard-profile train/val，并对样本打 base WER difficulty bucket。
+  - 验证数据难度对齐是否能突破 v3。
 
 ## 下一批里程碑
 
-1. 新增并执行 v5 late audio MLP ablation。
-2. 比较 v3、v4_0600 和 v5 160/320/480，优先看 noise、reverb、noise+reverb、far_field 和 degraded-only。
-3. 若 v5 没有提升或 far_field 继续回退，下一轮改做数据/损失约束，例如加入少量 hard far_field/dropout 作为负向约束。
-4. 只有 noise 或 reverb 达到 10% 相对 WER 改善、clean 无退化，并且错误分析没有新增明显重复/幻觉风险时，才进入 router。
+1. 实现 v6A hard-profile data alignment 数据生成和 difficulty manifest。
+2. 使用 v3 的 99 target 训练 v6A，不训练 audio MLP 或 text decoder。
+3. 若 v6A 超过 v3，再做 v6B mixed constraint，加入 dropout/far_field hard negative。
+4. 若 v6A 仍未超过 v3，暂停模型 target ablation，优先扩展真实语音和噪声/RIR 数据源。
+5. 只有 noise 或 reverb 达到 10% 相对 WER 改善、clean 无退化，并且错误分析没有新增明显重复/幻觉风险时，才进入 router。
 
 ## 待确认问题
 
@@ -83,6 +92,20 @@
 - MVP 是否只做短音频，还是尽早加入 30-120 秒长音频？
 
 ## 日志
+
+### 2026-06-30
+
+完成 Mega-ASR 差距排查。关键结论：
+
+- Mega-ASR 的高提升来自百万级多场景数据、A2S-SFT 课程训练、DG-WGPO WER-gated RL、`lora_scope all` 级别 target 覆盖和 router，而不是单次小 LoRA。
+- 本项目当前训练集只有 360 train + 90 val，正式目标训练只覆盖 noise/reverb；held-out MVP 150 为 hard profile，训练集为 medium profile，存在明显退化强度错配。
+- 当前 LoRA 可训练参数约 1.68M，占当前加载模型参数约 0.14%，主要覆盖 audio tower attention + speech projection；缺少 audio MLP、text decoder 和反重复/反幻觉训练信号。
+- 以 4bit base recheck 为公平对照，v3 对 noise 改善约 8.33%，对 reverb 改善约 5.36%，noise+reverb 合并改善约 6.71%；v4 step 0600 对 reverb 最好但 far_field 明显回退。
+- 下一步不应继续只延长 step，应优先做 hard-profile 数据对齐、少量 dropout/far_field 约束、v5 late audio MLP 和 A2S-style 小闭环。
+
+完成 v5 late audio MLP 结果复盘。v5 target count 为 123，可训练参数约 2.67M；step 0480 是 v5 最优，overall WER 0.541127，noise WER 0.419624，reverb WER 0.517745，noise+reverb WER 0.468685。相对 4bit base，v5_0480 的 noise+reverb 改善约 5.87%，未超过 v3 的 6.71%。结论：当前主瓶颈不是 audio-side target 容量，而是 hard-profile 数据、场景覆盖、base WER 分桶和反幻觉训练目标。
+
+新增 `09_training_finetune_strategy.md`。后续路线统一定义为 v6 大阶段：v6A hard-profile data alignment、v6B mixed constraint、v6C A2S-style encoder/aligner curriculum、v6D text decoder pilot，最后再恢复 router；notebook 文件编号继续递增。
 
 ### 2026-06-07
 

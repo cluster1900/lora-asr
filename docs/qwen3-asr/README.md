@@ -1,6 +1,6 @@
 # Qwen3-ASR 鲁棒 ASR 项目方案
 
-最后更新：2026-06-29
+最后更新：2026-06-30
 
 本目录用于记录一个基于 Qwen3-ASR-1.7B 的独立鲁棒语音识别项目方案。
 
@@ -17,12 +17,14 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 - [测试方案](./05_testing_plan.md)
 - [风险与决策](./06_risks_and_decisions.md)
 - [文档验收与追踪矩阵](./07_document_acceptance.md)
+- [Mega-ASR 差距排查](./08_mega_asr_gap_analysis.md)
+- [训练微调设计方案](./09_training_finetune_strategy.md)
 - [执行路线图](./roadmap/README.md)
 - [路线图总览](./roadmap/OVERVIEW.md)
 
 ## 当前范围
 
-当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出分析文件，`05A LoRA 训练前探测`、`05B Unsloth 兼容性检查` 和 `05C Transformers + PEFT smoke training` 已完成。正式 LoRA v1/v2 和 4bit base recheck 均已完成；按 base recheck 口径，LoRA 对 noise/reverb 有弱收益但未达到 10% 改善门槛，当前进入 `05F LoRA MVP v3 target-focus`。
+当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出分析文件，`05A LoRA 训练前探测`、`05B Unsloth 兼容性检查` 和 `05C Transformers + PEFT smoke training` 已完成。正式 LoRA v1/v2/v3/v4/v5 和 4bit base recheck 均已完成；按 base recheck 口径，LoRA 对 noise/reverb 有弱收益但未达到 10% 改善门槛。已新增 [Mega-ASR 差距排查](./08_mega_asr_gap_analysis.md) 和 [训练微调设计方案](./09_training_finetune_strategy.md)，当前判断是停止以 target 扩容和延长 step 为主线，优先补齐 hard-profile 数据、WER 分桶、A2S-style 阶段训练和反幻觉评测。
 
 已完成：
 
@@ -40,9 +42,12 @@ Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化�
 - 已新增 LoRA MVP bootstrap train/val 数据生成入口，正式训练不直接复用 MVP 150 held-out test。
 - 已完成正式 LoRA MVP bootstrap 训练产物同步，`checkpoints/qwen3-asr-1.7b-lora-mvp/summary.json` 记录 `status=trained` 和 `steps=600`。
 - 已完成 v1/v2 held-out 评测和 4bit base recheck；结论修正为：LoRA 路线有效但收益不足，暂不进入 router。
-- 已新增 v3 target-focus 配置和 Colab 入口，目标是把 noise 或 reverb 相对 4bit base recheck 推到接近或超过 10% 改善。
+- 已完成 v3 target-focus 与 v4 checkpoint sweep，确认 noise/reverb 有弱收益，但单纯延长 step 不能稳定突破 10%，且 v4 后期会造成 far_field 明显回退。
+- 已完成 Mega-ASR 差距排查：Mega-ASR 高收益来自百万级多场景数据、A2S-SFT、DG-WGPO 和 router 的系统组合；本项目当前瓶颈主要是数据规模/难度、训练场景覆盖、LoRA target 容量和缺少 WER-gated 优化。
+- 已完成 v5 late audio MLP 评测：v5 step 0480 是 v5 最优，noise+reverb 相对 4bit base 改善约 5.87%，弱于 v3 的 6.71%，因此 target 扩容不是当前主解。
+- 已新增完整训练微调设计方案，后续统一归入 v6 大阶段：v6A hard-profile data alignment、v6B mixed constraint、v6C A2S-style curriculum、v6D text decoder pilot；notebook 编号继续递增。
 
-下一步：执行 [05 LoRA 训练 MVP](./roadmap/05_lora_training_mvp.md) 的 `05F`，跑 v3 target-focus，并在固定 MVP 150 held-out test 上比较 historical base、4bit base recheck、v1、v2 和 v3。
+下一步：执行 v6 hard-profile data alignment。v6 应回到 v3 的 99 target，重点验证 hard-profile 训练数据和 base WER 分桶是否能突破 v3，而不是继续增加 audio-side target。
 
 MVP 会按路线图继续完成：
 
