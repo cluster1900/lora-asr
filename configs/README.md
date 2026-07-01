@@ -18,6 +18,11 @@
 - `configs/data/mvp_dataset.yaml`：早期 MVP 数据配置占位。
 - `configs/data/v6a_hard_profile.yaml`：v6A hard-profile 数据构建配置，默认从 `lora_mvp` clean 音频派生 7 类场景 train/val，不使用固定 MVP 150 held-out test。
 
+当前评测配置：
+
+- `configs/eval/default_eval.yaml`：通用评测配置占位。
+- `configs/eval/qwen3_asr_v6a_base_difficulty.yaml`：v6A base difficulty scoring 配置，默认对 v6A train/val 跑 4bit base、计算 WER 并输出 difficulty manifest。
+
 当前训练配置：
 
 - `configs/train/qwen3_asr_lora_mvp.yaml`：历史 `05C` smoke training 配置，只用于验证 LoRA 通路。

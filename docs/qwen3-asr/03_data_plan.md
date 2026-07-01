@@ -426,6 +426,15 @@ Tier 3：复合场景扩展
 - `rms_ratio`
 - `active_near_silence_ratio`
 
+Notebook 11 固定使用 4bit base 对 v6A train/val 分别打分，输出：
+
+- `data/jsonl/v6a_hard_profile_train.difficulty.local.jsonl`
+- `data/jsonl/v6a_hard_profile_val.difficulty.local.jsonl`
+- `outputs/v6a_base_difficulty/summary.json`
+
+原始 v6A manifest 保持不变。difficulty manifest 是 Notebook 12 的训练输入，
+也是后续采样比例、过滤 `wer_70_plus` 和保留 clean retention 的依据。
+
 推荐 difficulty bucket：
 
 - `wer_0_10`

@@ -13,6 +13,7 @@
 - `create_mvp_eval_audio.py`：在本地生成 baseline MVP 评测集，覆盖 clean、noise、reverb、far_field、dropout 各 30 条，总计 150 条。默认使用 macOS `say` 合成 clean 语音，再用标准库生成退化版本。
 - `create_lora_mvp_dataset.py`：生成正式 LoRA MVP 启动用 bootstrap train/val manifest。默认覆盖 clean、noise、reverb，不使用固定 MVP 150 held-out test 作为训练集。
 - `create_v6a_hard_profile_dataset.py`：从已有 `lora_mvp` clean 音频派生 v6A hard-profile train/val manifest，默认覆盖 clean、noise、reverb、noise_reverb、far_field、dropout、far_field_noise。
+- `build_difficulty_manifest.py`：把 base scored prediction JSONL 合并成 difficulty manifest，新增 `base_prediction`、`base_wer`、`difficulty_bucket` 和 `failure_tags`。
 - `run_qwen3_asr_base_recheck.py`：一键复核 Qwen3-ASR base，在同一 MVP 150 manifest 上完成 base 推理、WER/CER、错误分析和 historical base/LoRA 对比。
 
 ## 本地生成物
@@ -78,6 +79,16 @@ python3 scripts/create_v6a_hard_profile_dataset.py \
 
 该脚本只读取 `lora_mvp` 的 clean train/val 源音频，不使用固定 MVP 150 held-out test。
 Notebook 10 使用它生成 v6A 数据；Notebook 11 再做 base WER difficulty scoring。
+
+v6A difficulty manifest 默认输出：
+
+- `data/jsonl/v6a_hard_profile_train.difficulty.local.jsonl`
+- `data/jsonl/v6a_hard_profile_val.difficulty.local.jsonl`
+- `outputs/v6a_base_difficulty/difficulty_summary.json`
+
+Notebook 11 会先调用 `inference/qwen3_asr_base_infer.py` 和 `evaluation/eval_wer.py`，
+再调用 `build_difficulty_manifest.py` 生成 difficulty manifest。该 manifest 用于
+Notebook 12 的训练采样，不作为最终 LoRA 是否提升的判断依据。
 
 Base recheck 默认输出：
 

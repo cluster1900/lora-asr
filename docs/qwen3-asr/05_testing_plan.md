@@ -210,6 +210,16 @@ v6A 数据构建通过标准：
 - 输出 manifest 不包含 `baseline_mvp_150` 或 `data/mvp_eval/audio`。
 - stats 文件包含 seed、profile、variants_per_utterance、source_manifest、scenario_counts 和 degradation_stats。
 
+v6A base difficulty scoring 通过标准：
+
+- `scripts/build_difficulty_manifest.py --help` 可执行。
+- mini prediction 至少覆盖 1 条 clean 和 1 条 degraded，并能生成 scored JSONL。
+- full prediction 行数与 v6A train/val manifest 一致。
+- difficulty manifest 每行包含 `base_prediction`、`base_wer`、`difficulty_bucket`、`failure_tags`。
+- difficulty summary 按 split、scenario、difficulty_bucket 聚合样本数和 WER。
+- 输出 train/val difficulty manifest 不覆盖原始 v6A manifest。
+- Notebook 11 不启动训练，不生成 LoRA checkpoint。
+
 v6A 通过标准：
 
 - noise 或 reverb 至少一个场景相对 4bit base recheck 改善超过 10%。

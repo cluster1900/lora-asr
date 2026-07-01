@@ -1,0 +1,40 @@
+model:
+  id: Qwen/Qwen3-ASR-1.7B
+  dtype: float16
+  device_map: cuda:0
+  quantization: 4bit
+  max_inference_batch_size: 1
+
+input:
+  train_manifest: data/jsonl/v6a_hard_profile_train.local.jsonl
+  val_manifest: data/jsonl/v6a_hard_profile_val.local.jsonl
+  audio_root: /content/drive/MyDrive/qwen3-asr
+
+inference:
+  language: English
+  max_new_tokens: 128
+
+output:
+  dir: outputs/v6a_base_difficulty
+  dataset_name: v6a_hard_profile
+  label: qwen3_asr_base_v6a
+  train_difficulty_manifest: data/jsonl/v6a_hard_profile_train.difficulty.local.jsonl
+  val_difficulty_manifest: data/jsonl/v6a_hard_profile_val.difficulty.local.jsonl
+  summary_json: outputs/v6a_base_difficulty/difficulty_summary.json
+
+difficulty:
+  bucket_definition: wer_0_10=[0.0,0.1), wer_10_30=[0.1,0.3), wer_30_50=[0.3,0.5), wer_50_70=[0.5,0.7), wer_70_plus=[0.7,+inf)
+  recommended_training_buckets:
+    - wer_10_30
+    - wer_30_50
+  cautious_buckets:
+    - wer_50_70
+  observation_only_buckets:
+    - wer_70_plus
+
+analysis:
+  top_k: 40
+
+runtime:
+  limit: 0
+  mini_limit_per_split: 7

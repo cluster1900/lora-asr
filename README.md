@@ -261,7 +261,7 @@ python3 scripts/create_v6a_hard_profile_dataset.py \
 - `data/jsonl/v6a_hard_profile_val.local.jsonl`
 - `data/jsonl/v6a_hard_profile_stats.local.json`
 
-这些输出是可再生的本地/Drive 数据，默认不提交到 git。生成完成后，下一步是 Notebook 11 base difficulty scoring，再进入 Notebook 12 v6A 训练。
+这些输出是可再生的本地/Drive 数据，默认不提交到 git。生成完成后，运行 Notebook 11 做 base difficulty scoring，再进入 Notebook 12 v6A 训练。
 
 ## 目录结构
 
@@ -290,6 +290,6 @@ train/        后续 LoRA/QLoRA 训练入口
 按路线图继续执行：
 
 1. 执行 `notebooks/10_make_hard_profile_dataset_colab.ipynb`，生成 v6A hard-profile train/val。
-2. 新增 Notebook 11，对 v6A manifest 跑 4bit base inference 并生成 difficulty bucket。
+2. 执行 `notebooks/11_score_base_difficulty_colab.ipynb`，对 v6A manifest 跑 4bit base inference 并生成 difficulty bucket。
 3. 新增 Notebook 12，回到 v3 的 99 target 训练 v6A。
 4. 只有 noise 或 reverb 达到 10% 相对 WER 改善、clean 无退化，并且错误分析没有新增明显重复/幻觉风险时，才进入 router。

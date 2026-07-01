@@ -22,6 +22,7 @@ tensorboard/
 data/v6a_hard_profile/
 data/jsonl/v6a_hard_profile_*.local.jsonl
 data/jsonl/v6a_hard_profile_*.local.json
+data/jsonl/v6a_hard_profile_*.difficulty.local.jsonl
 
 # Checkpoints and model weights
 ckpt/

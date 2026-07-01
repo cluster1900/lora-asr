@@ -633,6 +633,52 @@ v5 之后不再为每个 target ablation 临时增加一个只改参数的 noteb
 target 范围和验收阈值只写在 notebook cell 中。每轮必须产出 comparison 表，
 至少包含 `4bit base recheck`、`v3` 和当前 checkpoint。
 
+## Notebook 11: v6A Base Difficulty Scoring
+
+名称：
+
+- `notebooks/11_score_base_difficulty_colab.ipynb`
+
+目的：
+
+- 在 v6A hard-profile train/val 上先跑 Qwen3-ASR base，避免没有 base 对照就开始微调。
+- 生成 `base_prediction`、`base_wer`、`difficulty_bucket` 和 `failure_tags`。
+- 为 Notebook 12 的采样策略提供依据，而不是把 v6A train 上的改善当成最终结论。
+
+默认配置：
+
+- `configs/eval/qwen3_asr_v6a_base_difficulty.yaml`
+- train input：`data/jsonl/v6a_hard_profile_train.local.jsonl`
+- val input：`data/jsonl/v6a_hard_profile_val.local.jsonl`
+- train difficulty output：`data/jsonl/v6a_hard_profile_train.difficulty.local.jsonl`
+- val difficulty output：`data/jsonl/v6a_hard_profile_val.difficulty.local.jsonl`
+- prediction/metrics output：`outputs/v6a_base_difficulty/`
+- model：`Qwen/Qwen3-ASR-1.7B`
+- quantization：`4bit`
+
+执行步骤：
+
+1. preflight 检查 v6A manifest、音频路径、GPU 和脚本。
+2. mini manifest 跑 2-7 条 base inference，确认模型和路径可用。
+3. 对 train/val 分别跑 base inference。
+4. 用 `evaluation/eval_wer.py` 计算逐条 WER 和 scenario metrics。
+5. 用 `scripts/build_difficulty_manifest.py` 生成 difficulty manifest 和 bucket summary。
+
+测试标准：
+
+- mini run 至少包含 1 条 clean 和 1 条 degraded，且 prediction JSONL 可评分。
+- full run 默认输出 1680 条 train difficulty、420 条 val difficulty。
+- 每条 difficulty row 必须包含 `base_prediction`、`base_wer`、`difficulty_bucket`、`failure_tags`。
+- summary 必须报告 scenario WER、difficulty bucket 分布、empty/too_short/too_long/repeat/hallucination 标签比例。
+- Notebook 不启动 LoRA 训练。
+
+验收标准：
+
+- Notebook 输出 `v6A base difficulty ready`。
+- train/val difficulty manifest 行数与输入 manifest 一致。
+- train/val 至少包含 `wer_0_10` 之外的非 clean 难度桶；如果全部过易或全部 `wer_70_plus`，先回到数据 profile 调整，不进入训练。
+- Notebook 12 只能读取 difficulty manifest 作为训练输入。
+
 ## 训练目标格式
 
 baseline 推理不使用聊天 prompt，而是使用 `Qwen3ASRModel.transcribe(audio=..., language=...)`。训练阶段使用底层 forward + labels，因此需要显式构造 prompt 和 answer mask。

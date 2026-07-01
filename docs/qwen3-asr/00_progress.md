@@ -72,6 +72,8 @@
   - v5 没有像 v4_0600 那样造成 far_field 大幅崩溃，但 dropout/far_field 仍无实质改善。
 - `v6A hard-profile data alignment`：
   - 已完成 Notebook 10 数据构建入口和本地 smoke/full 验证。
+  - 用户已在 Colab 完成 Notebook 10 full run，生成 1680 train / 420 val。
+  - 已实现 Notebook 11 base difficulty scoring，并完成本地 JSON/脚本 smoke 验证。
   - 回到 v3 的 99 target，不继续扩大 target。
   - 先从已提交的 `lora_mvp` clean 音频派生 hard-profile train/val，默认覆盖 clean、noise、reverb、noise_reverb、far_field、dropout、far_field_noise。
   - Notebook 10 只生成数据和 stats；Notebook 11 再对样本打 base WER difficulty bucket；Notebook 12 才开始训练。
@@ -79,8 +81,8 @@
 
 ## 下一批里程碑
 
-1. 在 Colab 执行 `10_make_hard_profile_dataset_colab.ipynb`，生成 Drive 内的 v6A hard-profile train/val manifest 和 stats。
-2. 完成 `11_score_base_difficulty_colab.ipynb`，给 v6A 样本补 `base_prediction`、`base_wer`、`difficulty_bucket` 和 `failure_tags`。
+1. 在 Colab 执行 `11_score_base_difficulty_colab.ipynb`，给 v6A 样本补 `base_prediction`、`base_wer`、`difficulty_bucket` 和 `failure_tags`。
+2. 根据 train/val bucket 分布决定 Notebook 12 的采样比例；若 `wer_70_plus` 过多，先过滤或降低 hard profile。
 3. 使用 v3 的 99 target 训练 v6A，不训练 audio MLP 或 text decoder。
 4. 若 v6A 超过 v3，再做 v6B mixed constraint，加入 dropout/far_field hard negative。
 5. 若 v6A 仍未超过 v3，暂停模型 target ablation，优先扩展真实语音和噪声/RIR 数据源。
@@ -116,6 +118,15 @@ far_field、dropout、far_field_noise，默认 1680 train / 420 val；这样可�
 步骤验证 hard-profile 数据对齐是否比继续扩 target 更有效。本地 smoke 生成
 14 train / 7 val 已通过；默认 full 生成 1680 train / 420 val 已通过，且音频路径存在、
 train/val source base 无泄漏、未引用固定 MVP 150 held-out test。
+
+用户已在 Colab 完成 Notebook 10 full run，输出 `v6A hard-profile data ready`，
+train manifest 为 `data/jsonl/v6a_hard_profile_train.local.jsonl`，val manifest 为
+`data/jsonl/v6a_hard_profile_val.local.jsonl`，场景分布为 7 类各 240 train、60 val。
+完成 `11_score_base_difficulty_colab.ipynb`、`configs/eval/qwen3_asr_v6a_base_difficulty.yaml`
+和 `scripts/build_difficulty_manifest.py`。Notebook 11 会用 4bit base 对 v6A train/val
+先跑推理、WER 和错误标签，再生成 difficulty manifest，避免没有 base 对照就微调。
+本地已完成 notebook JSON 校验、code cell 语法检查、`build_difficulty_manifest.py --help`
+和伪 prediction 到 difficulty manifest 的 pipeline smoke。
 
 ### 2026-06-07
 
