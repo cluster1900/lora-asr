@@ -1,5 +1,8 @@
 # scripts
 
+> 当前脚本均为历史 smoke/MVP/v6A 工具。新主线只新增一个
+> `prepare_public_robust_manifests.py`；旧 difficulty 和合成增强不再进入正式训练依赖。
+
 存放数据准备、音频增强和辅助命令脚本。
 
 规则：

@@ -1,5 +1,8 @@
 # evaluation
 
+> 当前 evaluator 只支持历史 overall/scenario 指标。正式 200k 主线需要补充空 reference
+> 硬失败、English WER、Chinese CER 和 32-cell 聚合后才能用于验收。
+
 存放新工程的评测脚本。
 
 目标：

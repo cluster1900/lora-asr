@@ -1,74 +1,52 @@
-# Qwen3-ASR 鲁棒 ASR 项目方案
+# Qwen3-ASR 鲁棒 ASR 文档
 
-最后更新：2026-06-30
+最后更新：2026-07-12
 
-本目录用于记录一个基于 Qwen3-ASR-1.7B 的独立鲁棒语音识别项目方案。
+本项目固定使用 `Qwen/Qwen3-ASR-1.7B`，独立实现数据、训练、推理、评测和发布。
+Mega-ASR 只作为方法与外部 baseline。
 
-Mega-ASR 只作为参考项目。我们会学习它在鲁棒 ASR、声学退化数据、渐进式微调、质量路由和评测方面的方法，但最终系统必须由我们独立设计和实现，不在 Mega-ASR 的上游工程代码上做魔改。
+## 当前状态
 
-## 文档索引
+历史 baseline、LoRA v1-v5 和评测闭环已经完成，但没有证明相对 BF16 base 的正式净收益。
+新的“公开 200k + 官方 Trainer + 343-target BF16 LoRA”主线尚未实现，状态 0/3。
 
-- [开发进度](./00_progress.md)
-- [项目原则](./00_project_principles.md)
-- [架构方案](./01_architecture.md)
-- [开发方案](./02_development_plan.md)
-- [数据方案](./03_data_plan.md)
-- [Colab 训练方案](./04_colab_training_plan.md)
-- [测试方案](./05_testing_plan.md)
-- [风险与决策](./06_risks_and_decisions.md)
-- [文档验收与追踪矩阵](./07_document_acceptance.md)
-- [Mega-ASR 差距排查](./08_mega_asr_gap_analysis.md)
-- [训练微调设计方案](./09_training_finetune_strategy.md)
-- [执行路线图](./roadmap/README.md)
-- [路线图总览](./roadmap/OVERVIEW.md)
+## 唯一主线
 
-## 当前范围
+1. 160k robust + 20k English clean + 20k Chinese clean；validation 8k+1k+1k。
+2. Qwen 官方 Trainer 薄适配，343-target LoRA，`lr=1e-6`，10+2 真 resume。
+3. 一次 200k run：step 100 canary、50%/100% validation、固定 test、release adapter。
 
-当前状态：`01 独立项目骨架` 已完成，`02 Baseline 评估` 已完成 MVP 150 hard profile baseline，`06 评测与错误分析` 已产出分析文件，`05A LoRA 训练前探测`、`05B Unsloth 兼容性检查` 和 `05C Transformers + PEFT smoke training` 已完成。正式 LoRA v1/v2/v3/v4/v5 和 4bit base recheck 均已完成；按 base recheck 口径，LoRA 对 noise/reverb 有弱收益但未达到 10% 改善门槛。已新增 [Mega-ASR 差距排查](./08_mega_asr_gap_analysis.md) 和 [训练微调设计方案](./09_training_finetune_strategy.md)，当前判断是停止以 target 扩容和延长 step 为主线，优先补齐 hard-profile 数据、WER 分桶、A2S-style 阶段训练和反幻觉评测。
+GPT-5.5 teacher、router、RL、自建增强、全量 difficulty scoring 和 target sweep 不进入第一轮。
 
-已完成：
+## 阅读顺序
 
-- 原 Mega-ASR 上游工程已隔离到 `references/mega-asr-upstream/`，不作为新工程运行时依赖。
-- 新工程目录已建立：`configs/`、`data/`、`evaluation/`、`inference/`、`notebooks/`、`router/`、`scripts/`、`train/`。
-- 已实现本地 smoke 音频生成脚本、Qwen3-ASR baseline 推理脚本、WER/CER 评测脚本。
-- 已新增 `notebooks/01_baseline_colab.ipynb`，并在 Colab 中完成 clean/noise 各 1 条样本的 smoke baseline。
-- 已新增 `scripts/create_mvp_eval_audio.py` 和 `notebooks/02_mvp_150_eval_colab.ipynb`，用于 clean/noise/reverb/far_field/dropout 各 30 条的 baseline MVP 评测。
-- 已在 MVP 150 hard profile 上记录 Qwen3-ASR base 指标：clean WER 0.010438，degraded-only WER 约 0.602296。
-- 已新增 `evaluation/analyze_errors.py` 并保存 baseline 错误分析输出。
-- 已新增 `train/inspect_qwen3_asr_modules.py` 和 `notebooks/03_train_lora_colab.ipynb`，用于 LoRA 训练前模块探测。
-- 已保存 `outputs/lora_probe/qwen3_asr_1_7b/` 探测输出，并确定第一版 smoke target：audio tower attention + speech projection。
-- 已新增 `train/check_unsloth_qwen3_asr.py`，并确认 Unsloth 当前无法直接加载 `Qwen/Qwen3-ASR-1.7B`。
-- 已完成 20 step PEFT smoke training，证明 99 个 audio tower target 可挂载、loss 非 NaN、adapter 可保存。
-- 已新增 LoRA MVP bootstrap train/val 数据生成入口，正式训练不直接复用 MVP 150 held-out test。
-- 已完成正式 LoRA MVP bootstrap 训练产物同步，`checkpoints/qwen3-asr-1.7b-lora-mvp/summary.json` 记录 `status=trained` 和 `steps=600`。
-- 已完成 v1/v2 held-out 评测和 4bit base recheck；结论修正为：LoRA 路线有效但收益不足，暂不进入 router。
-- 已完成 v3 target-focus 与 v4 checkpoint sweep，确认 noise/reverb 有弱收益，但单纯延长 step 不能稳定突破 10%，且 v4 后期会造成 far_field 明显回退。
-- 已完成 Mega-ASR 差距排查：Mega-ASR 高收益来自百万级多场景数据、A2S-SFT、DG-WGPO 和 router 的系统组合；本项目当前瓶颈主要是数据规模/难度、训练场景覆盖、LoRA target 容量和缺少 WER-gated 优化。
-- 已完成 v5 late audio MLP 评测：v5 step 0480 是 v5 最优，noise+reverb 相对 4bit base 改善约 5.87%，弱于 v3 的 6.71%，因此 target 扩容不是当前主解。
-- 已新增完整训练微调设计方案，后续统一归入 v6 大阶段：v6A hard-profile data alignment、v6B mixed constraint、v6C A2S-style curriculum、v6D text decoder pilot；notebook 编号继续递增。
+- [开发进度](./00_progress.md)：实际完成度和历史结果。
+- [架构方案](./01_architecture.md)：当前模块边界和条件触发模块。
+- [快速微调执行合同](./02_development_plan.md)：唯一文件、参数、步骤和结果分支。
+- [数据方案](./03_data_plan.md)：公开数据 schema、配比、缓存和防泄漏。
+- [Colab 方案](./04_colab_training_plan.md)：唯一 Notebook 与恢复方式。
+- [测试方案](./05_testing_plan.md)：数据、Trainer、推理、评测和指标门槛。
+- [风险与决策](./06_risks_and_decisions.md)：当前决策、风险和回滚。
+- [文档与阶段验收](./07_document_acceptance.md)：阶段完成条件。
+- [Mega-ASR 差距](./08_mega_asr_gap_analysis.md)：方法证据与目标口径。
+- [训练策略](./09_training_finetune_strategy.md)：为什么采用当前配置。
 
-下一步：执行 v6 hard-profile data alignment。v6 应回到 v3 的 99 target，重点验证 hard-profile 训练数据和 base WER 分桶是否能突破 v3，而不是继续增加 audio-side target。
+## 历史资料
 
-MVP 会按路线图继续完成：
+`roadmap/`、notebook 00-11、旧 v1-v6 配置和历史 checkpoint/output 用于复现与审计，
+不再定义下一步。若历史文档与 `02_development_plan.md` 冲突，以后者为准。
 
-1. 基于已完成的 Qwen3-ASR-1.7B baseline 和错误分析确定 LoRA 目标场景。
-2. 基于探测结果确定第一版 LoRA target。
-3. 使用独立 bootstrap train/val 训练第一版 QLoRA ASR adapter。
-4. 评估 WER/CER、典型失败模式和 clean regression。
-5. 根据结果决定是否进入 router 和扩大训练规模。
+## Teacher 接口边界
 
-最终目标是完成一个类似 Mega-ASR 的鲁棒 ASR 产品：具备鲁棒 ASR LoRA、音频质量 router、统一推理入口、数据增强管线、评测体系和发布文档。但实现方式必须独立于 Mega-ASR，基于 Qwen3-ASR-1.7B 自行开发。
+未来只有未标注真实音频或 transcript 冲突才使用 `TEACHER_API_KEY`、
+`TEACHER_BASE_URL`、`TEACHER_MODEL=gpt-5.5`。实际 base URL 必须通过 capability probe；
+teacher 不得覆盖 gold transcript，第一轮不实现。
 
-## 非目标
+## 官方参考
 
-- 不把 Mega-ASR 作为最终代码库。
-- baseline 推理依赖 Qwen3-ASR 官方 `qwen-asr` API。
-- 不复制 Mega-ASR 的私有模块名、LoRA target 规则或推理 wrapper。
-- 不在没有自有 benchmark 结果前声称达到 Mega-ASR 同等效果。
-
-## 参考资料
-
-- Mega-ASR 仓库：https://github.com/xzf-thu/Mega-ASR
-- Mega-ASR 权重：https://huggingface.co/zhifeixie/Mega-ASR
-- Qwen3-ASR-1.7B HF 模型：https://huggingface.co/Qwen/Qwen3-ASR-1.7B
-- Qwen3-ASR 官方工具包：https://github.com/QwenLM/Qwen3-ASR
+- Qwen3-ASR：https://github.com/QwenLM/Qwen3-ASR
+- Qwen finetuning：https://github.com/QwenLM/Qwen3-ASR/tree/main/finetuning
+- Voices-in-the-Wild-2M：https://huggingface.co/datasets/zhifeixie/Voices-in-the-Wild-2M
+- Voices-in-the-Wild-Bench：https://huggingface.co/datasets/zhifeixie/Voices-in-the-Wild-Bench
+- Mega-ASR：https://github.com/xzf-thu/Mega-ASR
+- OpenAI Python SDK：https://github.com/openai/openai-python

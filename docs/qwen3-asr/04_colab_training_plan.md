@@ -1,743 +1,151 @@
-# Colab 训练方案
+# Colab 快速训练方案
 
-最后更新：2026-06-30
+最后更新：2026-07-12
 
 ## 目标
 
-在 Colab 上跑通 Qwen3-ASR-1.7B 的 baseline 到 LoRA 训练完整闭环。
+用一个 Notebook 完成环境安装、数据 staging、smoke/resume、正式训练、checkpoint 恢复和
+评测入口。Colab 是第一优先环境，但不依赖 Google Drive 逐条读取训练音频。
 
-## Colab 资源现实约束
+唯一入口：
 
-Qwen3-ASR-1.7B 比超大模型更适合 Colab，但全参训练仍不现实。现实路径是先跑 baseline，再做 QLoRA 或 LoRA，小 batch、梯度累积、短音频。
+- `notebooks/12_fast_finetune_colab.ipynb`
 
-推荐硬件：
-
-- Colab Free：baseline 脚本、数据准备、极小 smoke test。
-- Colab Pro T4/L4：小规模 QLoRA 实验。
-- Colab Pro+ A100：第一版更稳定的 LoRA/QLoRA 训练和较大 batch 评测。
-- 外部 GPU runtime：适合数小时以上训练。
-
-## Google Drive 目录
+## 目录
 
 ```text
-/content/drive/MyDrive/qwen3-asr/
-  data/
-    raw/
-    augmented/
-    jsonl/
-  checkpoints/
-    qwen3-asr-1.7b-lora/
-  outputs/
-    baseline/
-    eval/
-  logs/
+/content/mega-asr                         # git 工作区
+/content/mega-asr-runtime/                # 本地 SSD 数据与临时输出
+/content/drive/MyDrive/mega-asr-artifacts # 持久 manifest/shard/checkpoint/result
 ```
 
-## Notebook 00: 拉取或更新工程
+Git 仓库与大数据 artifact 分开，避免把训练缓存误提交到代码仓库。
 
-名称：
+## 环境固定
 
-- `notebooks/00_clone_github_colab.ipynb`
+Notebook 第一段必须记录：
 
-目的：
+- 当前 git commit。
+- GPU 型号、数量和显存。
+- CUDA、Torch、qwen-asr、Transformers、PEFT、Datasets、FlashAttention 版本。
+- Qwen 模型 revision 与 Qwen 官方 finetuning 源码 commit。
+- 数据配置、训练配置和随机种子。
 
-- 在新的 Colab Free runtime 中挂载 Google Drive。
-- 如果 `/content/drive/MyDrive/qwen3-asr` 不存在，则从 GitHub clone 项目。
-- 如果目录已存在且是 git 仓库，则执行 `fetch + pull --ff-only`。
-- 打印当前本地 commit、远端 commit 和关键修复标记，避免只看到 `Already up to date` 却无法判断代码版本。
+新增一个 `requirements-colab.txt` 固定首轮依赖。Notebook 不允许每次安装不同版本后继续
+训练；依赖变化必须形成新实验 id。
 
-为什么需要单独 notebook：
+## Notebook 顺序
 
-- Colab 的 Drive 目录会跨 runtime 保留，代码可能来自旧 clone。
-- `git pull` 输出 `Already up to date` 只说明当前本地分支相对远端没有新提交，不说明当前 notebook 是否拿到了我们期望的修复。
-- 训练 notebook 失败时，必须先确认 Drive 中的工程代码版本，再继续排查模型或依赖问题。
+### 1. 挂载与检查
 
-输入：
+- 挂载 Drive。
+- 拉取/更新仓库并显示 commit。
+- 检查 GPU 是否支持 BF16 和 FlashAttention 2。
+- 检查 Drive 可用空间与 `/content` 本地空间。
+- 生成 `run_id`，所有输出写入独立目录。
 
-- GitHub 仓库：`https://github.com/cluster1900/lora-asr.git`
-- 分支：`main`
-- Drive 项目目录：`/content/drive/MyDrive/qwen3-asr`
+### 2. 数据 staging
 
-输出：
+- 根据 pinned revision 下载或从 Drive 大 shard cache 恢复。
+- 运行 `prepare_public_robust_manifests.py` smoke/full。
+- 把训练所需音频 staging 到 `/content/mega-asr-runtime/data`。
+- 运行 manifest、解码、配额、防泄漏和人工抽听检查。
+- 训练开始后不访问 Hugging Face 网络。
 
-- Drive 中的项目目录。
-- 当前 `HEAD` 短 hash。
-- 最新一条 commit message。
-- 关键文件存在性和关键字符串检查结果。
+禁止将 200k 个小音频逐个写入 Drive。需要持久化时按大 shard/tar 保存。
 
-测试标准：
+### 3. Golden batch 与 10+2 smoke
 
-- 空 Drive 项目目录时，可以 clone 到 `/content/drive/MyDrive/qwen3-asr`。
-- 已存在 git 仓库时，可以 fast-forward 更新。
-- notebook 必须打印 `git rev-parse --short HEAD` 和 `git log -1 --oneline`。
-- notebook 必须检查 `resolve_training_model`、`target_root_prefix`、`gradient_checkpointing: false` 等关键修复标记。
+- 加载 pinned `Qwen/Qwen3-ASR-1.7B`。
+- 验证 343 target 分组数量和禁止模块。
+- 打印一条 en/zh golden batch 的 prompt、label mask 摘要和有效 target token 数。
+- 128 条平衡样本训练 10 optimizer step并保存。
+- 释放进程后从 checkpoint resume 2 step。
+- 新进程加载 adapter，推理 en/zh clean/degraded 各 1 条。
 
-验收标准：
+任何一项失败都不进入正式 200k。
 
-- 执行完成后显示“版本验收通过”。
-- 若 Drive 中代码不是 git 仓库，必须明确报错并提示用户先确认目录处理方式。
-- 默认不得丢弃用户在 Drive 仓库里的本地修改；只有手动设置 `FORCE_RESET=True` 才允许强制对齐远端。
+### 4. BF16 base
 
-## Notebook 00B: GitHub 输出提交与推送
+至少先完成 10k validation 的 BF16 base prediction，供 canary 和 checkpoint 选择使用。
 
-名称：
+若有第二个 Colab/GPU runtime，Bench 5k、LibriSpeech test-clean、AISHELL-1 test 的 base
+评测可与训练并行；只有一个 runtime 时按 validation base -> train -> fixed test base 的
+顺序执行，避免同时占用显存。
 
-- `notebooks/00_github_commit_push_colab.ipynb`
+### 5. 正式 200k run
 
-目的：
+参考单卡 A100 40GB：
 
-- 单独提交并推送 Colab 产生的受控实验输出，例如 `outputs/`、`data/`、`checkpoints/` 中需要保留的结果。
-- 避免把 clone/update 和 commit/push 混在同一个 notebook 中。
-- 解决 Colab 中 HTTPS push 报 `could not read Username` 的授权问题。
+| 参数 | 值 |
+| --- | --- |
+| per-device batch | 4 |
+| gradient accumulation | 16 |
+| effective batch | 64 |
+| precision | BF16 |
+| gradient checkpointing | on |
+| max audio | 30 秒 |
+| duration bucketing | on |
+| learning rate | 1e-6 |
+| epoch | 1 |
 
-背景：
+其他 GPU 只调整 per-device batch 与 accumulation，并保持 effective batch 64。Resolved
+配置必须保存，不能只保存模板 YAML。
 
-- Colab 训练会在 Google Drive 项目目录中产生 prediction、metrics、error analysis、checkpoint metadata 等输出。
-- 这些输出需要有选择地记录到 GitHub，方便在本地和后续 notebook 中复盘。
-- Colab 不能交互式输入 GitHub 用户名和密码，因此直接 `git push origin main` 可能报 `could not read Username`。
+执行门：
 
-授权方式：
+- Step 100：固定 512 条 canary，失败自动停止。
+- 50%：保存 adapter + 完整 Trainer state，跑 10k validation。
+- 100%：保存 adapter + 完整 Trainer state，跑 10k validation。
+- Canary 通过后可删除临时 checkpoint，只保留日志和 canary 指标。
 
-1. 在 GitHub 创建 fine-grained personal access token，至少给目标仓库 Contents read/write 权限。
-2. 在 Colab 左侧 Secrets 中新增 `GITHUB_TOKEN`，值为该 token。
-3. Notebook 中通过 `google.colab.userdata.get("GITHUB_TOKEN")` 读取 token。
-4. push 时临时使用带 token 的 HTTPS URL；不要执行 `git remote set-url` 写入 token。
+### 6. 选择与固定测试
 
-安全要求：
+- 仅根据 10k validation 选择 50% 或 100% checkpoint。
+- 使用统一推理入口，可选 `--adapter-dir`，base 与 LoRA 不再维护两份批处理实现。
+- Prediction 每条完成后增量写入并 flush，支持 `--resume` 跳过已完成 sample id。
+- 唯一候选跑 Bench 5k、LibriSpeech test-clean、AISHELL-1 test。
+- 生成 comparison、32-cell 指标和错误分析。
 
-- `COMMIT_AND_PUSH_OUTPUTS` 默认为 `False`。
-- 提交前必须打印 `git status --short`。
-- 默认提交路径只包含受控输出和文档相关目录，不提交 `.env`、`references/` 或私有文件。
-- 默认不强制添加 `.gitignore` 忽略的模型权重；如确实需要提交 ignored 文件，必须手动设置 `FORCE_ADD_IGNORED=True`。
-- 没有 staged changes 时跳过 commit/push。
+## Checkpoint 与恢复
 
-验收标准：
+正式 checkpoint 必须包含：
 
-- 未设置 token 或开关未打开时，不会产生 commit。
-- 设置 `COMMIT_AND_PUSH_OUTPUTS=True` 且有 staged changes 时，能创建 commit 并 push 到 `origin/main`。
-- notebook 输出不打印完整 token。
+- adapter 权重与配置。
+- optimizer、scheduler、RNG 和 Trainer state。
+- processor/tokenizer 或其 pinned source revision。
+- resolved training config。
+- manifest hash 与数据 revision。
+- target_modules 分组、实际可训练参数量。
+- git commit、依赖版本和 run id。
 
-## Notebook 01: Baseline
+训练 checkpoint 先写本地临时目录，再原子复制到 Drive。恢复前校验文件大小和 hash。
 
-名称：
-
-- `notebooks/01_baseline_colab.ipynb`
-
-目的：
-
-- 加载 `Qwen/Qwen3-ASR-1.7B`。
-- 在小评测集上运行 Qwen3-ASR `transcribe`。
-- 计算 WER/CER。
-- 保存预测结果。
-
-主要步骤：
-
-1. 挂载 Google Drive。
-2. 安装依赖。
-3. 登录 Hugging Face，如果需要。
-4. 加载 Qwen3-ASR model。
-5. 对每条音频生成转写。
-6. 归一化预测。
-7. 计算 WER/CER。
-
-输出：
-
-- `outputs/baseline/predictions.jsonl`
-- `outputs/baseline/metrics.json`
-
-## Notebook 02: 数据构建
-
-名称：
-
-- `notebooks/02_make_dataset_colab.ipynb`
-
-目的：
-
-- 下载或挂载 clean speech。
-- 生成 degraded audio。
-- 构建 train/val/test JSONL。
-
-输出：
-
-- `data/jsonl/train.jsonl`
-- `data/jsonl/val.jsonl`
-- `data/jsonl/test.jsonl`
-
-## Notebook 03: LoRA 训练
-
-名称：
-
-- `notebooks/03_train_lora_colab.ipynb`
-
-目的：
-
-- 先完成 Qwen3-ASR 模块探测和 LoRA target 候选导出。
-- 再跑 20 step Transformers + PEFT smoke training，确认训练链路可用。
-
-当前 notebook 覆盖训练前探测和 Transformers + PEFT smoke training。Qwen3-ASR
-官方 `qwen-asr` wrapper 的内部模块结构需要以当前环境真实加载结果为准，不能
-复用 Mega-ASR 或其他工程的 target 规则。
-
-`05C` smoke training 已完成 20 step 验收。正式 LoRA MVP 从 `05D` 开始，
-由 `notebooks/04_train_lora_mvp_colab.ipynb` 执行。
-
-历史 Unsloth 兼容性检查结果：
-
-- `compatible=false`。
-- 失败原因是 Transformers AutoConfig 不识别 `model_type=qwen3_asr`。
-- 后续训练入口回退到 Transformers + PEFT，不继续在当前 MVP 中调试 Unsloth 依赖。
-- 兼容性结论保留在 `outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json`；当前 notebook 不再重复执行已知失败的 Unsloth 安装和检查。
-
-依赖注意事项：
-
-- 当前 notebook 固定 `qwen-asr==0.0.6`、`transformers==4.57.6`、`accelerate==1.12.0`，避免破坏 Qwen3-ASR 官方 wrapper 已验证过的依赖组合。
-- Colab 预装包中 `pandas`、`requests` 容易被升级到冲突版本，因此 notebook 固定 `pandas==2.2.2`、`requests==2.32.4`。
-- PEFT 注入 LoRA 时会探测 `torchao`。部分 Colab runtime 预装 `torchao==0.10.0`，而当前 PEFT 只支持 `torchao>0.16.0`，会在 `get_peft_model()` 阶段报错。当前 notebook 默认卸载 `torchao`，因为本 smoke training 不依赖 torchao。
-- 训练 manifest 不包含音频本体；执行 LoRA smoke training 前，`data/mvp_eval/audio/` 必须已经同步到 Google Drive 项目目录。执行正式 LoRA MVP 前，应先运行 `scripts/create_lora_mvp_dataset.py` 生成 `data/lora_mvp/audio/` 和 train/val manifest。
-- 如果安装后出现 pip resolver warning，先确认目标脚本是否能运行，再决定是否重启 runtime；warning 不一定等于 cell 失败。
-
-初始配置：
-
-```yaml
-model_id: Qwen/Qwen3-ASR-1.7B
-quantization: 4bit
-lora_r: 8
-lora_alpha: 16
-lora_dropout: 0.05
-batch_size: 1
-gradient_accumulation_steps: 16
-learning_rate: 2e-5
-epochs: 1
-max_audio_seconds: 20
-max_new_tokens: 256
-gradient_checkpointing: false
-```
-
-smoke 阶段默认关闭 gradient checkpointing。当前 LoRA target 位于 audio tower，
-而 Qwen3-ASR 不是普通文本 LLM；在 k-bit PEFT 准备阶段启用 checkpointing 可能
-引入自定义架构兼容问题。先用 4bit + batch size 1 跑通训练闭环，再决定是否单独
-测试 checkpointing。
-
-训练阶段：
-
-0. Probe：加载模型并导出 `named_modules()`、LoRA target 候选和摘要。
-1. PEFT compatibility：按正则精确匹配 99 个 audio tower target。
-2. Smoke test：20 条样本，5-20 steps，当前入口为 `train/train_qwen3_asr_lora.py`。
-3. MVP bootstrap train：交给 `04_train_lora_mvp_colab.ipynb`。
-4. Scenario-balanced train：按声学场景做加权采样，后续再扩到真实数据。
-
-输出：
-
-- `outputs/lora_probe/qwen3_asr_1_7b/module_snapshot.json`
-- `outputs/lora_probe/qwen3_asr_1_7b/module_summary.csv`
-- `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.json`
-- `outputs/lora_probe/qwen3_asr_1_7b/lora_target_candidates.md`
-- `outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json`
-- `checkpoints/qwen3-asr-1.7b-lora/target_modules.json`
-- `checkpoints/qwen3-asr-1.7b-lora/training_config.json`
-- `checkpoints/qwen3-asr-1.7b-lora/loss_log.jsonl`
-- `checkpoints/qwen3-asr-1.7b-lora/summary.json`
-- `checkpoints/qwen3-asr-1.7b-lora/adapter/`
-
-正式 LoRA MVP bootstrap 输出：
-
-- `data/jsonl/lora_mvp_train.local.jsonl`
-- `data/jsonl/lora_mvp_val.local.jsonl`
-- `data/jsonl/lora_mvp_stats.local.json`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/target_modules.json`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/training_config.json`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/loss_log.jsonl`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/summary.json`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`
-
-## Notebook 04: LoRA MVP Bootstrap 训练
-
-名称：
-
-- `notebooks/04_train_lora_mvp_colab.ipynb`
-
-目的：
-
-- 使用独立 `data/jsonl/lora_mvp_train.local.jsonl` 启动正式 LoRA MVP bootstrap 训练。
-- 先执行 preflight，确认模型加载、音频路径、99 个 LoRA target 和输出目录都正常。
-- 再跑默认 600 step 训练，产出 `checkpoints/qwen3-asr-1.7b-lora-mvp/`。
-
-输入：
-
-- `configs/train/qwen3_asr_lora_mvp_train.yaml`
-- `data/jsonl/lora_mvp_train.local.jsonl`
-- `data/jsonl/lora_mvp_val.local.jsonl`
-- `data/lora_mvp/audio/`
-
-输出：
-
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/target_modules.json`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/training_config.json`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/loss_log.jsonl`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/summary.json`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/processor/`
-
-通过标准：
-
-- preflight `summary.json` 中 `status=preflight_ok`。
-- 正式训练 `summary.json` 中 `status=trained`。
-- `loss_log.jsonl` 行数等于默认 `MAX_STEPS=600`。
-- target count 等于 99。
-- adapter 和 processor 均已保存。
-
-## Notebook 05: LoRA MVP 评测
-
-名称：
-
-- `notebooks/05_eval_lora_mvp_colab.ipynb`
-
-目的：
-
-- 加载 `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`。
-- 在固定 MVP 150 held-out test 上运行 LoRA always-on 推理。
-- 复用 baseline 同一套 WER/CER 与错误分析脚本，产出 base-vs-LoRA 对比。
-- 量化 clean regression，并记录 noise/reverb、dropout/far_field 场景结果。
-
-背景：
-
-- `04_train_lora_mvp_colab.ipynb` 只证明训练完成并保存 adapter。
-- LoRA 是否有效必须看 held-out test WER/CER，而不能只看 loss。
-- 第一版先评估 always-on LoRA；只有确认 LoRA 相对当前公平 base 有足够收益且
-  clean regression 可接受后，才进入 router。当前公平 base 口径为 4bit
-  base recheck。
-
-输入：
-
-- `data/jsonl/baseline_mvp_150.local.jsonl`
-- `checkpoints/qwen3-asr-1.7b-lora-mvp/adapter/`
-- `outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
-- `outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json`，仅作为历史 base 参考
-
-指标：
-
-- overall WER/CER。
-- scenario-level WER/CER。
-- clean regression。
-- empty output rate。
-- long hallucination rate。
-- latency per audio second。
-
-输出：
-
-- `outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.jsonl`
-- `outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.scored.jsonl`
-- `outputs/lora_mvp_eval/metrics.qwen3_asr_lora_mvp.mvp_150.json`
-- `outputs/lora_mvp_eval/metrics_by_scenario.qwen3_asr_lora_mvp.mvp_150.csv`
-- `outputs/lora_mvp_eval/error_analysis/`
-
-通过标准：
-
-- mini LoRA inference 至少跑通 2 条样本。
-- full LoRA inference 产出 150 行 prediction JSONL。
-- WER/CER 评测与错误分析脚本执行完成。
-- notebook 打印 base 与 LoRA 的 scenario-level 对比表。
-
-验收标准：
-
-- noise 或 reverb 至少一个场景相对 base 改善。
-- clean WER 相对 base 的退化被量化，第一版警戒线为相对退化不超过 5%。
-- dropout 与 far_field 作为观察场景完整记录。
-
-## Notebook 06: LoRA MVP v2 快速 ablation
-
-名称：
-
-- `notebooks/06_train_lora_mvp_v2_colab.ipynb`
-
-目的：
-
-- 在 v1 LoRA 未通过 held-out 验收后，快速定位训练策略问题。
-- 默认运行 attention-only、noise/reverb-only、低学习率、150 step 的 v2 短跑。
-- 训练采样按 `scenario + text_length_bucket` 均衡轮转，确保 short/long 音频都被覆盖。
-- 训练完成后立即在 MVP 150 held-out test 上评测，并对比 base、v1 和 v2。
-
-通过标准：
-
-- preflight target count 等于 96。
-- loss 有限，adapter 可保存。
-- loss log 同时覆盖 noise/reverb 和 short/long。
-- held-out eval 生成 prediction、scored、metrics、scenario CSV 和错误分析。
-
-验收标准：
-
-- noise 或 reverb 至少一个场景相对 base 改善。
-- clean regression 被量化。
-- 如果 v2 仍未达到相对 4bit base recheck 的明确改善门槛，继续做 target/data/lr
-  ablation，不进入 router。
-
-当前执行结果：
-
-- v2 已完成 150 step 训练，target count 为 96，adapter 和 processor 均已保存。
-- loss log 覆盖 noise/reverb 和 short/long：noise long 38、noise short 38、reverb long 37、reverb short 37。
-- held-out MVP 150 推理和评测已完成，empty output rate 为 0。
-- v2 相比 v1 在 dropout 和 far_field 上略有改善，clean 与 v1 持平；按历史
-  base 口径看 noise/reverb 仍更差，但 base recheck 证明历史 base 与当前
-  4bit LoRA 评测口径不一致。
-- 按 4bit base recheck 口径，v2 对 noise+reverb 有约 2.52% 相对改善，仍未
-  达到第一版 10% 改善门槛，因此继续保留 router 暂停状态。
-
-v2 结论对下一轮训练的影响：
-
-- 单纯减少 step、降低学习率、移除 clean 样本和移除 speech projection 让 v2
-  比 v1 更保守，但并没有带来更强 target 场景收益。
-- 后续快速迭代应继续保留固定 held-out MVP 150，并优先测试 v1 风格 target、
-  更早停止点、audio tower 后层 attention-only、训练目标格式和数据难度，而不是直接扩大训练规模。
-- 每一轮仍必须输出 historical base、base recheck、v1 和当前版本的 scenario-level
-  对比，避免只看 loss 或旧 base 判断训练成功。
-
-## Base Recheck: MVP 150 复核基线
-
-名称：
-
-- `scripts/run_qwen3_asr_base_recheck.py`
-
-目的：
-
-- 在继续 LoRA ablation 前，重新跑一次 Qwen3-ASR base。
-- 使用与 LoRA v1/v2 评测一致的 manifest、音频、dtype、device_map、max_new_tokens
-  和量化参数。
-- 验证历史 base 指标是否可信，避免把 base 环境差异误判为 LoRA 效果。
-
-推荐 Colab 命令：
-
-```bash
-python scripts/run_qwen3_asr_base_recheck.py \
-  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
-  --audio-root /content/drive/MyDrive/qwen3-asr \
-  --output-dir outputs/base_recheck_mvp_150 \
-  --model-id Qwen/Qwen3-ASR-1.7B \
-  --dtype float16 \
-  --device-map cuda:0 \
-  --quantization 4bit \
-  --max-inference-batch-size 1 \
-  --max-new-tokens 128 \
-  --language English \
-  --compare-metrics outputs/baseline_mvp_150/metrics.qwen3_asr_base.mvp_150.json \
-  --compare-metrics outputs/lora_mvp_eval/metrics.qwen3_asr_lora_mvp.mvp_150.json \
-  --compare-metrics outputs/lora_mvp_v2_eval/metrics.qwen3_asr_lora_mvp_v2.mvp_150.json
-```
-
-输出：
-
-- `outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
-- `outputs/base_recheck_mvp_150/error_analysis/analysis_summary.json`
-- `outputs/base_recheck_mvp_150/comparison.json`
-- `outputs/base_recheck_mvp_150/comparison_by_scenario.csv`
-
-验收标准：
-
-- 新 base recheck 完整跑完 MVP 150。
-- 与历史 base 的差异必须记录到 `00_progress.md`，再决定是否以 recheck base
-  作为后续 LoRA 对比口径。
-
-当前执行结果：
-
-- base recheck 已完成，overall WER 为 0.550313，历史 base overall WER 为 0.483925。
-- noise/reverb/far_field 上 base recheck 明显差于历史 base，说明旧 base 不再适合作为
-  当前 4bit LoRA 的公平对照。
-- 后续 LoRA 对比以 base recheck 为主，historical base 只作为旧环境参考。
-
-## Notebook 07: LoRA MVP v3 Target-Focus
-
-名称：
-
-- `notebooks/07_train_lora_mvp_v3_colab.ipynb`
-
-目的：
-
-- 在确认 LoRA 相对 4bit base recheck 有弱收益后，继续把 noise/reverb 改善推到
-  10% 以上。
-- 复用 v1 更有效的 target 组合：audio tower attention + speech projection，共 99 个 target。
-- 去掉 clean 训练样本，聚焦 noise/reverb，同时使用 `scenario + text_length_bucket`
-  均衡轮转，避免长短样本失衡。
-
-默认配置：
-
-- `configs/train/qwen3_asr_lora_mvp_v3_target_focus.yaml`
-- output：`checkpoints/qwen3-asr-1.7b-lora-mvp-v3-target-focus`
-- eval output：`outputs/lora_mvp_v3_eval`
-- target count：99
-- scenario filter：noise,reverb
-- learning rate：2e-5
-- max steps：450
-- sampling：`scenario_bucket_round_robin`
-- base 对照：`outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
-
-验收标准：
-
-- preflight target count 等于 99。
-- loss log 覆盖 noise/reverb 的 short 和 long。
-- held-out MVP 150 推理、WER/CER 和错误分析完成。
-- noise 或 reverb 至少一个场景相对 4bit base recheck 接近或达到 10% 相对 WER 改善。
-- clean WER 不相对 base recheck 退化超过 5%。
-- dropout/far_field 必须记录；若仍不改善，继续暂停 router。
-
-当前执行结果：
-
-- v3 已完成 450 step 训练，输出位于 `checkpoints/qwen3-asr-1.7b-lora-mvp-v3-target-focus/`。
-- target count 为 99，训练配置保留 v1 的 audio tower attention + speech projection target。
-- loss log 共 450 行，覆盖 noise long 113、noise short 113、reverb long 112、reverb short 112。
-- held-out MVP 150 推理和评测已完成，输出位于 `outputs/lora_mvp_v3_eval/`，empty output rate 为 0。
-- 相对 4bit base recheck，v3 的 noise WER 从 0.450939 降到 0.413361，相对改善约 8.33%；reverb WER 从 0.544885 降到 0.515658，相对改善约 5.36%；clean WER 持平为 0.008351。
-- v3 是当前 LoRA 最优版本，但尚未达到 10% 相对 WER 改善门槛；router 继续暂停。
-
-## Notebook 08: LoRA MVP v4 Checkpoint Sweep
-
-名称：
-
-- `notebooks/08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb`
-
-目的：
-
-- 延续 v3 已验证有效的 target-focus 方向，不改变 target 和训练场景。
-- 训练到 600 step，并保存中间 adapter，比较不同停止点在 held-out MVP 150 上的 WER。
-- 避免只看最终 checkpoint，把“多训是否有效”变成可复现的 checkpoint sweep。
-
-默认配置：
-
-- `configs/train/qwen3_asr_lora_mvp_v4_checkpoint_sweep.yaml`
-- output：`checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep`
-- eval output：`outputs/lora_mvp_v4_eval`
-- target count：99
-- scenario filter：noise,reverb
-- learning rate：2e-5
-- max steps：600
-- save steps：160
-- sampling：`scenario_bucket_round_robin`
-- base 对照：`outputs/base_recheck_mvp_150/metrics.qwen3_asr_base_recheck.mvp_150.json`
-
-为什么 `save_steps=160`：
-
-- 当前训练使用 `gradient_accumulation_steps=16`。
-- 160/320/480 都刚好落在完整 optimizer update 之后。
-- 这样中间 checkpoint 不会保存半个梯度累积周期，和最终 600 step 的比较更干净。
-
-输出：
-
-- final adapter：`checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/adapter/`
-- 中间 adapter：
-  - `checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0160/adapter/`
-  - `checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0320/adapter/`
-  - `checkpoints/qwen3-asr-1.7b-lora-mvp-v4-checkpoint-sweep/checkpoints/step-0480/adapter/`
-- 每个 checkpoint 的 held-out 评测输出位于 `outputs/lora_mvp_v4_eval/step_*/`。
-
-验收标准：
-
-- preflight target count 等于 99。
-- loss log 覆盖 noise/reverb 的 short 和 long。
-- 至少 160/320/480/final 600 四个 checkpoint 完成 MVP 150 推理和评测。
-- comparison 表必须同时展示 base recheck、v1、v2、v3 和 v4 checkpoint sweep。
-- 如果任一 checkpoint 达到 noise 或 reverb 相对 4bit base recheck 10% WER 改善，且 clean 无明显退化，则进入 router 前检查。
-- 如果没有 checkpoint 达到 10%，继续 target/data/lr ablation，不进入 router。
-
-## Notebook 09: LoRA MVP v5 Late Audio MLP
-
-名称：
-
-- `notebooks/09_train_lora_mvp_v5_late_audio_mlp_colab.ipynb`
-
-目的：
-
-- 在 v3/v4 的 99 个 audio attention + speech projection target 基础上，只新增 audio tower 后半层 MLP target。
-- 验证更多音频侧非线性容量是否能把 noise/reverb 相对 4bit base recheck 的 WER 改善推到 10% 以上。
-- 同时检查 far_field 是否继续回退，避免把有害 checkpoint 带入 router。
-
-默认配置：
-
-- `configs/train/qwen3_asr_lora_mvp_v5_late_audio_mlp.yaml`
-- output：`checkpoints/qwen3-asr-1.7b-lora-mvp-v5-late-audio-mlp`
-- eval output：`outputs/lora_mvp_v5_eval`
-- target count：123
-- 新增 target：`audio_tower.layers.12-23.fc1/fc2`，共 24 个。
-- scenario filter：noise,reverb
-- learning rate：1.5e-5
-- max steps：480
-- save steps：160
-- sampling：`scenario_bucket_round_robin`
-
-验收标准：
-
-- preflight target count 等于 123。
-- preflight 必须确认没有命中 text decoder、`lm_head` 或 speech conv。
-- 至少 160/320/final 480 三个 checkpoint 完成 MVP 150 推理和评测。
-- comparison 表必须同时展示 base recheck、v3、v4_600 和 v5 checkpoint sweep。
-- 如果任一 checkpoint 达到 noise、reverb 或 noise+reverb 相对 4bit base recheck 10% WER 改善，且 clean/far_field 无明显退化，才进入 router 前检查。
-- 如果 v5 仍未超过 v3，下一轮转向数据或损失约束，不继续盲目扩大 target。
-
-## Notebook 10: v6A Hard-Profile 数据构建
-
-名称：
-
-- `notebooks/10_make_hard_profile_dataset_colab.ipynb`
-
-目的：
-
-- 在 Google Drive 项目目录中，从已存在的 `lora_mvp` clean 音频派生 v6A hard-profile train/val。
-- 用最少步骤补齐 hard profile 与复合场景数据，而不是继续做 target-only ablation。
-- 生成下一步 Notebook 11 base difficulty scoring 可直接读取的 manifest。
-
-默认配置：
-
-- `configs/data/v6a_hard_profile.yaml`
-- source train manifest：`data/jsonl/lora_mvp_train.local.jsonl`
-- source val manifest：`data/jsonl/lora_mvp_val.local.jsonl`
-- output audio：`data/v6a_hard_profile/audio/`
-- train output：`data/jsonl/v6a_hard_profile_train.local.jsonl`
-- val output：`data/jsonl/v6a_hard_profile_val.local.jsonl`
-- stats output：`data/jsonl/v6a_hard_profile_stats.local.json`
-- scenarios：clean、noise、reverb、noise_reverb、far_field、dropout、far_field_noise
-- profile：hard
-- variants per utterance：2
-
-输出：
-
-- v6A hard-profile train/val 音频。
-- v6A train/val JSONL manifest。
-- 数据统计和退化质量统计。
-
-测试标准：
-
-- preflight 必须确认 `data/lora_mvp/audio/`、source manifest 和配置文件存在。
-- smoke 模式生成 2 个 train clean 源和 1 个 val clean 源，行数应为 14/7。
-- full 模式生成行数应为 1680/420，除非手动改配置。
-- manifest 中所有音频路径存在。
-- train/val `base_utterance_id` 无交集。
-- manifest 不包含 `baseline_mvp_150` 或 `data/mvp_eval/audio`。
-
-验收标准：
-
-- Notebook 输出 `v6A hard-profile data ready`。
-- stats 中记录 seed、profile、scenario counts、source clean 数量和退化统计。
-- 生成数据后不直接开始训练，下一步进入 Notebook 11 difficulty scoring。
-
-## Notebook 10+: v6 大阶段训练编排
-
-v5 之后不再为每个 target ablation 临时增加一个只改参数的 notebook。后续 notebook
-应围绕数据版本和训练阶段组织：
-
-- `10_make_hard_profile_dataset_colab.ipynb`：生成 Tier 1 hard-profile train/val/test，并输出退化统计。
-- `11_score_base_difficulty_colab.ipynb`：对 train/val/test 跑 base inference，生成 `base_prediction`、`base_wer`、`difficulty_bucket` 和 `failure_tags`。
-- `12_train_lora_v6a_hard_profile_colab.ipynb`：使用 v3 的 99 target 训练 hard-profile data alignment。
-- `13_train_lora_v6b_mixed_constraint_colab.ipynb`：加入 dropout/far_field mixed constraint。
-- `14_train_lora_v6c_a2s_curriculum_colab.ipynb`：按 WER bucket 执行 A2S-style encoder/aligner curriculum。
-- `15_train_lora_v6d_text_decoder_pilot_colab.ipynb`：小范围 text decoder pilot，默认单独 adapter。
-- `16_router_colab.ipynb`：在 LoRA 达标后训练 router。
-
-每个 v6 大阶段训练 notebook 必须读取配置文件，不把数据比例、difficulty bucket、
-target 范围和验收阈值只写在 notebook cell 中。每轮必须产出 comparison 表，
-至少包含 `4bit base recheck`、`v3` 和当前 checkpoint。
-
-## Notebook 11: v6A Base Difficulty Scoring
-
-名称：
-
-- `notebooks/11_score_base_difficulty_colab.ipynb`
-
-目的：
-
-- 在 v6A hard-profile train/val 上先跑 Qwen3-ASR base，避免没有 base 对照就开始微调。
-- 生成 `base_prediction`、`base_wer`、`difficulty_bucket` 和 `failure_tags`。
-- 为 Notebook 12 的采样策略提供依据，而不是把 v6A train 上的改善当成最终结论。
-
-默认配置：
-
-- `configs/eval/qwen3_asr_v6a_base_difficulty.yaml`
-- train input：`data/jsonl/v6a_hard_profile_train.local.jsonl`
-- val input：`data/jsonl/v6a_hard_profile_val.local.jsonl`
-- train difficulty output：`data/jsonl/v6a_hard_profile_train.difficulty.local.jsonl`
-- val difficulty output：`data/jsonl/v6a_hard_profile_val.difficulty.local.jsonl`
-- prediction/metrics output：`outputs/v6a_base_difficulty/`
-- model：`Qwen/Qwen3-ASR-1.7B`
-- quantization：`4bit`
-
-执行步骤：
-
-1. preflight 检查 v6A manifest、音频路径、GPU 和脚本。
-2. mini manifest 跑 2-7 条 base inference，确认模型和路径可用。
-3. 对 train/val 分别跑 base inference。
-4. 用 `evaluation/eval_wer.py` 计算逐条 WER 和 scenario metrics。
-5. 用 `scripts/build_difficulty_manifest.py` 生成 difficulty manifest 和 bucket summary。
-
-测试标准：
-
-- mini run 至少包含 1 条 clean 和 1 条 degraded，且 prediction JSONL 可评分。
-- full run 默认输出 1680 条 train difficulty、420 条 val difficulty。
-- 每条 difficulty row 必须包含 `base_prediction`、`base_wer`、`difficulty_bucket`、`failure_tags`。
-- summary 必须报告 scenario WER、difficulty bucket 分布、empty/too_short/too_long/repeat/hallucination 标签比例。
-- Notebook 不启动 LoRA 训练。
-
-验收标准：
-
-- Notebook 输出 `v6A base difficulty ready`。
-- train/val difficulty manifest 行数与输入 manifest 一致。
-- train/val 至少包含 `wer_0_10` 之外的非 clean 难度桶；如果全部过易或全部 `wer_70_plus`，先回到数据 profile 调整，不进入训练。
-- Notebook 12 只能读取 difficulty manifest 作为训练输入。
-
-## 训练目标格式
-
-baseline 推理不使用聊天 prompt，而是使用 `Qwen3ASRModel.transcribe(audio=..., language=...)`。训练阶段使用底层 forward + labels，因此需要显式构造 prompt 和 answer mask。
-
-当前 smoke training target 格式：
+## 产品产物
 
 ```text
-language English<asr_text>THE TRANSCRIPT TEXT
+checkpoints/qwen3-asr-public-200k-broad-lora/
+  adapter/
+  processor/
+  trainer_state/
+  release_manifest.json
+  resolved_training_config.yaml
+  target_modules.json
 ```
 
-`labels` 中 prompt 和 padding 全部置为 `-100`，只有 `THE TRANSCRIPT TEXT` 和结束 token 参与 loss。后续仍可对比纯转写目标：
+Release 验证必须在全新 Python 进程中只使用 base model id、adapter path 和 release
+manifest 完成四条 smoke 推理及一批 JSONL 推理。
 
-```text
-THE TRANSCRIPT TEXT
-```
+## 失败处理
 
-最终格式由验证集 WER、空输出率、重复输出率和 clean regression 决定。
+- OOM：减小 micro batch、等比例增加 accumulation；不改 LR、target 或 effective batch。
+- 数据下载中断：从 shard 状态继续；不重新随机选样。
+- 训练断开：从最近正式 checkpoint resume；不得把 adapter-only reload 当作 resume。
+- Canary 崩溃：停止并排查，不继续训练观察是否自行恢复。
+- 固定 test 中单条失败：写入 `error` 并继续整批。
 
-## Checkpoint 策略
+## 验收
 
-- 每 200-500 optimizer steps 保存一次。
-- Colab 中保留最近 3 个 checkpoint。
-- 最终 adapter 同步到 Google Drive。
-- 每个 adapter 旁边写入 `training_config.json`。
-
-## 提前停止条件
-
-出现以下情况应提前停止：
-
-- loss 变成 NaN。
-- 输出大多为空。
-- 输出出现大量重复模板文本。
-- validation WER 连续两次变差。
-- Colab runtime 接近超时且近期没有保存 checkpoint。
-
-## 测试标准
-
-- 每个 notebook 能从空 Colab runtime 按顺序执行关键单元。
-- `00_clone_github_colab.ipynb` 必须能确认本地代码版本和关键修复标记。
-- notebook 使用 Google Drive 根目录变量，不写死个人本地路径。
-- baseline notebook 至少能对 1 条 clean 和 1 条 degraded 音频推理。
-- 训练 notebook 必须先完成 5-20 step smoke test。
-- 训练 notebook 必须在加载模型前验证 smoke manifest 的音频路径，缺失时输出缺失样例。
-- 训练 notebook 的依赖 cell 必须处理 Colab 预装旧版 `torchao`，避免 PEFT LoRA 注入阶段失败。
-- 评测 notebook 能读取 prediction JSONL 并输出 WER/CER。
-- 失败信息要写入输出文件或日志，不能只显示在 notebook cell 中。
-
-## 验收标准
-
-- `00_clone_github_colab.ipynb` 完成 clone/update，并打印当前 commit 与版本验收结果。
-- `01_baseline_colab.ipynb` 产出 baseline predictions 和 metrics。
-- `02_make_dataset_colab.ipynb` 产出 train/val/test JSONL。
-- `03_train_lora_colab.ipynb` 产出可加载 LoRA adapter。
-- `04_train_lora_mvp_colab.ipynb` 产出正式 LoRA MVP adapter。
-- `05_eval_lora_mvp_colab.ipynb` 产出 LoRA always-on overall 和 scenario-level 指标。
-- `06_train_lora_mvp_v2_colab.ipynb` 产出 v2 ablation 指标。
-- `07_train_lora_mvp_v3_colab.ipynb` 产出 v3 target-focus 指标。
-- `08_train_lora_mvp_v4_checkpoint_sweep_colab.ipynb` 产出 v4 checkpoint sweep 指标。
-- `09_train_lora_mvp_v5_late_audio_mlp_colab.ipynb` 产出 v5 late audio MLP checkpoint sweep 指标。
-- v6 大阶段 notebook 产出 hard-profile 数据、difficulty manifest、阶段训练 checkpoint 和统一 comparison 表。
-- `16_router_colab.ipynb` 在 router 阶段产出阈值和分类指标。
-- 所有 notebook 的输入、输出和依赖都能追溯到配置文件。
+Notebook 从干净 runtime 能按上述顺序完成；所有关键 cell 可重复运行；Drive 只承担大文件
+持久化，不成为逐样本训练 I/O；最终给出 adapter、release manifest、prediction、metrics
+和实际运行命令。

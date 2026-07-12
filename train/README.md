@@ -1,5 +1,9 @@
 # train
 
+> 当前 `train_qwen3_asr_lora.py` 是历史 batch-size-1 trainer，只用于复现 smoke/v1-v5，
+> 不得扩建为 200k 正式入口。新主线计划使用 `train_qwen3_asr_lora_official.py`，详见
+> `docs/qwen3-asr/02_development_plan.md`。
+
 存放 Qwen3-ASR LoRA/QLoRA 训练代码。
 
 目标：

@@ -1,470 +1,156 @@
 # 数据方案
 
-最后更新：2026-06-30
+最后更新：2026-07-12
 
-## 目标
+## 背景
 
-构建一个覆盖真实鲁棒性场景、同时适合 Colab MVP 训练的小规模语音数据集。Mega-ASR 的场景设计可作为灵感，但我们的 manifest、增强代码和场景体系都应由本项目维护。
+历史数据只有 120 条独立 TTS train source，增加退化副本不能替代 speaker、文本和真实
+声学多样性。第一轮正式训练直接使用公开鲁棒数据，不再开发自建 noise/RIR 工厂。
 
-## 数据格式
+## 范围
 
-训练 JSONL：
+本轮只准备：
+
+- 200k train。
+- 10k validation。
+- Voices-in-the-Wild-Bench 5k fixed test。
+- LibriSpeech test-clean 与 AISHELL-1 test clean regression。
+
+不做全量 base WER difficulty scoring，不调用 GPT-5.5 teacher，不生成新的合成退化。
+
+## 数据源
+
+| 用途 | 数据源 | 当前事实 |
+| --- | --- | --- |
+| robust train/val | `zhifeixie/Voices-in-the-Wild-2M` | 645,925 条，54 split，约 197.5 GB，Apache-2.0，非 gated |
+| English clean | LibriSpeech | train-clean 子集用于 retention，test-clean 用于固定 test |
+| Chinese clean | AISHELL-1 | train/dev 用于 retention/validation，test 用于固定 test |
+| robust test | `zhifeixie/Voices-in-the-Wild-Bench` | 5,000 条，中英、real/synthetic、8 类 condition |
+
+每个数据源必须 pin revision 或发布版本，并把 license、revision 和 source split 写入
+manifest 与统计文件。
+
+## 固定配比
+
+### Train 200k
+
+- Robust 160k：7 个 atomic condition 各 16k，共 112k；compound 48k。
+- English clean 20k。
+- Chinese clean 20k。
+- Robust 各 condition 内 English/Chinese 尽量 1:1，任何配额不足必须硬失败。
+
+### Validation 10k
+
+- Robust 8k：按 language 与 8 类 condition 分层。
+- English clean 1k。
+- Chinese clean 1k。
+
+Validation 必须包含 clean，因为 50%/100% checkpoint 要在不触碰固定 test 的前提下检查
+clean regression。
+
+## Canonical JSONL
+
+训练、validation 和 test 统一使用一个 schema：
 
 ```json
 {
-  "audio": "/content/drive/MyDrive/qwen3-asr/audio/train/000001.wav",
-  "answer": "THE TRANSCRIPT TEXT",
-  "language": "English",
-  "scenario": "clean",
-  "source": "librispeech",
-  "is_degraded": false
-}
-```
-
-评测 JSONL：
-
-```json
-{
-  "audio": "/content/drive/MyDrive/qwen3-asr/audio/test/000001.wav",
-  "answer": "THE TRANSCRIPT TEXT",
-  "language": "en",
-  "scenario": "noise_reverb",
-  "source": "librispeech",
-  "is_degraded": true
-}
-```
-
-## MVP 数据规模
-
-建议第一版规模：
-
-- Train：10k-20k 条。
-- Validation：1k-2k 条。
-- Test：1k-2k 条。
-
-音频长度：
-
-- MVP：3-20 秒。
-- 后续：加入 20-120 秒长音频评测。
-
-## 候选数据源
-
-Clean speech：
-
-- LibriSpeech
-- Common Voice
-- AISHELL-1，中文
-- WenetSpeech，后续中文扩展
-
-噪声与环境素材：
-
-- MUSAN
-- DNS Challenge noise
-- ESC-50
-- UrbanSound8K
-- room impulse response datasets
-
-## 声学场景
-
-### 原子条件
-
-1. Clean speech
-2. 背景噪声
-3. 远场语音
-4. 遮挡或闷声
-5. 回声与混响
-6. 录音设备伪影
-7. 电子失真
-8. 传输丢包或 dropout
-
-Mega-ASR 描述了 7 类原子声学条件。我们的实现中会把 dropout 从录音/电子伪影中拆出来，方便生成和分析。
-
-### 复合条件
-
-示例：
-
-- noise + reverb
-- far-field + noise
-- far-field + reverb
-- obstruction + noise
-- clipping + noise
-- codec artifact + dropout
-- restaurant noise + far-field + reverb
-
-## 增强配方
-
-### 噪声
-
-参数：
-
-- SNR：-5、0、5、10、15 dB。
-- 噪声类型：人声嘈杂、街道、音乐、咖啡馆、办公室、车辆。
-
-### 远场
-
-参数：
-
-- 音量衰减。
-- RIR 卷积。
-- 低通滤波。
-- 必要时做轻微 stereo-to-mono collapse。
-
-### 遮挡
-
-参数：
-
-- 低通截止频率：1.5-4 kHz。
-- 高通截止频率：100-300 Hz。
-- 随机 EQ notch。
-
-### 回声与混响
-
-参数：
-
-- RIR 卷积。
-- 合成 echo delay：80-250 ms。
-- echo decay：0.2-0.6。
-
-### 录音伪影
-
-参数：
-
-- 重采样到 8k/12k/16k/24k 后再回到 16k。
-- 可用时加入 MP3/Opus 压缩。
-- 麦克风 EQ。
-- 错误增益归一化。
-
-### 电子失真
-
-参数：
-
-- clipping 阈值。
-- bit depth reduction。
-- saturation。
-- quantization noise。
-
-### Dropout
-
-参数：
-
-- 随机静音片段：20-300 ms。
-- packet loss rate：1%-15%。
-- burst dropout。
-
-## 切分规则
-
-避免泄漏：
-
-- 同一条原始 clean utterance 不得同时出现在 train 和 test 中，即使增强方式不同。
-- 如果可行，同一 speaker 应只出现在一个 split。
-- test 使用的噪声素材不应在 train 中复用。
-
-## 元数据要求
-
-每条生成样本应记录：
-
-- 原始音频路径。
-- 生成音频路径。
-- 转写文本。
-- 源数据集。
-- speaker id，如果有。
-- 语言。
-- scenario。
-- 增强参数。
-- 随机种子。
-
-## 第一版推荐
-
-MVP 建议：
-
-- 先做英文。
-- 使用 LibriSpeech clean subset。
-- 5 类退化：noise、reverb、far-field、clipping、dropout。
-- 每条 clean utterance 生成 2-3 条 degraded 样本。
-- 保留固定 held-out test set。
-
-## LoRA MVP Bootstrap 数据
-
-### 背景
-
-`05C` 已经证明 Qwen3-ASR 可以挂载 PEFT LoRA 并完成 20 step smoke training。
-正式 LoRA MVP 不能继续直接使用 MVP 150 评测集训练，否则后续 base-vs-LoRA
-对比会失去 held-out 意义。因此需要新增一批独立 train/val manifest，用来启动
-第一版监督训练闭环。
-
-### 范围
-
-本批 bootstrap 数据只用于 LoRA MVP 启动：
-
-- 做 train/val，不做最终 test。
-- 默认覆盖 clean、noise、reverb。
-- 使用本项目合成音频和退化代码。
-- 保留固定随机种子、文本 index、base utterance id 和增强参数。
-
-本批数据不用于声明产品级鲁棒性，不替代真实语音数据或真实 noisy holdout。
-
-### 默认配置
-
-- train：clean、noise、reverb 各 120 条。
-- val：clean、noise、reverb 各 30 条。
-- profile：`medium`，避免一开始只学习 hard profile 的极端伪影。
-- seed：`20260629`。
-- held-out test：继续使用 `data/jsonl/baseline_mvp_150.local.jsonl` 和 `outputs/baseline_mvp_150/` 中的 base 指标。
-
-默认输出：
-
-- `data/lora_mvp/audio/train/`
-- `data/lora_mvp/audio/val/`
-- `data/jsonl/lora_mvp_train.local.jsonl`
-- `data/jsonl/lora_mvp_val.local.jsonl`
-- `data/jsonl/lora_mvp_stats.local.json`
-
-### 数据格式
-
-每条样本至少包含：
-
-```json
-{
-  "audio": "data/lora_mvp/audio/train/noise/noise_0001.wav",
-  "answer": "Please confirm the meeting room before the weekly review begins.",
+  "sample_id": "vitw2m:noise:123",
+  "audio": "audio/train/shard-0001/sample-000123.flac",
+  "answer": "reference transcript",
   "language": "en",
   "scenario": "noise",
-  "split": "train",
-  "source": "macos_say_plus_noise",
-  "is_degraded": true,
-  "utterance_id": "train_utt_0001_noise",
-  "base_utterance_id": "train_utt_0001",
-  "degradation": "noise",
-  "profile": "medium",
-  "seed": 20260730,
-  "sample_rate": 16000,
-  "text_length_bucket": "short",
-  "reference_word_count": 9
+  "condition_group": "atomic",
+  "audio_origin": "synthetic",
+  "source_dataset": "zhifeixie/Voices-in-the-Wild-2M",
+  "source_revision": "a8a35d3319737190d6fd3d39157b258eaab35980",
+  "source_split": "noise",
+  "source_index": 123,
+  "source_utterance_id": "derived-stable-id",
+  "speaker_id": null,
+  "duration_s": 7.42,
+  "license": "apache-2.0",
+  "seed": 20260711,
+  "audio_sha256": "..."
 }
 ```
 
-### 切分与泄漏规则
+字段约定：
 
-- train 与 val 的 `base_utterance_id` 不得重叠。
-- train/val 不得包含 `baseline_mvp_150` 的音频路径。
-- 同一个 split 内允许同一 base utterance 生成 clean、noise、reverb 多个场景，因为这是训练鲁棒映射的目标；但同一个 base utterance 不跨 split。
-- held-out MVP 150 不进入训练和调参，只用于最终 base-vs-LoRA 对比。
+- `answer` 是唯一 reference 字段；不再同时维护 `text` 和 `answer`。
+- `language` 只允许 `en` 或 `zh`。Trainer 在运行时构造
+  `language English<asr_text>...` 或 `language Chinese<asr_text>...`。
+- `scenario` 使用标准 condition 名称；`condition_group` 只允许
+  `clean|atomic|compound`。
+- `audio_origin` 在 Bench 中使用 `real|synthetic`，clean test 使用 `clean`。
+- `source_dataset` 取代历史 `source` 字段。
+- `audio` 是相对 `data_root` 的路径；训练前解析后的真实文件必须存在。
 
-### 生成命令
+Voices-in-the-Wild-2M 当前没有显式 language 字段。语言由 gold transcript 使用固定规则
+推断；中英文混合或无法确定的样本写入 rejects。不得调用 teacher 猜语言或改写 transcript。
 
-```bash
-python3 scripts/create_lora_mvp_dataset.py \
-  --profile medium \
-  --train-items-per-scenario 120 \
-  --val-items-per-scenario 30 \
-  --scenarios clean,noise,reverb \
-  --force
-```
+## Source 分组与防泄漏
 
-### 测试
+同一 clean source 的多个退化版本必须先归并成一个 `source_utterance_id`，再按 group 切分。
+派生优先级：公开 source id/name -> 可解析的 file/audio path -> 数据集稳定 index 规则。
+若无法可靠派生，样本不得进入正式 train/validation。
 
-- JSONL 每行可解析。
-- 每条样本的音频路径存在。
-- train/val scenario counts 与命令行参数一致。
-- train/val `base_utterance_id` 无交集。
-- stats 文件记录 seed、profile、split counts、scenario counts、duration 和退化质量统计。
+硬门槛：
 
-### 验收
+- train/validation/test 的 `sample_id` overlap 为 0。
+- train/validation 的 `source_utterance_id` overlap 为 0。
+- train/validation/Bench 的相同公开 name、source path、benchmark id 和 audio SHA256 overlap
+  为 0。
+- LibriSpeech/AISHELL-1 按官方 split，能获得 speaker id 时额外报告 speaker overlap。
 
-- Colab/本地可复现生成同一批 manifest。
-- LoRA 训练配置引用 train manifest，验证或后续 early stopping 使用 val manifest。
-- 固定 MVP 150 held-out test 与 bootstrap train/val 明确分离。
+归一化 transcript overlap 只报告并抽查，不作为通用硬失败条件；不同 speaker 说同一句话
+不等于数据泄漏。若 transcript overlap 同时伴随相同 source metadata，则按 source 泄漏处理。
 
-## Scale-Up 数据设计
+## 时长与质量过滤
 
-### 背景
+第一轮只保留 0.5-30 秒音频。以下样本写入 rejects：
 
-v3/v4/v5 的结果说明，当前 medium-profile bootstrap 数据无法支撑目标鲁棒性。
-v5 增加 audio MLP target 后仍未超过 v3，说明下一步应优先补数据难度和场景覆盖，
-再扩大 target 或训练 text decoder。
+- 空 transcript 或语言不明。
+- 音频不存在、无法解码、时长异常、NaN/Inf。
+- 峰值或静音比例明显异常。
+- source identity 缺失，无法保证 group split。
+- 与 fixed test 存在硬 overlap。
 
-## v6A Hard-Profile Tier 1 数据构建
+每个 reject 保存 `reason` 和原始 source locator，不能静默丢弃。
 
-### 背景
+## 缓存与 Colab I/O
 
-当前 LoRA 训练集只有 medium profile 的 clean/noise/reverb，而 held-out MVP 150
-是 hard profile，存在训练难度和评测难度错配。为了用最少步骤验证数据对齐是否
-比继续扩 target 更有效，v6A 先复用已提交的 `lora_mvp` clean 音频作为源音频，
-在 Colab/Drive 中派生 hard profile 多场景 train/val。
+公开 robust 数据压缩体积很大，160k 预计仍为几十 GB。为避免 Google Drive 小文件 I/O：
 
-### 范围
+1. Drive 或其他持久盘只缓存原始 parquet/打包 tar shard 和构建状态。
+2. Notebook 启动后把需要的 shard staging 到 `/content/mega-asr-runtime/`。
+3. 在本地 SSD 解包/物化音频并生成 resolved manifest。
+4. Trainer 只读本地 SSD。
+5. Drive 只持续写 checkpoint、manifest、stats 和 prediction 增量。
 
-本阶段做：
+不得把 200k 个独立 wav/flac 逐个写入或逐个读取 Google Drive。
 
-- 从 `data/jsonl/lora_mvp_train.local.jsonl` 和 `data/jsonl/lora_mvp_val.local.jsonl`
-  中只读取 `scenario=clean` 的源样本。
-- 生成 clean、noise、reverb、noise_reverb、far_field、dropout、far_field_noise。
-- 默认 hard profile、固定 seed、每个源 utterance 生成 2 个 variant。
-- 输出新的 v6A train/val manifest、音频和 stats。
+## 输出
 
-本阶段不做：
+- `data/jsonl/public_robust_200k_train.jsonl`
+- `data/jsonl/public_robust_10k_val.jsonl`
+- `data/jsonl/vitw_bench_5k_test.jsonl`
+- `data/jsonl/public_clean_tests.jsonl`
+- `data/jsonl/public_robust_200k_stats.json`
+- `data/jsonl/public_robust_200k_validation.json`
+- `data/jsonl/public_robust_200k_rejects.jsonl`
+- `data/jsonl/public_robust_200k_sources.json`
 
-- 不使用 `data/jsonl/baseline_mvp_150.local.jsonl` 或 `data/mvp_eval/audio/` 训练。
-- 不引入 Mega-ASR 上游代码。
-- 不在 Notebook 10 内跑 base inference 或训练；difficulty scoring 交给 Notebook 11，
-  LoRA 训练交给 Notebook 12。
+## 测试
 
-### 设计
+- `--help` 和 `--smoke` 可执行。
+- Smoke 覆盖 en/zh、clean、7 atomic、compound 和 Bench real/synthetic。
+- Full 行数精确等于 200k/10k/5k。
+- 所有 resolved audio 路径存在且可解码。
+- 固定 seed/revision/config 重跑得到相同 sample id 顺序和 manifest hash。
+- 硬 overlap 全部为 0，transcript overlap 单独报告。
+- 每个 language/condition 抽听至少 10 条并记录结果。
 
-输入：
+## 验收与影响
 
-- `configs/data/v6a_hard_profile.yaml`
-- `data/jsonl/lora_mvp_train.local.jsonl`
-- `data/jsonl/lora_mvp_val.local.jsonl`
-- `data/lora_mvp/audio/`
-
-默认输出：
-
-- `data/v6a_hard_profile/audio/`
-- `data/jsonl/v6a_hard_profile_train.local.jsonl`
-- `data/jsonl/v6a_hard_profile_val.local.jsonl`
-- `data/jsonl/v6a_hard_profile_stats.local.json`
-
-默认规模：
-
-- train：120 个 clean 源 utterance x 7 个 scenario x 2 个 variant = 1680 条。
-- val：30 个 clean 源 utterance x 7 个 scenario x 2 个 variant = 420 条。
-
-1680 条 train 低于长期 Tier 1 的 2k-5k 建议，但它是 v6A-min 的最小闭环。若
-Notebook 10 stats 和 Notebook 11 difficulty bucket 显示数据可用，可把
-`variants_per_utterance` 提到 3，得到 2520 条 train 后再跑正式 v6A。
-
-每条样本保留：
-
-- `audio`、`answer`、`language`、`scenario`、`split`
-- `source`、`is_degraded`、`utterance_id`、`base_utterance_id`
-- `source_audio`、`source_manifest`、`variant_index`
-- `degradation`、`profile`、`seed`、`sample_rate`
-- `text_length_bucket`、`reference_word_count`
-- `approx_snr_db`、`rms_ratio`、`active_near_silence_ratio`、`clipping_ratio`
-
-### 命令
-
-```bash
-python3 scripts/create_v6a_hard_profile_dataset.py \
-  --config configs/data/v6a_hard_profile.yaml \
-  --force
-```
-
-小样本 smoke：
-
-```bash
-python3 scripts/create_v6a_hard_profile_dataset.py \
-  --config configs/data/v6a_hard_profile.yaml \
-  --max-train-base-utterances 2 \
-  --max-val-base-utterances 1 \
-  --variants-per-utterance 1 \
-  --output-dir /tmp/mega-asr-v6a/audio \
-  --train-manifest /tmp/mega-asr-v6a/train.jsonl \
-  --val-manifest /tmp/mega-asr-v6a/val.jsonl \
-  --stats /tmp/mega-asr-v6a/stats.json \
-  --force
-```
-
-### 测试
-
-- JSONL 每行可解析。
-- 每条样本的音频路径存在。
-- train/val `base_utterance_id` 无交集。
-- 输出 manifest 不包含 `baseline_mvp_150` 或 `data/mvp_eval/audio`。
-- scenario counts 与 `scenarios x variants_per_utterance x clean_source_count` 一致。
-- stats 记录 source clean 数量、seed、profile、scenario counts、duration 和退化质量统计。
-
-### 验收
-
-- `notebooks/10_make_hard_profile_dataset_colab.ipynb` 能在 Google Drive 项目目录中生成 v6A manifest。
-- smoke 命令可在本地生成 14 条 train 和 7 条 val，并通过路径与 split 校验。
-- 生成数据不会覆盖固定 MVP 150 held-out test。
-- Notebook 10 完成后，下一步只进入 Notebook 11 base difficulty scoring；不直接跳到训练。
-
-### 影响
-
-- v6A 训练将从 medium profile noise/reverb-only，转为 hard profile 多场景数据。
-- 该数据仍由 TTS clean 源和规则退化构成，只能验证训练链路和难度对齐，不能声明达到
-  Mega-ASR 或真实鲁棒 ASR 水平。
-- 若 v6A 只改善合成 hard profile 而不改善固定 MVP 150 或后续真实 holdout，应回到数据源扩展，
-  而不是继续扩大 LoRA target。
-
-### 数据分层
-
-Tier 1：hard-profile MVP train/val
-
-- train：2k-5k 条。
-- val：300-500 条。
-- 场景：clean、noise、reverb、dropout、far_field、noise_reverb、far_field_noise。
-- 用途：v6A/v6B，验证 hard-profile 数据对齐和 mixed constraint。
-
-Tier 2：多源真实语音 + 合成退化
-
-- train：20k-50k 条。
-- val/test：2k-5k 条。
-- clean 来源：LibriSpeech、Common Voice；中文阶段再加入 AISHELL/WenetSpeech。
-- noise/RIR 来源：MUSAN、DNS Challenge、ESC-50、UrbanSound8K、公开 RIR。
-- 用途：降低 macOS TTS 和固定合成伪影过拟合。
-
-Tier 3：复合场景扩展
-
-- train：100k+ 条。
-- 场景：从 7 类原子条件扩展到 20-50 个复合场景。
-- 用途：向 Mega-ASR 的 full-scenario robust ASR 能力形态靠近。
-
-### 难度标注
-
-从 v6 开始，训练 manifest 需要先经过 base inference 生成 difficulty manifest。
-每条样本新增：
-
-- `base_prediction`
-- `base_wer`
-- `difficulty_bucket`
-- `failure_tags`
-- `approx_snr_db`
-- `rms_ratio`
-- `active_near_silence_ratio`
-
-Notebook 11 固定使用 4bit base 对 v6A train/val 分别打分，输出：
-
-- `data/jsonl/v6a_hard_profile_train.difficulty.local.jsonl`
-- `data/jsonl/v6a_hard_profile_val.difficulty.local.jsonl`
-- `outputs/v6a_base_difficulty/summary.json`
-
-原始 v6A manifest 保持不变。difficulty manifest 是 Notebook 12 的训练输入，
-也是后续采样比例、过滤 `wer_70_plus` 和保留 clean retention 的依据。
-
-推荐 difficulty bucket：
-
-- `wer_0_10`
-- `wer_10_30`
-- `wer_30_50`
-- `wer_50_70`
-- `wer_70_plus`
-
-### 采样原则
-
-- v6 以 `wer_10_30` 和 `wer_30_50` 为主。
-- `wer_50_70` 少量加入，用于提高 hard robustness。
-- `wer_70_plus` 默认只做观察或小比例 hard negative，避免小数据阶段学到幻觉补全。
-- clean retention 不低于 10%-15%。
-- dropout/far_field 作为约束样本加入，不再只放在 held-out 观察中。
-
-## 测试标准
-
-- JSONL 每行都是合法 JSON。
-- 每条样本的 `audio` 路径存在。
-- 对于 Colab 训练，manifest 中的音频路径必须在 Google Drive 项目目录中真实存在；`outputs/baseline_mvp_150/baseline_mvp_150.colab.jsonl` 只保存路径和标签，不包含 wav 音频本体。
-- 训练样本包含 `text`，评测样本包含 `answer`。
-- 每条样本包含 `language`、`scenario`、`source`、`is_degraded`。
-- train/val/test 不存在同一原始 utterance 泄漏。
-- scenario 分布、source 分布和总时长能生成统计报告。
-
-## 验收标准
-
-- smoke、train、val、test 四类 manifest 都已生成。
-- MVP 至少覆盖 clean、noise、reverb、far_field、dropout。
-- 每个 split 都有数据统计文件。
-- 数据构建配置和随机种子已保存。
-- 测试集固定，不被训练或调参使用。
+`public_robust_200k_validation.json` 所有硬检查通过才允许训练。旧 TTS、MVP 150 和 v6A
+保留为 smoke/history，不再参与正式模型选择，也不能用于证明数据规模。

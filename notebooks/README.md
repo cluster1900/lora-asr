@@ -1,5 +1,9 @@
 # notebooks
 
+> 当前主线尚未实现，唯一计划入口是 `12_fast_finetune_colab.ipynb`。现有 00-11
+> notebook 均为历史实验或仓库辅助工具，不再继续扩建 v6A、difficulty、target sweep
+> 或 router 路线。执行合同见 `docs/qwen3-asr/02_development_plan.md`。
+
 存放 Colab 优先的 notebook。正式 notebook 放在本目录，`colab/` 不作为主工程目录使用。
 
 规划：
@@ -17,7 +21,7 @@
 - `09_train_lora_mvp_v5_late_audio_mlp_colab.ipynb`：执行 LoRA MVP v5 late audio MLP ablation，在 99 个音频侧 target 基础上新增 audio tower 12-23 层 `fc1/fc2`，评测 160/320/final 480 step checkpoint。
 - `10_make_hard_profile_dataset_colab.ipynb`：生成 v6A hard-profile train/val 数据，默认从 `lora_mvp` clean 音频派生 7 类场景，并输出 stats。
 - `11_score_base_difficulty_colab.ipynb`：对 v6A train/val manifest 跑 4bit base inference、WER、错误分析，并生成 difficulty manifest。
-- `12_train_lora_v6a_hard_profile_colab.ipynb`：规划中，回到 v3 的 99 target 训练 hard-profile data alignment。
+- `12_fast_finetune_colab.ipynb`：待实现，公开 200k、官方 Trainer、BF16 broad LoRA 的唯一入口。
 - `02_make_dataset_colab.ipynb`
 - `16_router_colab.ipynb`：规划中，只有 LoRA 达到门槛后再训练 router。
 
