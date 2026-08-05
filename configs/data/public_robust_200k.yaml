@@ -1,0 +1,119 @@
+project:
+  name: qwen3-asr-public-robust-200k
+  seed: 20260722
+  data_root: /content/mega-asr-runtime/data
+  output_dir: data/jsonl
+
+sources:
+  robust:
+    dataset_id: zhifeixie/Voices-in-the-Wild-2M
+    revision: a8a35d3319737190d6fd3d39157b258eaab35980
+    license: apache-2.0
+    max_download_bytes: 220000000000
+    max_dataset_bytes: 300000000000
+    expected_splits: 54
+    expected_compound_splits: 47
+    atomic_splits:
+      - distortion
+      - dropout
+      - echo
+      - far_field
+      - noise
+      - obstructed
+      - recording
+    required_source_fields:
+      - answer
+      - name
+      - index
+      - file_name
+      - subset
+  robust_test:
+    dataset_id: zhifeixie/Voices-in-the-Wild-Bench
+    revision: 788f5d72c6b0e9091b5c2e432370923b6f9f0660
+    license: apache-2.0
+    expected_rows: 5000
+    required_source_fields:
+      - answer
+      - name
+      - index
+      - file_name
+      - subset
+  english_clean:
+    dataset_id: openslr/librispeech_asr
+    revision: 71cacbfb7e2354c4226d01e70d77d5fca3d04ba1
+    config: clean
+    license: cc-by-4.0
+    train_split: train.100
+    validation_split: validation
+    test_split: test
+  chinese_clean:
+    dataset_id: AISHELL/AISHELL-1
+    revision: bbe295d530192a4cd41644b711c9aecd087df653
+    license: apache-2.0
+    train_split: train
+    validation_split: validation
+    test_split: test
+
+selection:
+  robust_train:
+    atomic_per_split: 16000
+    compound_total: 48000
+  robust_validation:
+    atomic_per_split: 800
+    compound_total: 2400
+  clean_train_per_language: 20000
+  clean_validation_per_language: 1000
+  expected_train_rows: 200000
+  expected_validation_rows: 10000
+  expected_bench_rows: 5000
+  min_duration_s: 0.5
+  max_duration_s: 30.0
+
+curriculum:
+  target_rows: 30000
+  maximum_error_rate: 0.70
+  cumulative_thresholds:
+    - 0.30
+    - 0.50
+    - 0.70
+
+canary:
+  expected_rows: 512
+  robust_rows: 410
+  clean_rows: 102
+
+smoke:
+  robust_per_language_per_split: 1
+  clean_per_language: 10
+  expected_train_rows: 128
+  bench_per_language_origin: 1
+  expected_bench_rows: 4
+
+manifest:
+  required_fields:
+    - sample_id
+    - audio
+    - answer
+    - language
+    - scenario
+    - condition_group
+    - audio_origin
+    - source_dataset
+    - source_revision
+    - source_split
+    - source_index
+    - source_utterance_id
+    - duration_s
+    - license
+    - seed
+    - audio_sha256
+  outputs:
+    train: public_robust_200k_train.jsonl
+    validation: public_robust_10k_val.jsonl
+    validation_canary: public_robust_512_canary.jsonl
+    curriculum: public_robust_30k_curriculum.jsonl
+    robust_test: vitw_bench_5k_test.jsonl
+    stats: public_robust_200k_stats.json
+    validation_report: public_robust_200k_validation.json
+    rejects: public_robust_200k_rejects.jsonl
+    sources: public_robust_200k_sources.json

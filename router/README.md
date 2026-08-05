@@ -1,10 +1,6 @@
 # router
 
-存放音频质量 router 的训练和推理代码。
+历史占位目录，当前快速 A2S 交付不实现 router。
 
-目标：
-
-- 判断音频是 clean 还是 degraded。
-- 输出 `degraded_prob` 和 route decision。
-- 支持推理阶段动态选择 base 或 LoRA。
-
+只有最终 robust 指标达到目标、但 clean regression 在一次受控 retention 修正后仍超标时，
+才根据真实 base-vs-LoRA 逐样本收益单独立项。第一轮训练、推理、评测和发布均不得依赖该目录。

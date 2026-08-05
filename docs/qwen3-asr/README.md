@@ -1,6 +1,6 @@
 # Qwen3-ASR 鲁棒 ASR 文档
 
-最后更新：2026-07-12
+最后更新：2026-08-05
 
 本项目固定使用 `Qwen/Qwen3-ASR-1.7B`，独立实现数据、训练、推理、评测和发布。
 Mega-ASR 只作为方法与外部 baseline。
@@ -8,15 +8,19 @@ Mega-ASR 只作为方法与外部 baseline。
 ## 当前状态
 
 历史 baseline、LoRA v1-v5 和评测闭环已经完成，但没有证明相对 BF16 base 的正式净收益。
-新的“公开 200k + 官方 Trainer + 343-target BF16 LoRA”主线尚未实现，状态 0/3。
+新的“公开 200k + 官方 Trainer + A2S BF16 LoRA”已完成最小脚本，正式数据/GPU 运行仍为 0/3。
 
 ## 唯一主线
 
-1. 160k robust + 20k English clean + 20k Chinese clean；validation 8k+1k+1k。
-2. Qwen 官方 Trainer 薄适配，343-target LoRA，`lr=1e-6`，10+2 真 resume。
-3. 一次 200k run：step 100 canary、50%/100% validation、固定 test、release adapter。
+1. Metadata probe 后固定 160k robust + 20k English clean + 20k Chinese clean；validation
+   8k+1k+1k；另从 robust train 固定 30k base-error curriculum pool。
+2. Qwen 官方 Trainer 薄适配，单 adapter 预注入 343 target，完成 target 切换和 10+2 真
+   resume。
+3. 一次 A2S 编排：upper-4 audio+projection 30k x 2 epoch -> decoder 200k x 1 epoch ->
+   joint 200k x 1 epoch；阶段只跑 512 canary，最终只跑一次完整 validation/test。
 
-GPT-5.5 teacher、router、RL、自建增强、全量 difficulty scoring 和 target sweep 不进入第一轮。
+Direct SFT 前置实验、teacher、router、RL、自建增强、全量 difficulty scoring 和 target/LR
+sweep 不进入第一轮。现有 gold transcript 足够完成监督训练和 base-error 分桶。
 
 ## 阅读顺序
 
@@ -36,12 +40,6 @@ GPT-5.5 teacher、router、RL、自建增强、全量 difficulty scoring 和 tar
 `roadmap/`、notebook 00-11、旧 v1-v6 配置和历史 checkpoint/output 用于复现与审计，
 不再定义下一步。若历史文档与 `02_development_plan.md` 冲突，以后者为准。
 
-## Teacher 接口边界
-
-未来只有未标注真实音频或 transcript 冲突才使用 `TEACHER_API_KEY`、
-`TEACHER_BASE_URL`、`TEACHER_MODEL=gpt-5.5`。实际 base URL 必须通过 capability probe；
-teacher 不得覆盖 gold transcript，第一轮不实现。
-
 ## 官方参考
 
 - Qwen3-ASR：https://github.com/QwenLM/Qwen3-ASR
@@ -49,4 +47,3 @@ teacher 不得覆盖 gold transcript，第一轮不实现。
 - Voices-in-the-Wild-2M：https://huggingface.co/datasets/zhifeixie/Voices-in-the-Wild-2M
 - Voices-in-the-Wild-Bench：https://huggingface.co/datasets/zhifeixie/Voices-in-the-Wild-Bench
 - Mega-ASR：https://github.com/xzf-thu/Mega-ASR
-- OpenAI Python SDK：https://github.com/openai/openai-python

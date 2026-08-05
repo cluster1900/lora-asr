@@ -1,16 +1,21 @@
 # 开发进度
 
-最后更新：2026-07-12
+最后更新：2026-08-05
 
 ## 当前状态
 
-历史探索闭环已完成，新的快速正式微调主线尚未实现，当前完成度为 **0/3**。
+历史探索闭环已完成。新的快速主线已经完成 manifest 选择/curriculum、统一推理、双语评测和
+单-adapter A2S runner 的最小代码；正式数据物化、Colab 10+2 GPU smoke 和训练结果尚未执行。
+
+因此当前应区分：**实现 2/3，正式运行 0/3**。未跑 GPU 和固定测试前不能把代码完成误写成
+模型效果完成。
 
 快速主线固定为：
 
-1. 准备公开 200k train、10k validation 和固定 test。
-2. 实现 Qwen 官方 Trainer 薄适配、343-target BF16 LoRA 和 10+2 resume smoke。
-3. 执行一次 200k 正式训练，经过 100-step canary、50%/100% validation 和固定 test。
+1. 完成 metadata probe，准备公开 200k train、10k validation、30k curriculum pool 和
+   固定 test。
+2. 实现 Qwen 官方 Trainer 薄适配、A2S 三阶段 target 切换和 10+2 resume smoke。
+3. 执行一次 A2S 编排训练，经过阶段 512 canary、最终 validation 和固定 test。
 
 唯一执行合同见 `02_development_plan.md`。
 
@@ -48,34 +53,34 @@ baseline overall 为 0.483925，明显优于 v3，因此不能把量化损失误
 - WER/CER、scenario 聚合和错误分析。
 - 模块快照与 343 个候选 Linear target 证据。
 
-不能直接用于 200k：
+历史入口不能直接用于 200k：
 
 - `train/train_qwen3_asr_lora.py` 强制 batch size 1，逐样本重复处理音频。
 - YAML 中的 validation、epochs、部分 include_scenarios 没有形成可靠训练合同。
 - 没有 scheduler、grad clip、训练期 validation 或 best-checkpoint。
 - checkpoint 只保存 adapter/processor，不能恢复 optimizer、scheduler、RNG 和 global step。
-- 当前 base/LoRA 推理实现重复，整批结束才写结果，不适合可恢复的 5k 评测。
-- 当前 evaluator 不能计算 32-cell 指标，并会把空 reference 静默计为 0 error。
-- 仓库没有项目级依赖锁、tests/ 或 CI。
+- 历史 base/LoRA 推理实现重复，整批结束才写结果；新统一入口已替代它们。
+- 历史 evaluator 不能计算 32-cell 指标且会错误处理空 reference；新 evaluator 已修正。
+- 当前仍没有 CI；本地已增加高风险合同的 stdlib 自动测试。
 
 当前 checkout 的 v3-v5 adapter 目录缺少 `adapter_model.safetensors`，不能从仓库直接复载
 历史最佳模型；历史 prediction 和 metrics 仍可用于审计。
 
 ## 快速主线 Checklist
 
-- [ ] `scripts/prepare_public_robust_manifests.py`
-- [ ] `configs/data/public_robust_200k.yaml`
-- [ ] `requirements-colab.txt`
-- [ ] `train/train_qwen3_asr_lora_official.py`
-- [ ] `configs/train/qwen3_asr_public_200k_broad_lora.yaml`
+- [x] `scripts/prepare_public_robust_manifests.py`
+- [x] `configs/data/public_robust_200k.yaml`
+- [x] `requirements-colab.txt`
+- [x] `train/train_qwen3_asr_a2s.py`
+- [x] `configs/train/qwen3_asr_public_200k_a2s.yaml`
 - [ ] `notebooks/12_fast_finetune_colab.ipynb`
-- [ ] 统一可恢复推理入口
-- [ ] 32-cell evaluator 与最小自动测试
-- [ ] 200k/10k/5k manifest 和 validation report
-- [ ] BF16 base prediction
-- [ ] 10+2 resume smoke
-- [ ] 100-step canary
-- [ ] 50%/100% validation
+- [x] 统一可恢复推理入口
+- [x] 32-cell evaluator 与最小自动测试
+- [ ] metadata-only probe、200k/10k/5k manifest 和 validation report
+- [ ] BF16 base validation/test prediction 与 30k curriculum scoring
+- [ ] 10+2 resume 和 A2S target-switch smoke
+- [ ] Phase I/II/III 512 canary
+- [ ] 最终 10k validation
 - [ ] 固定 test 与 release adapter
 - [ ] Mega-ASR 发布模型同 evaluator 外部 baseline
 
@@ -84,22 +89,29 @@ baseline overall 为 0.483925，明显优于 v3，因此不能把量化损失误
 - Train：160k robust + 20k English clean + 20k Chinese clean。
 - Validation：8k robust + 1k English clean + 1k Chinese clean。
 - Precision：BF16；正式效果不使用 4bit base 口径。
-- LoRA：343 target，r=8，alpha=16，dropout=0.05，learning rate 1e-6。
-- 训练：1 epoch，effective batch 64，100-step canary，正式候选只保留 50%/100%。
-- GPT-5.5 teacher、router、RL、自建增强和全量 difficulty scoring 不进入第一轮。
-- 5%-10% 改善时进入压缩 A2S，不直接扩 645,925，不做 target/LR sweep。
+- LoRA：单 adapter 预注入 343 target；Phase I 只启用 upper-4 audio+projection 27 个，
+  Phase II 只启用 decoder 196 个，Phase III 启用全部 343 个。
+- 训练：30k x 2 epoch -> 200k x 1 epoch -> 200k x 1 epoch，effective batch 128。
+- 学习率：Phase I/II `1e-6`；Phase III audio/projection `5e-7`、decoder `1e-6`。
+- Direct SFT 前置实验、teacher、router、RL、自建增强和全量 difficulty scoring 不进入第一轮。
 
 ## 下一步
 
-只实现步骤 1 的公开数据 CLI 和配置。数据 full validation 通过后再实现 Trainer；在
-10+2 smoke 和 golden batch 通过前，不启动 200k 正式训练。
+补齐 pinned Hub 数据到四份 candidate JSONL/本地音频的可恢复 staging，并把它接入唯一 Notebook
+12。随后依次运行 metadata probe、128-row manifest smoke、Trainer 10+2 GPU resume、golden
+batch 和 target-switch smoke；全部通过后才启动正式 A2S。
 
 ## 未完成风险
 
 - 公开 robust 数据体积约 197.5 GB，错误的 Drive 小文件方案会比训练更慢。
-- Voices-in-the-Wild-2M 缺少显式 language/speaker 字段，需要稳定派生与 source-group split。
-- Joint broad LoRA 可能造成 clean regression 或 hallucination，必须依赖 20% clean 与 canary。
-- 一次直接 SFT 不能保证达到 Mega-ASR 的 A2S+RL 完整效果。
+- 当前数据 CLI 从已物化 candidate JSONL 开始，Hub 下载/落盘 staging 与 Notebook 12 仍未实现；
+  在补齐前还不是从干净 Colab 可一键执行的闭环。
+- Voices-in-the-Wild-2M 缺少显式 language/speaker 字段，需要先用 metadata probe 验证语言
+  规则、`name` source identity 与配额。
+- A2S decoder/joint 阶段可能造成 clean regression 或 hallucination，必须依赖 20% clean 与
+  阶段 canary。
+- 200k A2S 仍小于论文训练规模且不含 RL，目标是快速接近 Mega-ASR-Base，不承诺完整
+  Mega-ASR 绝对指标。
 
 未生成 BF16 正式结果、release adapter 和 Mega-ASR 同 evaluator 外部 baseline 前，阶段不得
 标记完成，也不得声称达到 Mega-ASR。

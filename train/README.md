@@ -1,105 +1,40 @@
 # train
 
-> 当前 `train_qwen3_asr_lora.py` 是历史 batch-size-1 trainer，只用于复现 smoke/v1-v5，
-> 不得扩建为 200k 正式入口。新主线计划使用 `train_qwen3_asr_lora_official.py`，详见
-> `docs/qwen3-asr/02_development_plan.md`。
+当前正式训练入口是待实现的 `train_qwen3_asr_a2s.py`。它基于 Qwen3-ASR 官方
+`finetuning/qwen3_asr_sft.py` 的 prompt、collator 和 Trainer 结构，只增加项目 JSONL、
+PEFT 与阶段切换；完整合同见 `docs/qwen3-asr/02_development_plan.md`。
 
-存放 Qwen3-ASR LoRA/QLoRA 训练代码。
-
-目标：
-
-- 加载 Qwen3-ASR。
-- 探测 LoRA target。
-- 构建音频 + 文本 collator。
-- 保存可复现 adapter checkpoint。
-
-当前阶段：
-
-- `inspect_qwen3_asr_modules.py`：训练前探测脚本，在 Colab GPU runtime 中加载官方 `qwen-asr` 模型，导出 `named_modules()` 快照和 LoRA target 候选。
-- `check_unsloth_qwen3_asr.py`：Unsloth 兼容性检查脚本。当前结果为不兼容，后续训练回退 Transformers + PEFT。
-- `lora_targets.py`：候选 target 分组规则，只做辅助分析，不直接代表最终训练配置。
-- `peft_targets.py`：PEFT LoRA target 匹配与校验工具，使用配置中的 include/exclude regex 精确限制训练模块。
-- `train_qwen3_asr_lora.py`：Transformers + PEFT LoRA 训练入口，当前仍是 batch size 1 的自定义训练循环；已完成 20 step smoke training，可用于第一版 MVP 600 step bootstrap 训练。
-
-推荐命令：
+## 唯一正式流程
 
 ```bash
-python train/inspect_qwen3_asr_modules.py \
-  --model-id Qwen/Qwen3-ASR-1.7B \
-  --output-dir outputs/lora_probe/qwen3_asr_1_7b \
-  --dtype float16 \
-  --device-map cuda:0
+python train/train_qwen3_asr_a2s.py \
+  --config configs/train/qwen3_asr_public_200k_a2s.yaml \
+  --smoke-steps 10
+
+python train/train_qwen3_asr_a2s.py \
+  --config configs/train/qwen3_asr_public_200k_a2s.yaml \
+  --resume auto
 ```
 
-Unsloth 兼容性检查记录：
+Runner 在同一个 adapter 中依次执行：
 
-```bash
-python train/check_unsloth_qwen3_asr.py \
-  --config configs/train/qwen3_asr_lora_mvp.yaml \
-  --output-json outputs/lora_probe/qwen3_asr_1_7b/unsloth_compatibility.json
-```
+1. Phase I：30k base-error curriculum，2 epoch，只训练 upper-4 audio + projection。
+2. Phase II：200k，1 epoch，只训练 decoder。
+3. Phase III：200k，1 epoch，联合训练全部 343 个 LoRA target。
 
-当前 `unsloth_compatibility.json` 中 `compatible=false`，原因是 Unsloth 走标准 Transformers AutoConfig 路径时无法识别 `model_type=qwen3_asr`。训练 backend 已回退为 Transformers + PEFT。
+固定使用 BF16、LoRA r=8/alpha=16/dropout=0.05、effective batch 128。阶段间只切换
+`requires_grad` 和 optimizer groups，不合并或叠加多个 adapter。
 
-Transformers + PEFT smoke training：
+## Target 合同
 
-```bash
-python train/train_qwen3_asr_lora.py \
-  --config configs/train/qwen3_asr_lora_mvp.yaml \
-  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
-  --audio-root . \
-  --output-dir checkpoints/qwen3-asr-1.7b-lora \
-  --model-id Qwen/Qwen3-ASR-1.7B \
-  --dtype float16 \
-  --device-map cuda:0 \
-  --quantization 4bit \
-  --language English \
-  --limit 20 \
-  --max-steps 20
-```
+`inspect_qwen3_asr_modules.py` 和受控 module snapshot 用于从 pinned Qwen revision 独立生成
+target map。正式 runner 必须按分组校验 343 个 Linear target，排除 `lm_head`、embedding、
+norm 和 Conv2d；revision、分组数量或 target-map hash 不符时立即终止。
 
-smoke 阶段默认关闭 gradient checkpointing。第一版 target 只训练 audio tower，
-在 Qwen3-ASR 自定义音频架构上先避免 k-bit PEFT prepare 默认启用 checkpointing，
-等训练闭环跑通后再单独评估是否需要打开。
+## 历史入口
 
-Colab 环境注意：
+`train_qwen3_asr_lora.py`、旧 YAML、`lora_targets.py` 和 `peft_targets.py` 只用于复现
+batch-size-1 v1-v5 smoke/MVP。它们不支持正式 Trainer validation、scheduler、完整 resume
+或新 decoder target 合同，不得扩建或用于 200k 训练。
 
-- 如果环境中预装了 `torchao==0.10.0`，当前 PEFT 会在 LoRA 注入阶段报错，要求 `torchao>0.16.0`。
-- 本 smoke training 不依赖 torchao，推荐在 Colab 安装依赖后执行 `%pip uninstall -y torchao`。
-- 训练脚本会提前检测旧版 torchao，并给出明确修复提示。
-- 4bit 加载时，文本侧参数可能是 float16/量化权重，但 audio tower 的前置卷积仍可能保留 float32 bias。训练脚本会让 `input_features` 跟随 `audio_tower.conv2d1` 的 dtype，避免卷积输入和 bias dtype 不一致。
-
-训练脚本会把 PEFT LoRA 包到 `wrapper.model.thinker`，而不是最外层
-`wrapper.model`。最外层 `Qwen3ASRForConditionalGeneration` 主要提供
-`generate()`，没有训练用的 `forward(input_ids=..., labels=...)`；`thinker`
-才负责音频特征融合、文本 decoder 和 loss 计算。
-
-主要输出：
-
-- `target_modules.json`：本次实际命中的 LoRA target，必须为 99 个 audio tower 模块。
-- `training_config.json`：训练配置、manifest、随机种子和命令行覆盖项。
-- `loss_log.jsonl`：每一步 loss、场景和样本 id。
-- `summary.json`：smoke training 摘要。
-- `adapter/`：PEFT adapter。
-
-LoRA MVP 第一版训练：
-
-```bash
-python train/train_qwen3_asr_lora.py \
-  --config configs/train/qwen3_asr_lora_mvp_train.yaml \
-  --manifest data/jsonl/lora_mvp_train.local.jsonl \
-  --audio-root . \
-  --output-dir checkpoints/qwen3-asr-1.7b-lora-mvp \
-  --model-id Qwen/Qwen3-ASR-1.7B \
-  --dtype float16 \
-  --device-map cuda:0 \
-  --quantization 4bit \
-  --language English \
-  --max-steps 600
-```
-
-正式 MVP 训练前应先运行 `scripts/create_lora_mvp_dataset.py` 生成独立 train/val。固定 MVP 150 只作为 held-out test，不作为正式训练输入。
-
-禁止：
-
-- 不复用 Mega-ASR 的 Qwen3-ASR 训练入口。
+禁止复用 Mega-ASR 的 wrapper、训练入口、target regex 或 adapter merge 逻辑。

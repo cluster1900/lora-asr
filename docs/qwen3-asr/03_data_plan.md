@@ -1,6 +1,6 @@
 # 数据方案
 
-最后更新：2026-07-12
+最后更新：2026-07-22
 
 ## 背景
 
@@ -13,16 +13,17 @@
 
 - 200k train。
 - 10k validation。
+- 30k A2S curriculum。
 - Voices-in-the-Wild-Bench 5k fixed test。
 - LibriSpeech test-clean 与 AISHELL-1 test clean regression。
 
-不做全量 base WER difficulty scoring，不调用 GPT-5.5 teacher，不生成新的合成退化。
+不做 200k 全量 difficulty scoring，不调用 teacher，不生成新的合成退化。
 
 ## 数据源
 
 | 用途 | 数据源 | 当前事实 |
 | --- | --- | --- |
-| robust train/val | `zhifeixie/Voices-in-the-Wild-2M` | 645,925 条，54 split，约 197.5 GB，Apache-2.0，非 gated |
+| robust train/val | `zhifeixie/Voices-in-the-Wild-2M` | 645,925 条，54 split（7 atomic + 47 compound），约 197.5 GB，Apache-2.0，非 gated |
 | English clean | LibriSpeech | train-clean 子集用于 retention，test-clean 用于固定 test |
 | Chinese clean | AISHELL-1 | train/dev 用于 retention/validation，test 用于固定 test |
 | robust test | `zhifeixie/Voices-in-the-Wild-Bench` | 5,000 条，中英、real/synthetic、8 类 condition |
@@ -30,23 +31,44 @@
 每个数据源必须 pin revision 或发布版本，并把 license、revision 和 source split 写入
 manifest 与统计文件。
 
+## Metadata-only probe
+
+下载音频前先读取 Hub revision、dataset card、split 和 parquet metadata，只验证字段、行数、
+语言推断、source identity 候选、配额和磁盘预算。当前 Hub card 同时写有“54 compound
+scenarios”和“54 subset categories”，但 pinned revision 实际发布为 54 个 split；实现以实际
+split 列表为准，不把 54 当作 compound 数量。
+
+Probe 必须验证 `answer`、`name`、`index`、`file_name`、`subset`，并抽样确认同一 clean
+source 的跨退化 `name` 关系。结论写入 report；source identity 无法稳定派生时不开始 full
+物化。
+
 ## 固定配比
 
 ### Train 200k
 
-- Robust 160k：7 个 atomic condition 各 16k，共 112k；compound 48k。
+- Robust 160k：7 个 atomic split 各 16k，共 112k；47 个 compound split 共 48k。
 - English clean 20k。
 - Chinese clean 20k。
 - Robust 各 condition 内 English/Chinese 尽量 1:1，任何配额不足必须硬失败。
 
+Compound quota 固定为：split 名排序后每个先取 1,021 条，剩余 13 条依次分配给前 13 个
+split。不得使用按遍历速度动态填满的方式，否则重跑可能改变场景分布。
+
 ### Validation 10k
 
-- Robust 8k：按 language 与 8 类 condition 分层。
+- Robust 8k：atomic 5.6k（每个 800）+ compound 2.4k（按 47 split 确定性分配）。
 - English clean 1k。
 - Chinese clean 1k。
 
-Validation 必须包含 clean，因为 50%/100% checkpoint 要在不触碰固定 test 的前提下检查
-clean regression。
+Validation 必须包含 clean，用于每阶段 canary 和最终 checkpoint 的 clean regression；不再
+用于 50%/100% checkpoint sweep。
+
+### A2S Curriculum 30k
+
+从 robust train 按固定 seed、language 和 split 分层产生候选，使用 BF16 base prediction
+与 gold label 计算 `base_error_rate`。English 为 WER，Chinese 为 CER。持续读取固定候选
+顺序直到得到 30k 个 `<0.70` 样本，并生成 `<0.30`、`<0.50`、`<0.70` 三个累计视图。
+Curriculum 是 train 的派生视图，不是新 split，不允许混入 validation/test。
 
 ## Canonical JSONL
 
@@ -84,14 +106,16 @@ clean regression。
 - `audio_origin` 在 Bench 中使用 `real|synthetic`，clean test 使用 `clean`。
 - `source_dataset` 取代历史 `source` 字段。
 - `audio` 是相对 `data_root` 的路径；训练前解析后的真实文件必须存在。
+- Curriculum 行额外包含 `base_prediction`、`base_error_rate` 和 `base_metric`；其他 train
+  行不需要这些字段。
 
 Voices-in-the-Wild-2M 当前没有显式 language 字段。语言由 gold transcript 使用固定规则
-推断；中英文混合或无法确定的样本写入 rejects。不得调用 teacher 猜语言或改写 transcript。
+推断；中英文混合或无法确定的样本写入 rejects，不调用外部模型猜语言或改写 transcript。
 
 ## Source 分组与防泄漏
 
 同一 clean source 的多个退化版本必须先归并成一个 `source_utterance_id`，再按 group 切分。
-派生优先级：公开 source id/name -> 可解析的 file/audio path -> 数据集稳定 index 规则。
+派生优先级：公开 `name` -> 可解析的 file/audio path -> 数据集稳定 index 规则。
 若无法可靠派生，样本不得进入正式 train/validation。
 
 硬门槛：
@@ -133,6 +157,7 @@ Voices-in-the-Wild-2M 当前没有显式 language 字段。语言由 gold transc
 
 - `data/jsonl/public_robust_200k_train.jsonl`
 - `data/jsonl/public_robust_10k_val.jsonl`
+- `data/jsonl/public_robust_30k_curriculum.jsonl`
 - `data/jsonl/vitw_bench_5k_test.jsonl`
 - `data/jsonl/public_clean_tests.jsonl`
 - `data/jsonl/public_robust_200k_stats.json`
@@ -142,11 +167,13 @@ Voices-in-the-Wild-2M 当前没有显式 language 字段。语言由 gold transc
 
 ## 测试
 
-- `--help` 和 `--smoke` 可执行。
+- `--help`、`--probe` 和 `--smoke` 可执行。
+- Metadata probe 不下载音频即可验证 revision、54 split、字段、配额和磁盘预算。
 - Smoke 覆盖 en/zh、clean、7 atomic、compound 和 Bench real/synthetic。
 - Full 行数精确等于 200k/10k/5k。
 - 所有 resolved audio 路径存在且可解码。
 - 固定 seed/revision/config 重跑得到相同 sample id 顺序和 manifest hash。
+- Curriculum 精确 30k、全部来自 train、`base_error_rate < 0.70`，三个累计视图单调包含。
 - 硬 overlap 全部为 0，transcript overlap 单独报告。
 - 每个 language/condition 抽听至少 10 条并记录结果。
 

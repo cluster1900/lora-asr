@@ -1,6 +1,7 @@
 # LoRA Probe Outputs
 
-本目录用于保存 `05A LoRA 训练前探测` 的受控输出。
+本目录保存 Qwen3-ASR pinned revision 的受控模块探测输出。历史候选不直接定义新 A2S target；
+正式 runner 必须重新验证 revision、模块类型、分组数量和 target-map hash。
 
 推荐输出目录：
 
@@ -16,4 +17,5 @@ outputs/lora_probe/qwen3_asr_1_7b/
 - `lora_target_candidates.md`
 - `unsloth_compatibility.json`
 
-这些文件用于复核 Qwen3-ASR 当前版本的真实模块结构、第一版 LoRA target 候选，以及 Unsloth 是否可作为训练 backend。
+这些文件用于复核 Qwen3-ASR 真实模块结构。Unsloth 兼容性和旧 target 候选只属于历史记录；
+当前 backend 固定为官方 Transformers Trainer + PEFT。

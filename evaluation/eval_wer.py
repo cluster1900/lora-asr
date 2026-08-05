@@ -1,25 +1,8 @@
 #!/usr/bin/env python3
-"""计算 ASR prediction JSONL 的 WER/CER 指标。
+"""Score ASR JSONL with English WER, Chinese CER, and robust-ASR cells.
 
-输入文件通常来自 `inference/qwen3_asr_base_infer.py`，每行至少包含：
-`answer` 和 `prediction`。脚本会保留原始字段，并追加 metric、wer、
-num_edits、ref_len 等评测字段。
-
-这个脚本承担 baseline、LoRA 和 router 三类推理结果的统一评测入口。
-设计上故意不依赖 jiwer、evaluate 等外部库，原因是 Colab Free 环境经常
-因为依赖解析升级 numpy、requests、click 等包，进而影响模型推理环境。
-因此这里使用标准库实现最小可复现版本：
-
-1. 读取 prediction JSONL。
-2. 对 reference/prediction 做轻量归一化。
-3. 根据语言自动选择 WER 或 CER。
-4. 计算每条样本的编辑距离和错误率。
-5. 聚合 overall 与 scenario-level 指标。
-6. 保存带明细的 scored JSONL、指标 JSON 和按场景聚合 CSV。
-
-注意：字段名仍然统一使用 `wer`，即使中文样本实际计算的是 CER。
-原因是后续训练/评测表格会固定读取这一列；真实指标类型由同一行的
-`metric` 字段标识。
+The evaluator uses only Python's standard library. English word edits and
+Chinese character edits are never presented as one combined WER/CER value.
 """
 
 from __future__ import annotations
@@ -29,262 +12,461 @@ import csv
 import json
 import re
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
+from statistics import fmean
+from typing import Any, Iterable, Sequence
+
+
+BENCH_SCENARIOS = (
+    "distortion",
+    "dropout",
+    "echo",
+    "far_field",
+    "mixed",
+    "noise",
+    "obstructed",
+    "recording",
+)
+LANGUAGE_ALIASES = {
+    "en": "en",
+    "eng": "en",
+    "english": "en",
+    "zh": "zh",
+    "cn": "zh",
+    "zho": "zh",
+    "cmn": "zh",
+    "chinese": "zh",
+    "mandarin": "zh",
+}
+ORIGIN_ALIASES = {
+    "real": "real",
+    "recorded": "real",
+    "natural": "real",
+    "synthetic": "synthetic",
+    "synth": "synthetic",
+    "syn": "synthetic",
+    "generated": "synthetic",
+}
+FAILURE_FIELDS = (
+    "inference_errors",
+    "empty_outputs",
+    "repeat_like_outputs",
+    "too_long_outputs",
+    "hallucination_like_outputs",
+)
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    """读取 JSONL 文件并跳过空行。
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON at {path}:{line_number}: {exc.msg}") from exc
+            if not isinstance(value, dict):
+                raise ValueError(f"Expected a JSON object at {path}:{line_number}")
+            rows.append(value)
+    return rows
 
-    prediction JSONL 在批量推理中可能会被分批追加写入；跳过空行可以让
-    人工检查或手动拼接文件后依然能被评测脚本读取。
-    """
-    with path.open("r", encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
 
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    """按 JSONL 格式写出结果，并自动创建父目录。"""
+def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
+    with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def has_cjk(text: str) -> bool:
-    """判断文本中是否包含中日韩统一表意文字。
-
-    英文 ASR 通常按词计算 WER；中文没有天然空格分词，早期 MVP 先按字符
-    计算 CER，避免引入额外分词器带来的环境依赖和口径差异。
-    """
-    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
 
 
 def normalize_text(text: str, lowercase: bool, remove_punctuation: bool) -> str:
-    """做轻量文本归一化，避免标点和大小写主导 WER/CER。
-
-    这里不做激进归一化，例如数字读法、繁简转换、英文缩写展开等。
-    原因是当前阶段需要先看模型原始 ASR 能力，避免评测脚本把真实错误
-    过度“修平”。后续如果引入更复杂归一化，应在测试文档中固定口径。
-    """
-    text = str(text or "").strip()
+    value = str(text or "").strip()
     if lowercase:
-        # 英文大小写通常不是 ASR 核心错误，默认忽略。
-        text = text.lower()
+        value = value.lower()
     if remove_punctuation:
-        chars = []
-        for ch in text:
-            # Unicode P* 覆盖中英文标点，例如逗号、句号、问号、引号等。
-            # 替换为空格而不是直接删除，是为了避免英文单词被意外粘连。
-            if unicodedata.category(ch).startswith("P"):
-                chars.append(" ")
-            else:
-                chars.append(ch)
-        text = "".join(chars)
-    # 把多个空白压成一个空格，让换行、tab、连续空格不影响 WER。
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+        value = "".join(
+            " " if unicodedata.category(char).startswith("P") else char
+            for char in value
+        )
+    return re.sub(r"\s+", " ", value).strip()
 
 
-def tokenize(text: str, metric: str) -> list[str]:
-    """根据指标类型把文本切成评测 token。
-
-    - WER：按空格切词，适合英文和已分词语言。
-    - CER：去掉空格后按字符切分，适合中文 smoke/baseline 阶段。
-    """
-    if metric == "cer":
-        return [ch for ch in text.replace(" ", "")]
-    return text.split()
-
-
-def edit_distance(ref: list[str], hyp: list[str]) -> int:
-    """计算 Levenshtein edit distance。
-
-    编辑距离表示把 hypothesis 变成 reference 至少需要多少次插入、删除、
-    替换。WER/CER 的核心公式都是：
-
-    error_rate = 编辑次数 / reference token 数
-
-    这里使用动态规划的一维滚动数组实现，避免为长音频转写构建完整矩阵。
-    """
-    # prev[j] 表示上一行到 hyp 前 j 个 token 的最小编辑次数。
-    prev = list(range(len(hyp) + 1))
-    for i, ref_item in enumerate(ref, start=1):
-        # curr[0] = i，表示 hyp 为空时，需要删除 reference 的前 i 个 token。
-        curr = [i]
-        for j, hyp_item in enumerate(hyp, start=1):
-            cost = 0 if ref_item == hyp_item else 1
-            # 三个候选分别对应：删除、插入、替换/匹配。
-            curr.append(min(
-                prev[j] + 1,
-                curr[j - 1] + 1,
-                prev[j - 1] + cost,
-            ))
-        prev = curr
-    return prev[-1]
+def canonical_language(item: dict[str, Any], reference: str, prediction: str) -> str:
+    declared = str(item.get("language") or "").strip().lower()
+    if declared in LANGUAGE_ALIASES:
+        return LANGUAGE_ALIASES[declared]
+    return "zh" if has_cjk(reference + prediction) else "en"
 
 
 def metric_for_item(item: dict[str, Any], ref: str, pred: str) -> str:
-    """为单条样本选择 WER 或 CER。
+    return "cer" if canonical_language(item, ref, pred) == "zh" else "wer"
 
-    优先使用 manifest 中的 `language` 字段，因为这是数据侧明确声明；
-    如果 language 缺失，再根据 reference/prediction 是否包含 CJK 字符兜底。
-    """
-    language = str(item.get("language") or "").lower()
-    if language in {"zh", "cn", "chinese", "yue", "ja", "jp", "japanese"}:
-        return "cer"
-    if has_cjk(ref + pred):
-        return "cer"
-    return "wer"
+
+def tokenize(text: str, metric: str) -> list[str]:
+    if metric == "cer":
+        return list(text.replace(" ", ""))
+    return text.split()
+
+
+def edit_distance(reference: Sequence[str], hypothesis: Sequence[str]) -> int:
+    previous = list(range(len(hypothesis) + 1))
+    for row_index, ref_token in enumerate(reference, start=1):
+        current = [row_index]
+        for column_index, hyp_token in enumerate(hypothesis, start=1):
+            substitution = previous[column_index - 1] + int(ref_token != hyp_token)
+            current.append(min(
+                previous[column_index] + 1,
+                current[column_index - 1] + 1,
+                substitution,
+            ))
+        previous = current
+    return previous[-1]
+
+
+def has_repetition(tokens: Sequence[str]) -> bool:
+    if not tokens:
+        return False
+    run = 1
+    for index in range(1, len(tokens)):
+        run = run + 1 if tokens[index] == tokens[index - 1] else 1
+        if run >= 3:
+            return True
+    if len(tokens) < 4:
+        return False
+    return any(count >= 2 for count in Counter(zip(tokens, tokens[1:])).values())
+
+
+def source_origin(item: dict[str, Any]) -> str:
+    value = str(item.get("audio_origin") or item.get("source_type") or "unknown")
+    return ORIGIN_ALIASES.get(value.strip().lower(), value.strip().lower() or "unknown")
+
+
+def scenario_name(item: dict[str, Any]) -> str:
+    return str(item.get("scenario") or item.get("condition") or "unknown").strip() or "unknown"
+
+
+def row_identity(item: dict[str, Any], fallback: int | None = None) -> str:
+    for field in ("sample_id", "id", "utterance_id", "inference_key"):
+        if item.get(field) is not None and str(item[field]).strip():
+            return f"{field}:{item[field]}"
+    return f"index:{fallback}" if fallback is not None else "unknown"
 
 
 def score_item(
     item: dict[str, Any],
-    lowercase: bool,
-    remove_punctuation: bool,
+    lowercase: bool = True,
+    remove_punctuation: bool = True,
+    item_index: int | None = None,
 ) -> dict[str, Any]:
-    """计算单条样本指标，并把评测字段追加到原始样本上。
+    reference_raw = str(item.get("answer") or item.get("text") or "")
+    prediction_raw = str(item.get("prediction") or "")
+    reference_normalized = normalize_text(reference_raw, lowercase, remove_punctuation)
+    prediction_normalized = normalize_text(prediction_raw, lowercase, remove_punctuation)
+    if not reference_normalized:
+        raise ValueError(f"Empty reference for {row_identity(item, item_index)}")
 
-    输入样本来自推理输出，通常包含 audio、answer、prediction、scenario。
-    输出样本会保留所有原始字段，便于后续错误分析时追溯音频、场景、模型
-    输出和失败原因。
-    """
-    # `answer` 是本项目标准字段；`text` 是兼容少量外部数据或临时 manifest。
-    ref_raw = str(item.get("answer") or item.get("text") or "")
-    pred_raw = str(item.get("prediction") or "")
-    metric = metric_for_item(item, ref_raw, pred_raw)
+    language = canonical_language(item, reference_raw, prediction_raw)
+    metric = "cer" if language == "zh" else "wer"
+    reference_tokens = tokenize(reference_normalized, metric)
+    inference_error = bool(str(item.get("error") or "").strip())
+    # A row marked failed is scored as an empty hypothesis even if a partial
+    # string was emitted, so failures can never look like zero-error samples.
+    scored_prediction = "" if inference_error else prediction_normalized
+    prediction_tokens = tokenize(scored_prediction, metric)
+    edits = edit_distance(reference_tokens, prediction_tokens)
+    reference_length = len(reference_tokens)
+    error_rate = edits / reference_length
+    empty_output = not prediction_normalized
+    repeated = has_repetition(tokenize(prediction_normalized, metric))
+    length_ratio = len(prediction_tokens) / reference_length
+    too_long = length_ratio > 1.5
+    hallucination_like = (
+        not inference_error
+        and not empty_output
+        and error_rate >= 0.8
+        and (too_long or repeated or edits >= max(3, reference_length // 2))
+    )
+    origin = source_origin(item)
 
-    # 归一化后的文本会写回 scored JSONL，方便人工排查指标为什么这样算。
-    ref_norm = normalize_text(ref_raw, lowercase, remove_punctuation)
-    pred_norm = normalize_text(pred_raw, lowercase, remove_punctuation)
-    ref_tokens = tokenize(ref_norm, metric)
-    pred_tokens = tokenize(pred_norm, metric)
-    edits = edit_distance(ref_tokens, pred_tokens)
-    ref_len = len(ref_tokens)
-
-    # reference 为空通常代表数据有问题。这里给 0.0，避免 smoke test 中断；
-    # 后续数据质量检查应单独拦截空 reference。
-    score = edits / ref_len if ref_len else 0.0
+    tags: list[str] = []
+    if inference_error:
+        tags.append("inference_error")
+    if empty_output:
+        tags.append("empty_output")
+    if repeated:
+        tags.append("repeat_like")
+    if too_long:
+        tags.append("too_long")
+    if hallucination_like:
+        tags.append("hallucination_like")
 
     out = dict(item)
-    out["reference_normalized"] = ref_norm
-    out["prediction_normalized"] = pred_norm
-    out["metric"] = metric
-    out["wer"] = round(float(score), 6)
-    out["num_edits"] = int(edits)
-    out["ref_len"] = int(ref_len)
-    # empty_output 是鲁棒 ASR 的关键风险信号：噪声/远场音频容易触发空转写。
-    out["empty_output"] = len(pred_norm) == 0
-    # length_ratio 用于快速发现重复输出或过短输出：
-    # 远大于 1 可能是重复/幻觉，接近 0 可能是漏识别或空输出。
-    out["length_ratio"] = round((len(pred_tokens) / ref_len), 6) if ref_len else 0.0
+    out.update({
+        "reference_raw": reference_raw,
+        "prediction_raw": prediction_raw,
+        "reference_normalized": reference_normalized,
+        "prediction_normalized": prediction_normalized,
+        "scored_prediction_normalized": scored_prediction,
+        "language": language,
+        "metric": metric,
+        "error_rate": round(error_rate, 6),
+        # Legacy consumers read `wer`; use `metric` to distinguish Chinese CER.
+        "wer": round(error_rate, 6),
+        "num_edits": edits,
+        "ref_len": reference_length,
+        "length_ratio": round(length_ratio, 6),
+        "inference_error": inference_error,
+        "empty_output": empty_output,
+        "repeat_like": repeated,
+        "too_long": too_long,
+        "hallucination_like": hallucination_like,
+        "failure_tags": tags,
+        "audio_origin": origin,
+        "source_type": origin,
+        "scenario": scenario_name(item),
+    })
     return out
 
 
-def aggregate(rows: list[dict[str, Any]], group_key: str | None = None) -> list[dict[str, Any]]:
-    """聚合整体或按字段分组的错误率。
-
-    group_key 为空时输出 overall；传入 `scenario` 时输出 clean/noise/reverb
-    等场景级指标。错误率采用“总编辑次数 / 总 reference 长度”，而不是
-    每条样本错误率的简单平均，这样长短样本混合时口径更稳定。
-    """
-    buckets: dict[str, dict[str, Any]] = defaultdict(lambda: {
+def _new_bucket() -> dict[str, Any]:
+    return {
         "samples": 0,
         "num_edits": 0,
         "ref_len": 0,
+        "metrics": set(),
+        "inference_errors": 0,
         "empty_outputs": 0,
-    })
-    for row in rows:
-        # 缺失 scenario 等分组字段时归入 ALL，避免丢样本。
-        key = str(row.get(group_key, "ALL")) if group_key else "ALL"
-        bucket = buckets[key]
-        bucket["samples"] += 1
-        bucket["num_edits"] += int(row.get("num_edits", 0))
-        bucket["ref_len"] += int(row.get("ref_len", 0))
-        bucket["empty_outputs"] += int(bool(row.get("empty_output", False)))
+        "repeat_like_outputs": 0,
+        "too_long_outputs": 0,
+        "hallucination_like_outputs": 0,
+    }
 
-    result = []
-    for key, bucket in sorted(buckets.items()):
-        ref_len = bucket["ref_len"]
-        error_rate = bucket["num_edits"] / ref_len if ref_len else 0.0
-        samples = bucket["samples"]
-        result.append({
-            "group": key,
-            "samples": samples,
-            "num_edits": bucket["num_edits"],
-            "ref_len": ref_len,
-            "error_rate": round(float(error_rate), 6),
-            "empty_output_rate": round(bucket["empty_outputs"] / samples, 6) if samples else 0.0,
-        })
+
+def _add_to_bucket(bucket: dict[str, Any], row: dict[str, Any]) -> None:
+    bucket["samples"] += 1
+    bucket["num_edits"] += int(row["num_edits"])
+    bucket["ref_len"] += int(row["ref_len"])
+    bucket["metrics"].add(str(row["metric"]))
+    bucket["inference_errors"] += int(bool(row["inference_error"]))
+    bucket["empty_outputs"] += int(bool(row["empty_output"]))
+    bucket["repeat_like_outputs"] += int(bool(row["repeat_like"]))
+    bucket["too_long_outputs"] += int(bool(row["too_long"]))
+    bucket["hallucination_like_outputs"] += int(bool(row["hallucination_like"]))
+
+
+def _finish_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    samples = int(bucket["samples"])
+    metrics = sorted(bucket["metrics"])
+    mixed = len(metrics) != 1
+    result: dict[str, Any] = {
+        "samples": samples,
+        "metric": metrics[0] if len(metrics) == 1 else "mixed",
+        "num_edits": None if mixed else int(bucket["num_edits"]),
+        "ref_len": None if mixed else int(bucket["ref_len"]),
+        "error_rate": None,
+    }
+    if not mixed and bucket["ref_len"]:
+        result["error_rate"] = round(bucket["num_edits"] / bucket["ref_len"], 6)
+    for field in FAILURE_FIELDS:
+        result[field] = int(bucket[field])
+        result[field.replace("outputs", "output_rate").replace("errors", "error_rate")] = (
+            round(bucket[field] / samples, 6) if samples else 0.0
+        )
     return result
 
 
-def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    """写出按场景聚合的 CSV，方便 Colab 直接预览或复制到表格。"""
+def aggregate(
+    rows: Sequence[dict[str, Any]],
+    group_keys: str | Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    if isinstance(group_keys, str):
+        keys = [group_keys]
+    else:
+        keys = list(group_keys or [])
+    buckets: dict[tuple[str, ...], dict[str, Any]] = defaultdict(_new_bucket)
+    for row in rows:
+        group = tuple(str(row.get(key, "unknown")) for key in keys) if keys else ("ALL",)
+        _add_to_bucket(buckets[group], row)
+
+    result: list[dict[str, Any]] = []
+    for group, bucket in sorted(buckets.items()):
+        item = _finish_bucket(bucket)
+        for index, key in enumerate(keys):
+            item[key] = group[index]
+        item["group"] = "|".join(group)
+        result.append(item)
+    return result
+
+
+def overall_summary(rows: Sequence[dict[str, Any]], by_language: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        empty = _finish_bucket(_new_bucket())
+        empty["group"] = "ALL"
+        empty["language_macro_error_rate"] = None
+        return empty
+    bucket = _new_bucket()
+    for row in rows:
+        _add_to_bucket(bucket, row)
+    result = _finish_bucket(bucket)
+    result["group"] = "ALL"
+    rates = [float(row["error_rate"]) for row in by_language if row["error_rate"] is not None]
+    result["language_macro_error_rate"] = round(fmean(rates), 6) if rates else None
+    return result
+
+
+def bench_cells(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    eligible = [
+        row for row in rows
+        if row.get("language") in {"en", "zh"}
+        and row.get("source_type") in {"real", "synthetic"}
+    ]
+    cells = aggregate(eligible, ["language", "source_type", "scenario"])
+    for cell in cells:
+        cell["audio_origin"] = cell["source_type"]
+    expected = {
+        (language, origin, scenario)
+        for language in ("en", "zh")
+        for origin in ("real", "synthetic")
+        for scenario in BENCH_SCENARIOS
+    }
+    observed = {
+        (str(row["language"]), str(row["source_type"]), str(row["scenario"]))
+        for row in cells
+    }
+    missing = sorted("|".join(cell) for cell in expected - observed)
+    unexpected = sorted("|".join(cell) for cell in observed - expected)
+    rates = [float(row["error_rate"]) for row in cells if row["error_rate"] is not None]
+
+    def macro_breakdown(field: str, values: Sequence[str], expected_count: int) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for value in values:
+            selected = [row for row in cells if row[field] == value]
+            selected_rates = [
+                float(row["error_rate"])
+                for row in selected
+                if row["error_rate"] is not None
+            ]
+            result.append({
+                field: value,
+                "observed_cells": len(selected),
+                "expected_cells": expected_count,
+                "complete": len(selected) == expected_count,
+                "macro_error_rate": (
+                    round(fmean(selected_rates), 6) if selected_rates else None
+                ),
+            })
+        return result
+
+    summary = {
+        "expected_cells": 32,
+        "observed_expected_cells": len(observed & expected),
+        "observed_cells": len(observed),
+        "complete": observed == expected,
+        "macro_error_rate": round(fmean(rates), 6) if rates else None,
+        "missing_cells": missing,
+        "unexpected_cells": unexpected,
+        "by_source_type": macro_breakdown("source_type", ("real", "synthetic"), 16),
+        "by_language": macro_breakdown("language", ("en", "zh"), 16),
+    }
+    return cells, summary
+
+
+def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["group", "samples", "num_edits", "ref_len", "error_rate", "empty_output_rate"]
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+    preferred = [
+        "group", "language", "source_type", "audio_origin", "scenario", "condition_group",
+        "metric", "samples", "num_edits", "ref_len", "error_rate",
+        "inference_error_rate", "empty_output_rate", "repeat_like_output_rate",
+        "too_long_output_rate", "hallucination_like_output_rate",
+    ]
+    fields = {field for row in rows for field in row}
+    fieldnames = [field for field in preferred if field in fields]
+    fieldnames.extend(sorted(fields - set(fieldnames)))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
 
-def parse_args() -> argparse.Namespace:
-    """解析命令行参数。
-
-    输出拆成三个文件：
-    - scored JSONL：每条样本的明细，适合错误分析。
-    - metrics JSON：overall 与 scenario 汇总，适合实验记录。
-    - scenario CSV：表格化场景指标，适合 Colab 展示和人工对比。
-    """
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--predictions-jsonl", required=True)
     parser.add_argument("--scored-jsonl", required=True)
     parser.add_argument("--metrics-json", required=True)
     parser.add_argument("--metrics-by-scenario-csv", required=True)
+    parser.add_argument("--metrics-by-cell-csv", default=None)
+    parser.add_argument("--metrics-by-language-csv", default=None)
     parser.add_argument("--no-lowercase", action="store_true")
     parser.add_argument("--keep-punctuation", action="store_true")
-    return parser.parse_args()
+    return parser
 
 
-def main() -> None:
-    """命令行入口：读取预测、逐条评分、聚合指标、写出结果。"""
-    args = parse_args()
-    rows = read_jsonl(Path(args.predictions_jsonl).expanduser())
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return build_parser().parse_args(argv)
 
-    # 每条样本独立评分。即使某条 prediction 为空，也会进入 scored 文件；
-    # 推理阶段的错误字段会原样保留，便于定位模型加载、音频读取或生成失败。
+
+def evaluate(rows: Sequence[dict[str, Any]], lowercase: bool, remove_punctuation: bool) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     scored = [
         score_item(
             row,
-            lowercase=not args.no_lowercase,
-            remove_punctuation=not args.keep_punctuation,
+            lowercase=lowercase,
+            remove_punctuation=remove_punctuation,
+            item_index=index,
         )
-        for row in rows
+        for index, row in enumerate(rows)
     ]
-
-    # 空输入文件不直接报错，方便流水线先跑通目录和文件写入逻辑。
-    overall = aggregate(scored)[0] if scored else {
-        "group": "ALL",
-        "samples": 0,
-        "num_edits": 0,
-        "ref_len": 0,
-        "error_rate": 0.0,
-        "empty_output_rate": 0.0,
+    by_language = aggregate(scored, ["language"])
+    languages = {str(row["language"]) for row in scored}
+    # Preserve the historical scenario shape for one-language runs. Mixed runs
+    # include language in each group so word and character edits stay separate.
+    scenario_keys = ["scenario"] if len(languages) <= 1 else ["language", "scenario"]
+    by_scenario = aggregate(scored, scenario_keys)
+    cells, cell_macro = bench_cells(scored)
+    metrics = {
+        "overall": overall_summary(scored, by_language),
+        "by_language": by_language,
+        "by_scenario": by_scenario,
+        "by_audio_origin": aggregate(
+            scored,
+            ["audio_origin"] if len(languages) <= 1 else ["language", "audio_origin"],
+        ),
+        "by_condition_group": aggregate(
+            scored,
+            ["condition_group"] if len(languages) <= 1 else ["language", "condition_group"],
+        ),
+        "by_cell": cells,
+        "cell_macro": cell_macro,
     }
-    by_scenario = aggregate(scored, "scenario")
+    return scored, metrics
 
-    # 三类输出同时保存：明细、机器可读汇总、表格汇总。
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    rows = read_jsonl(Path(args.predictions_jsonl).expanduser())
+    scored, metrics = evaluate(
+        rows,
+        lowercase=not args.no_lowercase,
+        remove_punctuation=not args.keep_punctuation,
+    )
+
     write_jsonl(Path(args.scored_jsonl).expanduser(), scored)
-    Path(args.metrics_json).expanduser().parent.mkdir(parents=True, exist_ok=True)
-    Path(args.metrics_json).expanduser().write_text(
-        json.dumps({"overall": overall, "by_scenario": by_scenario}, ensure_ascii=False, indent=2) + "\n",
+    metrics_path = Path(args.metrics_json).expanduser()
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text(
+        json.dumps(metrics, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    write_csv(Path(args.metrics_by_scenario_csv).expanduser(), by_scenario)
-
-    print(json.dumps({"overall": overall}, ensure_ascii=False, indent=2))
+    write_csv(Path(args.metrics_by_scenario_csv).expanduser(), metrics["by_scenario"])
+    if args.metrics_by_cell_csv:
+        write_csv(Path(args.metrics_by_cell_csv).expanduser(), metrics["by_cell"])
+    if args.metrics_by_language_csv:
+        write_csv(Path(args.metrics_by_language_csv).expanduser(), metrics["by_language"])
+    print(json.dumps({"overall": metrics["overall"], "cell_macro": metrics["cell_macro"]}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

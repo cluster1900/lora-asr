@@ -1,74 +1,20 @@
 # inference
 
-> 当前 base/LoRA 两个脚本保留历史复现。新主线将合并为一个可选 adapter、增量写入并
-> 支持 resume 的统一入口，避免 5k 评测中断后丢失全部结果。
-
-存放新工程的推理入口。
-
-目标模式：
-
-- `base`：Qwen3-ASR 原始模型。
-- `lora`：Qwen3-ASR + 鲁棒 ASR LoRA。
-- `router`：根据音频质量自动选择 base 或 LoRA。
-
-禁止：
-
-- 不复用 Mega-ASR 的 Qwen3-ASR 推理 wrapper。
-
-## 当前脚本
-
-- `qwen3_asr_base_infer.py`：读取 JSONL manifest，使用 Qwen3-ASR base 模型生成 ASR prediction JSONL。
-- `qwen3_asr_lora_infer.py`：读取 JSONL manifest，加载 Qwen3-ASR base 和 PEFT adapter，生成 LoRA always-on ASR prediction JSONL。
-
-## 示例
+当前正式入口是待实现的 `qwen3_asr_infer.py`，统一支持 BF16 base 和可选单 LoRA adapter：
 
 ```bash
-python inference/qwen3_asr_base_infer.py \
-  --manifest data/jsonl/baseline_smoke.local.jsonl \
-  --output-jsonl outputs/baseline/predictions.jsonl \
+python inference/qwen3_asr_infer.py \
+  --manifest data/jsonl/public_robust_test.jsonl \
+  --output-jsonl outputs/eval/base.predictions.jsonl \
   --model-id Qwen/Qwen3-ASR-1.7B \
-  --dtype float16 \
-  --device-map cuda:0 \
-  --quantization none \
-  --max-inference-batch-size 1 \
-  --language English \
-  --limit 2
+  --model-revision 7278e1e70fe206f11671096ffdd38061171dd6e5 \
+  --dtype bfloat16 \
+  --resume
 ```
 
-该命令需要稳定网络下载模型权重，并建议在 GPU runtime 上运行。
+增加 `--adapter-dir` 即切换为 LoRA；不提供 router 模式。入口必须逐条增量写入、支持 resume，
+并将失败样本写为带 `error` 的 JSONL 行，不能让单条失败中断整批。语言按 manifest 每条
+`language` 选择，禁止用全局 English 默认值覆盖中文。
 
-Base recheck 如果要和 LoRA 4bit 评测对齐，应显式使用 `--quantization 4bit`：
-
-```bash
-python inference/qwen3_asr_base_infer.py \
-  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
-  --output-jsonl outputs/base_recheck_mvp_150/predictions.qwen3_asr_base_recheck.mvp_150.jsonl \
-  --audio-root . \
-  --model-id Qwen/Qwen3-ASR-1.7B \
-  --dtype float16 \
-  --device-map cuda:0 \
-  --quantization 4bit \
-  --max-inference-batch-size 1 \
-  --max-new-tokens 128 \
-  --language English
-```
-
-LoRA always-on 推理示例：
-
-```bash
-python inference/qwen3_asr_lora_infer.py \
-  --manifest data/jsonl/baseline_mvp_150.local.jsonl \
-  --output-jsonl outputs/lora_mvp_eval/predictions.qwen3_asr_lora_mvp.mvp_150.jsonl \
-  --adapter-dir checkpoints/qwen3-asr-1.7b-lora-mvp/adapter \
-  --audio-root . \
-  --model-id Qwen/Qwen3-ASR-1.7B \
-  --dtype float16 \
-  --device-map cuda:0 \
-  --quantization 4bit \
-  --max-inference-batch-size 1 \
-  --max-new-tokens 128 \
-  --language English
-```
-
-LoRA 推理输出保持 baseline prediction JSONL 兼容格式，并额外写入 `mode=lora`
-和 `adapter_dir`。后续统一交给 `evaluation/eval_wer.py` 计算指标。
+`qwen3_asr_base_infer.py` 与 `qwen3_asr_lora_infer.py` 只保留历史 4bit MVP 复现，不用于
+BF16 正式比较。不得复用 Mega-ASR 私有推理 wrapper。

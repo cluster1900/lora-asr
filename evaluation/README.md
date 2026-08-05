@@ -1,38 +1,21 @@
 # evaluation
 
-> 当前 evaluator 只支持历史 overall/scenario 指标。正式 200k 主线需要补充空 reference
-> 硬失败、English WER、Chinese CER 和 32-cell 聚合后才能用于验收。
-
-存放新工程的评测脚本。
-
-目标：
-
-- 统一计算 WER/CER。
-- 输出 overall 和 scenario-level 指标。
-- 保存失败样本，支持错误分析。
-
-禁止：
-
-- 不依赖 `references/mega-asr-upstream/` 中的评测代码作为运行时模块。
-
-## 当前脚本
-
-- `eval_wer.py`：读取 prediction JSONL，计算 WER/CER、overall 指标和 scenario-level 指标。
-- `analyze_errors.py`：读取 scored JSONL，输出 worst cases、错误标签和 scenario/bucket 分析。
-
-## 示例
+正式 evaluator 是 `eval_wer.py`。它必须保存 raw/normalized reference 与 prediction，并按
+语言使用不同主指标：English WER、Chinese CER。
 
 ```bash
 python evaluation/eval_wer.py \
-  --predictions-jsonl outputs/baseline/predictions.jsonl \
-  --scored-jsonl outputs/baseline/predictions.scored.jsonl \
-  --metrics-json outputs/baseline/metrics.json \
-  --metrics-by-scenario-csv outputs/baseline/metrics_by_scenario.csv
+  --predictions-jsonl outputs/eval/lora.predictions.jsonl \
+  --scored-jsonl outputs/eval/lora.scored.jsonl \
+  --metrics-json outputs/eval/lora.metrics.json \
+  --metrics-by-scenario-csv outputs/eval/lora.by_scenario.csv \
+  --metrics-by-cell-csv outputs/eval/lora.by_cell.csv
 ```
 
-```bash
-python evaluation/analyze_errors.py \
-  --scored-jsonl outputs/baseline/predictions.scored.jsonl \
-  --output-dir outputs/baseline/error_analysis \
-  --top-k 30
-```
+验收输出包括 overall、language、scenario 和 32-cell（language x real/synthetic x 8 scenario）
+聚合，以及空输出、重复输出、幻觉式输出和 inference error 比例。空 reference 必须硬失败；
+失败 prediction 进入失败率，不能按零误差处理。
+
+正式比较只使用同一 BF16 base、同一 evaluator 和同一 manifest。`analyze_errors.py` 用于生成
+worst cases 和失败标签。禁止把 English word edit 与 Chinese character edit 混成一个未标注
+的 overall WER，也不依赖 `references/mega-asr-upstream/`。

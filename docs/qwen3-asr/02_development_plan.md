@@ -1,41 +1,35 @@
-# 快速微调执行合同
+# 快速 A2S 微调执行合同
 
-最后更新：2026-07-12
+最后更新：2026-07-22
 
 ## 目标
 
-用最少的新代码和最少的训练分支，得到一版可加载、可评测、可继续迭代的
-`Qwen/Qwen3-ASR-1.7B` 鲁棒 ASR LoRA。
+用一条可恢复、无实验树的训练链路，得到可加载、可评测、可发布的
+`Qwen/Qwen3-ASR-1.7B` 鲁棒 ASR LoRA，并尽量用最少训练成本接近 Mega-ASR-Base 的
+A2S-SFT 收益。
 
-本文件是当前唯一执行合同。其他文档说明背景、数据、Colab、测试和风险，但不重复定义
-另一套步骤或超参数。
+本文件是当前唯一执行合同。其他文档解释数据、Colab、测试和风险，不得定义第二套步骤。
 
-## 当前事实
+## 当前事实与设计修正
 
-- 历史 baseline、推理、WER/CER、错误分析和 LoRA v1-v5 已跑通。
-- 历史最优 v3 只相对同口径 4bit base 在 noise+reverb 上改善 6.71%，不能证明相对
-  BF16 base 的真实净收益。
-- 历史正式 train 只有 120 条独立 TTS source；v6A 只是这些 source 的重复增强。
-- 当前工作区没有可复载的 v3-v5 adapter 权重，历史实验只能作为方法和指标记录。
-- 下面的新主线尚未实现，当前完成度为 0/3。
-
-## 为什么不能承诺一次训练复现 Mega-ASR
-
-Mega-ASR 的公开消融表明，直接 SFT、三阶段 A2S-SFT 和完整 RL 的收益不是同一量级：
-直接 SFT 约带来 7% 相对改善，A2S-SFT 约 14%-15%，完整系统约 18%-19%。因此本项目
-第一轮只验证“公开大规模数据 + joint broad LoRA”是否能得到明确净收益，不能预先声称
-一次 200k SFT 足以达到 Mega-ASR 完整效果。
+- 历史 baseline、推理、WER/CER、错误分析和 LoRA v1-v5 已跑通，但只证明旧通路可运行。
+- 新主线的数据 CLI、A2S runner、统一推理和 32-cell evaluator 均未实现，当前为 0/3。
+- Mega-ASR Table 5 中 direct SFT 约改善 7%，A2S-SFT 约改善 14%-15%，完整系统约
+  18%-19%。因此“先跑 200k direct SFT，失败后再 A2S”会重复一次全量训练，现已删除。
+- GPT-5.5 不支持音频输入，且训练数据已有 gold transcript；teacher 不进入设计或依赖。
+- 论文正文、附录和公开脚本的学习率存在冲突。首轮以更完整的 Appendix E.1 Table 22
+  及公开 `1e-6` 命令为依据，并把假设写入 resolved config。
 
 ## 范围
 
-第一轮只实现三项：
+第一轮只交付三项：
 
-1. 一个公开数据准备入口。
-2. 一个基于 Qwen 官方 finetuning 结构的 PEFT Trainer 入口。
-3. 一次 200k joint broad LoRA 训练及 BF16 公平评测。
+1. 一份固定公开数据池、30k base-error curriculum 和固定 test。
+2. 一个基于 Qwen 官方 Trainer 结构的单-adapter A2S runner。
+3. 一次三阶段 A2S 训练、BF16 公平评测和 release adapter。
 
-第一轮明确不实现：teacher、router、RL、自建增强工厂、全量 difficulty scoring、target
-sweep、50k/100k 过渡模型和更多 notebook 分支。
+第一轮不实现 direct SFT 对照训练、teacher、router、RL、自建增强、全量 645,925 样本
+difficulty scoring、target/LR/rank sweep 或 50k/100k 过渡模型。
 
 ## 步骤 1：固定公开数据
 
@@ -43,71 +37,84 @@ sweep、50k/100k 过渡模型和更多 notebook 分支。
 
 - `scripts/prepare_public_robust_manifests.py`
 - `configs/data/public_robust_200k.yaml`
+- `inference/qwen3_asr_infer.py`
+- `evaluation/eval_wer.py`
 
-### 固定规模
+### 1A. Metadata-only probe
+
+下载音频前先读取 dataset revision、split、字段、行数和 parquet shard metadata，验证：
+
+- Hub revision 固定为配置值，实际仍有 54 个 split：7 atomic + 47 compound。
+- `answer`、`name`、`index`、`file_name`、`subset` 可用，`name` 可作为 source identity
+  的第一候选。
+- 每个 split 的 en/zh 推断后配额足够，混合或语言不明样本单独统计。
+- 预计下载、解包和 `/content` staging 空间不超过运行环境预算。
+
+Probe 只产 report，不训练模型；失败时在下载几十 GB 前终止。
+
+### 1B. 固定规模
 
 | split | 数量 | 组成 |
 | --- | ---: | --- |
 | train | 200,000 | 160k robust + 20k English clean + 20k Chinese clean |
 | validation | 10,000 | 8k robust + 1k English clean + 1k Chinese clean |
+| curriculum | 30,000 | 从 robust train 派生，base error <70% |
 | robust test | 5,000 | Voices-in-the-Wild-Bench 全量 |
 | clean test | 官方固定集 | LibriSpeech test-clean + AISHELL-1 test |
 
-Robust 数据来自 pinned revision 的 `zhifeixie/Voices-in-the-Wild-2M`。公开数据当前 card
-为 645,925 条、约 197.5 GB，不把名称中的 2M 当作实际可下载条数。Bench 使用
-`zhifeixie/Voices-in-the-Wild-Bench` 的 pinned revision。
+Robust train 中 7 个 atomic split 各 16k，共 112k。47 个 compound split 合计 48k：
+按 split 名排序，每个先取 `floor(48000/47)=1021`，余下 13 条依次给前 13 个 split。
+Validation 沿用 70% atomic / 30% compound 比例。每个 split 内 en/zh 尽量各半；不足时
+probe 硬失败，不静默改比例。
 
-160k robust 固定按语言与条件分层：7 个 atomic condition 各 16k，共 112k；compound
-48k。每组 English/Chinese 尽量各半，配额不足必须失败并输出统计，不能静默改比例。
+### 1C. Curriculum
 
-### 数据 I/O
+从 robust train 以固定 seed 按 language/scenario 分层产生候选，使用统一 BF16 base 推理和
+同一 evaluator 写入：
 
-- Google Drive 只保存 manifest、下载状态、较大的 parquet/tar shard、checkpoint 和结果。
-- 训练前把所需 shard 或音频 staging 到 `/content` 本地 SSD，禁止从 Drive 逐条读取
-  200k 小音频文件。
-- 正式 manifest 的 `audio` 使用相对路径，由配置中的 `data_root` 解析；训练前所有解析后
-  路径必须存在。
-- 首轮只保留 0.5-30 秒音频，超限样本写入 rejects，以控制训练时长和显存波动。
+```json
+{"base_prediction":"...","base_error_rate":0.42,"base_metric":"wer"}
+```
 
-### 数据硬门槛
+English 使用 WER，Chinese 使用 CER；统一字段名为 `base_error_rate`。按候选顺序补足
+30k 个 `<0.70` 样本，并生成三个累计视图 `<0.30`、`<0.50`、`<0.70`。不对 200k 全量
+做 difficulty scoring。
 
-- 统一 schema 见 `03_data_plan.md`，训练和评测都使用 `answer`、`language=en|zh` 和
-  `source_dataset`。
-- 同一 source utterance 的不同退化版本必须落在同一 split。
-- train、validation、Bench 之间的 source id、name、source path、文件名、音频哈希和
-  benchmark id 硬 overlap 必须为 0；归一化 transcript overlap 只报告并抽查。
-- 语言、场景、时长、音频解码或 transcript 校验失败的行写入 rejects，不中断整批。
-- 配置、seed、dataset revision、选中 row index、license 和 manifest SHA256 全部保存。
+### 1D. I/O 与质量门
+
+- Drive 只保存大 parquet/tar shard、manifest、状态、checkpoint 和结果。
+- 训练所需音频在 `/content` 本地 SSD 物化；禁止从 Drive 逐条读取 200k 小文件。
+- Manifest 的 `audio` 使用相对 `data_root` 路径，正式训练前必须存在且可解码。
+- 只保留 0.5-30 秒音频；失败行写 rejects，不中断整批。
+- 同一 source utterance 的退化版本必须同 split；train/validation/test 的 source、name、
+  path、benchmark id 和 audio hash 硬 overlap 为 0。
+- 保存 seed、row index、dataset/model revision、license、config 和 manifest SHA256。
 
 ### 完成条件
 
-生成 train/validation/test JSONL、stats、validation report 和 rejects；smoke 与 full
-检查均通过，并完成每个语言/条件至少 10 条人工抽听。
+Metadata probe、128-row smoke、200k/10k/5k full manifest、30k curriculum、stats、rejects、
+validation report 和人工抽听全部通过。Trainer 可在 full 下载期间用 128-row fixture 并行开发，
+但正式训练必须等待 full data gate。
 
-## 步骤 2：官方 Trainer 薄适配
+## 步骤 2：单-adapter A2S Runner
 
 ### 文件
 
-- `train/train_qwen3_asr_lora_official.py`
-- `configs/train/qwen3_asr_public_200k_broad_lora.yaml`
+- `train/train_qwen3_asr_a2s.py`
+- `configs/train/qwen3_asr_public_200k_a2s.yaml`
+- `requirements-colab.txt`
 - `notebooks/12_fast_finetune_colab.ipynb`
 
-### 实现边界
+### 官方边界
 
 复用 Qwen 官方 `finetuning/qwen3_asr_sft.py` 的 prompt、collator、label mask、Trainer、
-scheduler、validation 和 resume 结构，只增加：
+scheduler、validation 和 resume 结构，只新增本项目 JSONL/YAML、PEFT、A2S scope 切换、
+分组学习率、duration bucketing、generation canary 与 release 元数据。不得扩建历史逐样本
+trainer，不得复制 Mega-ASR wrapper、训练入口、target regex 或 adapter merge 逻辑。
 
-- 项目 JSONL/schema 与 YAML 配置适配。
-- PEFT LoRA 注入、分组校验和 adapter-only 保存/加载。
-- duration bucketing、最大时长过滤、gradient checkpointing。
-- validation generation、WER/CER 和失败率回调。
-- 完整 resolved config、依赖版本、模型 revision 和 Trainer state 保存。
+### Target 合同
 
-不得继续扩建历史逐样本 trainer；不得复制 Mega-ASR wrapper、训练入口或 target 规则。
-
-### Broad LoRA
-
-从本项目 pinned Qwen 模型快照独立生成 343 个线性 target：
+从 pinned Qwen revision 的运行时模块快照独立生成 target map：
 
 | 分组 | 数量 |
 | --- | ---: |
@@ -116,126 +123,110 @@ scheduler、validation 和 resume 结构，只增加：
 | speech projection | 3 |
 | decoder attention | 112 |
 | decoder MLP | 84 |
-| 合计 | 343 |
+| 全部 | 343 |
 
-`r=8` 时预计 12,365,824 个 LoRA 参数。排除 `lm_head`、embedding、norm 和三个真实
-Conv2d frontend。名称为 `conv_out` 的模块是 Linear，可以包含。若 pinned revision 下
-各分组数量不匹配，训练直接失败并重新审计，不能只校验总数。
+Phase I 只启用 upper-4 audio attention 16、upper-4 audio MLP 8 和 projection 3，共 27；
+Phase II 只启用 decoder 196；Phase III 启用全部 343。排除 `lm_head`、embedding、norm 和
+三个 Conv2d frontend；`conv_out` 按运行时类型为 Linear 时纳入 projection。
 
-### 固定首轮配置
+所有 target 一次注入同一 adapter，阶段间只切换 `requires_grad` 和 optimizer parameter
+groups。这样最终只发布一个 adapter，不需要自定义多 adapter loader。若分组数量、类型、
+revision 或 target-map hash 不匹配，训练立即失败。
 
-| 参数 | 值 |
-| --- | --- |
-| precision | BF16 |
-| LoRA | r=8, alpha=16, dropout=0.05 |
-| learning rate | 1e-6，全局统一 |
-| epoch | 1 |
-| effective batch | 64 |
-| reference micro batch | A100 40GB 单卡 4，grad accumulation 16 |
-| scheduler | linear，warmup ratio 0.03 |
-| regularization | weight decay 0.01，max grad norm 1.0 |
-| memory | FlashAttention 2 + gradient checkpointing |
-| input | 0.5-30 秒，按 duration bucketing |
+### 固定 A2S 配置
 
-若 GPU 不同，只允许调整 micro batch 和 gradient accumulation，并保持 effective batch 64；
-实际 resolved 值必须写入 checkpoint。首轮不做学习率、rank 或 target sweep。
+| 参数 | Phase I | Phase II | Phase III |
+| --- | --- | --- | --- |
+| role | acoustic curriculum | semantic adaptation | joint alignment |
+| data | 30k cumulative error views | full 200k | full 200k |
+| epoch | 2 | 1 | 1 |
+| active target | upper-4 audio + projection | decoder | all 343 |
+| audio/projection LR | `1e-6` | frozen | `5e-7` |
+| decoder LR | frozen | `1e-6` | `1e-6` |
+| warmup ratio | 0.05 | 0.05 | 0.03 |
 
-### Smoke 与 golden batch
+共同配置：BF16、r=8、alpha=16、dropout=0.05、effective batch 128、weight decay 0.01、
+max grad norm 1.0、linear scheduler、0.5-30 秒、duration bucketing、FlashAttention 2 和
+gradient checkpointing。单卡 A100 40GB 参考 micro batch 4、grad accumulation 32；其他
+GPU 只调整 micro batch/accumulation，保持 effective batch 128。
 
-1. Golden batch 检查 prompt 文本、target 文本、audio mask、有效 label 数和 padding mask。
-2. 128 条平衡样本训练 10 optimizer step，保存后 resume 2 optimizer step。
-3. checkpoint 必须包含 adapter、optimizer、scheduler、RNG、Trainer state 和 resolved
-   config。
-4. 新进程加载 base+adapter，对中英 clean/degraded 各 1 条完成推理。
+论文未披露 Phase I 两个 epoch 在三个累计 WER 门槛间的精确 step 分配。实现不得伪造
+论文结论；首轮采用配置显式记录的等 optimizer-step 三段，并在 resolved config 标注为本项目
+假设。三段总 sample exposure 仍等于 30k x 2。
+
+### Smoke 与恢复
+
+1. Golden batch 验证 prompt、audio mask、label mask、target 文本和 padding。
+2. Target-switch smoke 验证每阶段只有允许的 LoRA 参数收到梯度。
+3. 128 条平衡 fixture 训练 10 optimizer step，保存后由新进程 resume 到 12。
+4. Checkpoint 包含 adapter、optimizer、scheduler、RNG、Trainer state、pipeline state、
+   resolved config、target map/hash 和 manifest hash。
+5. 新进程 base+adapter 对 en/zh clean/degraded 各 1 条推理成功。
 
 ### 完成条件
 
-Golden batch、10+2 resume、新进程加载和四条推理全部通过；BF16 base validation 评测
-已启动或完成。
+Golden batch、target switch、10+2 resume、新进程加载和四条推理全部通过；BF16 base
+validation 与 curriculum scoring 已完成。
 
-## 步骤 3：一次正式训练
+## 步骤 3：一次正式 A2S
 
 ### 单次执行序列
 
 ```text
-正式 200k run
-  -> optimizer step 100: 固定 512 条 validation canary
-  -> 50%: 完整 10k validation
-  -> 100%: 完整 10k validation
-  -> validation 选出唯一候选
-  -> Bench 5k + 双语 clean test 只评测一次
+Phase I: 30k curriculum x 2 epoch
+  -> fixed 512 validation canary
+Phase II: 200k decoder x 1 epoch
+  -> fixed 512 validation canary
+Phase III: 200k joint x 1 epoch
+  -> fixed 512 validation canary
+  -> full 10k validation once
+  -> Bench 5k + clean tests once
+  -> release reload
 ```
 
-100-step canary 属于同一次正式 run，不是额外过渡模型。它只用于发现 label、prompt、
-学习率、输出崩溃和数据吞吐问题；通过后继续训练，canary checkpoint 不作为发布候选。
+阶段 canary 检查 loss、梯度、输出有效率、empty/repeat/too-long 和 robust macro；相对 BF16
+base 的 robust macro 不得恶化超过 15%，输出有效率至少 95%，任一失败率增幅不得超过
+5 个百分点。失败立即停止并保存诊断。阶段 canary 不用于挑 checkpoint。
 
-Canary 通过标准：loss 全部有限；输出有效率至少 95%；empty、repeat-like、too-long 任一
-指标相对 BF16 base 增幅不超过 5 个百分点；robust macro error 不得相对 base 恶化超过
-15%。失败立即停止，不继续消耗剩余训练时间。
+正式只对 Phase III 运行一次完整 10k validation。若 Phase III 不通过而 Phase II canary
+正常，才懒评估 Phase II full validation；不预先跑 50%/100% checkpoint sweep。
 
-### 候选选择
-
-50% 和 100% 只在 10k validation 上比较：
-
-- English robust WER。
-- Chinese robust CER。
-- robust condition macro error。
-- English/Chinese clean validation regression。
-- empty、repeat-like、too-long、hallucination-like。
-
-选择 robust macro 更低且 clean/failure 门槛通过的唯一 checkpoint。Bench 5k、
-LibriSpeech test-clean 和 AISHELL-1 test 只对该 checkpoint 跑一次。
-
-### 第一轮产品验收
+### 产品验收
 
 - English robust WER、Chinese robust CER、Bench 32-cell macro error 均相对 BF16 base
   改善至少 10%。
-- Bench 至少 24/32 个 `language x real/synthetic x condition` cell 改善，real 与
-  synthetic macro 都改善。
+- Bench 至少 24/32 cell 改善，real 与 synthetic macro 都改善。
 - LibriSpeech test-clean WER 增幅不超过 `max(0.3 个百分点, base WER 的 5%)`。
 - AISHELL-1 test CER 增幅不超过 `max(0.5 个百分点, base CER 的 5%)`。
 - empty、repeat-like、too-long、hallucination-like 增幅均不超过 1 个百分点。
-- adapter、processor、release manifest、批量推理命令和新进程加载验证齐全。
+- Adapter、processor、release manifest、批量推理命令和新进程加载齐全。
 
-### Mega-ASR 目标口径
+### 结果分支
 
-“达到 Mega-ASR”必须另行运行其发布模型作为外部 baseline，并用本项目同一 normalization
-与 Bench evaluator 计算。只有当本项目 Bench macro error 不高于 Mega-ASR 的 1.10 倍，
-且 clean 门槛通过时，才允许标记为接近其微调效果。论文表格只能作为参考，不能代替
-本项目复测。
-
-## 唯一结果分支
-
-| 第一轮结果 | 下一动作 |
+| 结果 | 动作 |
 | --- | --- |
-| 三项 robust 指标均改善 >=10%，clean 通过 | 立即交付 200k adapter；先比较 Mega-ASR gap，不自动扩全量 |
-| 主要指标改善 5%-10%，clean 通过 | 在同一 200k 上做一次压缩 A2S；不做 target/LR sweep |
-| 任一语言或 macro 改善 <5% | 停止训练，检查数据、prompt、labels、Trainer 和评测 |
-| robust 明显改善但 clean 失败 | clean 比例只允许提高一次并重跑；仍失败才考虑 router |
+| 三项 robust 均 >=10%，clean/failure 通过 | 发布 adapter，测 Mega-ASR 同 evaluator gap，停止训练 |
+| 三项 robust 均 >=10%，但 clean/failure 未通过 | 停止并按失败类型记录 clean retention 需求，不自动重跑 |
+| 三项 robust 均 >=5% 但未全部到 10% | 保存实验 adapter并停止；先做错误归因，不自动加训练 |
+| 任一 robust <5% | 停止，检查数据、base-error 桶、target、prompt、labels 和 evaluator |
 
-压缩 A2S 不是第一轮依赖。只有触发时才实现：对固定 30k 样本做 base WER 分桶，然后在
-一个编排任务内依次训练 upper audio+projection、decoder、joint 三个 scope。RL、teacher
-和全量 645,925 继续后置。
+RL 只有在产品门已通过、且剩余差距明确集中于高错误率空输出/幻觉/漏句时才单独立项。
+Router 只有在 robust 通过但 clean 冲突无法由 retention 解决时才单独立项。两者都不是本轮
+验收依赖。
 
-## GPT-5.5 Teacher 边界
+## Mega-ASR 口径
 
-当前数据已有 gold transcript，第一轮不调用 teacher。未来只有未标注真实音频或标签冲突
-才使用：
+200k A2S 比论文数据规模小且不含 RL，不能预先承诺复现完整 Mega-ASR。只有运行其发布
+模型，并使用相同 manifest、decode、normalization 和 evaluator 后，才比较：本项目 Bench
+macro error 不高于 Mega-ASR 的 1.10 倍且 clean 门槛通过，才允许写“接近 Mega-ASR”。
 
-```text
-TEACHER_API_KEY
-TEACHER_BASE_URL
-TEACHER_MODEL=gpt-5.5
-```
+## 交付物与影响
 
-官方 OpenAI Python SDK 支持 `gpt-5.5`、Responses API、显式 `api_key` 和 `base_url`/
-`OPENAI_BASE_URL`。但任意兼容 base URL 是否支持音频输入必须运行 capability probe，不能
-默认假设。Teacher 输出只能作为离线审校或伪标签候选，不能覆盖 gold transcript。
+- 固定数据配置、manifest、curriculum、stats、rejects 和 hash。
+- BF16 base、A2S LoRA 与 Mega-ASR 外部 baseline prediction/metrics。
+- 单一可加载 adapter、processor、Trainer/pipeline state 和 release manifest。
+- 一条 Colab A2S 入口和一条可恢复 JSONL 批量推理命令。
+- `00_progress.md` 记录实际结果、失败类型和是否需要后续独立立项。
 
-## 交付物
-
-- 固定数据配置、manifest、stats、rejects 和 hash。
-- BF16 base、LoRA 和 Mega-ASR 外部 baseline 的 prediction/metrics。
-- 可加载 adapter、processor、Trainer state 和 release manifest。
-- 一条 Colab 训练入口和一条 JSONL 批量推理命令。
-- `00_progress.md` 中记录实际结果、未解决风险和是否触发下一分支。
+旧 v1-v6 trainer/config/notebook/output 全部保留为历史证据，但不进入新 runner 的 import、
+配置或模型选择路径。
