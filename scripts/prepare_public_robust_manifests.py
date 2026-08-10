@@ -129,23 +129,27 @@ class StageWriter:
     """Append candidate rows with bounded durable-checkpoint overhead."""
 
     def __init__(self, path: Path, checkpoint_rows: int) -> None:
+        """Configure append output and the maximum unsynced row count."""
         self.path = path
         self.checkpoint_rows = max(1, int(checkpoint_rows))
         self.handle: Any = None
         self.pending = 0
 
     def __enter__(self) -> "StageWriter":
+        """Open the candidate file in append mode for resumable staging."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.handle = self.path.open("a", encoding="utf-8")
         return self
 
     def append(self, row: Mapping[str, Any]) -> None:
+        """Append one candidate row and checkpoint at the configured interval."""
         self.handle.write(json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n")
         self.pending += 1
         if self.pending >= self.checkpoint_rows:
             self.sync()
 
     def sync(self) -> None:
+        """Flush pending rows through the operating system to durable storage."""
         if self.handle is None or not self.pending:
             return
         self.handle.flush()
@@ -153,6 +157,7 @@ class StageWriter:
         self.pending = 0
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        """Persist the final partial checkpoint and close the file."""
         if self.handle is not None:
             self.sync()
             self.handle.close()
@@ -422,6 +427,7 @@ def stage_descriptor(
 
 
 def _audio_suffix(audio: Any, row: Mapping[str, Any]) -> str:
+    """Infer a short source extension, falling back to a WAV container."""
     candidates: list[Any] = []
     if isinstance(audio, Mapping):
         candidates.append(audio.get("path"))
@@ -435,6 +441,7 @@ def _audio_suffix(audio: Any, row: Mapping[str, Any]) -> str:
 
 
 def _audio_duration(path: Path) -> float:
+    """Decode audio metadata and return duration in seconds."""
     try:
         import soundfile as sf  # type: ignore[import-not-found]
     except ImportError as exc:
@@ -503,6 +510,7 @@ def materialize_stage_audio(
 
 
 def stage_bucket(row: Mapping[str, Any], source_name: str, mode: str) -> tuple[str, ...]:
+    """Map a candidate row to the quota bucket used during staging."""
     if source_name == "robust":
         role = str(row.get("selection_role") or "train") if mode == "full" else "smoke"
         return role, str(row["scenario"]), str(row["language"])
@@ -841,6 +849,7 @@ def selected_source_ids(rows: Iterable[Mapping[str, Any]]) -> set[str]:
 
 
 def _selection_settings(config: Mapping[str, Any]) -> tuple[int, float, float]:
+    """Return the shared seed and accepted duration range."""
     project = config_section(config, "project")
     selection = config_section(config, "selection")
     return (
@@ -1161,6 +1170,7 @@ def normalized_transcript(text: Any) -> str:
 
 
 def _audio_gate(path: Path, mode: str) -> str | None:
+    """Return an audio validation error or ``None`` for the requested mode."""
     if mode == "ignore":
         return None
     if not path.exists() or not path.is_file():
@@ -1471,6 +1481,7 @@ def curriculum_views(
 
 
 def _feature_names(features: Any) -> list[str]:
+    """Normalize datasets feature containers into sorted field names."""
     if features is None:
         return []
     if hasattr(features, "keys"):
@@ -1666,6 +1677,7 @@ def stream_hub_split(
 def stage_candidate_paths(
     staging: Mapping[str, Any], candidate_dir: Path
 ) -> dict[str, Path]:
+    """Resolve every required staging artifact below one candidate directory."""
     outputs = require_mapping(staging.get("outputs"), "staging.outputs")
     required = (*STAGE_SOURCE_NAMES, "rejects", "report")
     missing = [name for name in required if not outputs.get(name)]
@@ -1677,6 +1689,7 @@ def stage_candidate_paths(
 def robust_stage_targets(
     config: Mapping[str, Any], split_names: Sequence[str], mode: str
 ) -> dict[tuple[str, ...], int]:
+    """Build robust quotas by role, scenario, and language for smoke/full mode."""
     source = require_mapping(config_section(config, "sources").get("robust"), "sources.robust")
     if mode == "smoke":
         per_language = int(config_section(config, "smoke")["robust_per_language_per_split"])
@@ -1726,6 +1739,7 @@ def robust_stage_targets(
 def clean_stage_targets(
     config: Mapping[str, Any], source_name: str, mode: str
 ) -> dict[tuple[str, ...], int]:
+    """Build official-split clean retention quotas for one language source."""
     language = "en" if source_name == "english_clean" else "zh"
     if mode == "smoke":
         return {("train", language): int(config_section(config, "smoke")["clean_per_language"])}
@@ -1739,6 +1753,7 @@ def clean_stage_targets(
 def bench_stage_targets(
     config: Mapping[str, Any], split_rows: Mapping[str, int], mode: str
 ) -> dict[tuple[str, ...], int]:
+    """Build full split or smoke origin-language quotas for the Bench source."""
     if mode == "full":
         return {(str(split),): int(count) for split, count in split_rows.items()}
     per_stratum = int(config_section(config, "smoke")["bench_per_language_origin"])
@@ -1756,11 +1771,13 @@ def _source_stage_plan(
     split_rows: Mapping[str, int],
     mode: str,
 ) -> tuple[list[str], dict[tuple[str, ...], int], Callable[[str], set[tuple[str, ...]]]]:
+    """Return source splits, quotas, and the buckets active for each split."""
     if source_name == "robust":
         splits = sorted(split_rows)
         targets = robust_stage_targets(config, splits, mode)
 
         def active(split: str) -> set[tuple[str, ...]]:
+            """Select robust role/scenario/language buckets for one split."""
             return {key for key in targets if len(key) == 3 and key[1] == split}
 
         return splits, targets, active
@@ -1776,6 +1793,7 @@ def _source_stage_plan(
         language = "en" if source_name == "english_clean" else "zh"
 
         def active(split: str) -> set[tuple[str, ...]]:
+            """Select the train or validation clean bucket for one split."""
             role = "validation" if mode == "full" and split == str(source_config["validation_split"]) else "train"
             return {(role, language)}
 
@@ -1784,6 +1802,7 @@ def _source_stage_plan(
     targets = bench_stage_targets(config, split_rows, mode)
 
     def active(split: str) -> set[tuple[str, ...]]:
+        """Select one full Bench split or both languages of its origin."""
         if mode == "full":
             return {(split,)}
         origin = "real" if split.startswith("real_") else "synthetic"
@@ -1793,6 +1812,7 @@ def _source_stage_plan(
 
 
 def command_stage(args: argparse.Namespace) -> dict[str, Any]:
+    """Stream pinned Hub audio into resumable, quota-bounded candidates."""
     config = load_config(Path(args.config).expanduser())
     staging = config_section(config, "staging")
     sources = config_section(config, "sources")
@@ -1828,6 +1848,8 @@ def command_stage(args: argparse.Namespace) -> dict[str, Any]:
             raise ManifestError(f"{source_name} metadata probe failed")
 
         candidate_path = paths[source_name]
+        # Resume only from rows whose audio still exists and matches its hash;
+        # damaged rows are removed so the stream can refill their quota.
         candidate_rows, dropped = load_valid_stage_rows(candidate_path, data_root)
         resumed_rows = len(candidate_rows)
         splits, targets, active_for_split = _source_stage_plan(
@@ -1896,11 +1918,13 @@ def command_stage(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def output_directory(config: Mapping[str, Any], override: str | None) -> Path:
+    """Resolve a CLI output override or the configured manifest directory."""
     value = override or str(config_section(config, "project")["output_dir"])
     return Path(value).expanduser()
 
 
 def command_probe(args: argparse.Namespace) -> dict[str, Any]:
+    """Inspect pinned dataset schemas and capacities without downloading audio."""
     config = load_config(Path(args.config).expanduser())
     sources = config_section(config, "sources")
     names = sorted(sources) if args.source == "all" else [args.source]
@@ -1925,6 +1949,7 @@ def command_probe(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _candidate_args(parser: argparse.ArgumentParser) -> None:
+    """Attach the four required local candidate inputs to a subcommand."""
     parser.add_argument("--robust-candidates", required=True)
     parser.add_argument("--english-clean-candidates", required=True)
     parser.add_argument("--chinese-clean-candidates", required=True)
@@ -1932,6 +1957,7 @@ def _candidate_args(parser: argparse.ArgumentParser) -> None:
 
 
 def command_smoke(args: argparse.Namespace) -> dict[str, Any]:
+    """Build and validate the fixed 128-row training plus 4-row Bench smoke set."""
     config = load_config(Path(args.config).expanduser())
     robust, english, chinese, bench, rejects = load_all_candidate_inputs(config, args)
     selected = build_smoke_selection(config, robust, english, chinese, bench)
@@ -1969,6 +1995,7 @@ def command_smoke(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def command_build(args: argparse.Namespace) -> dict[str, Any]:
+    """Build canonical train, validation, canary, and Bench manifests."""
     config = load_config(Path(args.config).expanduser())
     robust, english, chinese, bench, rejects = load_all_candidate_inputs(config, args)
     selected = build_full_selection(config, robust, english, chinese, bench)
@@ -2039,6 +2066,7 @@ def command_build(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def command_validate(args: argparse.Namespace) -> dict[str, Any]:
+    """Run schema, audio, count, and leakage gates on supplied manifests."""
     config = load_config(Path(args.config).expanduser())
     manifests: dict[str, list[dict[str, Any]]] = {}
     for role in ("train", "validation", "canary", "test", "curriculum"):
@@ -2064,6 +2092,7 @@ def command_validate(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def command_curriculum(args: argparse.Namespace) -> dict[str, Any]:
+    """Join base scores and emit deterministic 30k cumulative curriculum views."""
     config = load_config(Path(args.config).expanduser())
     settings = config_section(config, "curriculum")
     seed = int(config_section(config, "project")["seed"])
@@ -2123,6 +2152,7 @@ def command_curriculum(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the probe/stage/smoke/build/validate/curriculum CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -2192,6 +2222,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Dispatch one data command and convert expected failures to exit code 2."""
     args = build_parser().parse_args(argv)
     try:
         result = args.handler(args)

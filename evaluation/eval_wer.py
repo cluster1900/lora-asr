@@ -38,6 +38,7 @@ FAILURE_FIELDS = (
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read prediction rows and report the precise malformed source line."""
     rows: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -54,6 +55,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    """Write UTF-8 JSONL while preserving Chinese transcript characters."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
@@ -61,6 +63,7 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
 
 
 def normalize_text(text: str) -> str:
+    """Lowercase text, replace Unicode punctuation, and collapse whitespace."""
     value = str(text or "").strip().lower()
     value = "".join(
         " " if unicodedata.category(char).startswith("P") else char
@@ -70,6 +73,7 @@ def normalize_text(text: str) -> str:
 
 
 def canonical_language(item: dict[str, Any]) -> str:
+    """Validate the declared language used to choose WER versus CER."""
     declared = str(item.get("language") or "").strip().lower()
     if declared not in {"en", "zh"}:
         raise ValueError(f"Invalid language for {row_identity(item)}: {declared!r}")
@@ -77,12 +81,14 @@ def canonical_language(item: dict[str, Any]) -> str:
 
 
 def tokenize(text: str, metric: str) -> list[str]:
+    """Tokenize Chinese by character for CER and English by word for WER."""
     if metric == "cer":
         return list(text.replace(" ", ""))
     return text.split()
 
 
 def edit_distance(reference: Sequence[str], hypothesis: Sequence[str]) -> int:
+    """Compute Levenshtein edits with one dynamic-programming row of memory."""
     previous = list(range(len(hypothesis) + 1))
     for row_index, ref_token in enumerate(reference, start=1):
         current = [row_index]
@@ -98,6 +104,7 @@ def edit_distance(reference: Sequence[str], hypothesis: Sequence[str]) -> int:
 
 
 def has_repetition(tokens: Sequence[str]) -> bool:
+    """Flag three-token runs or repeated adjacent token pairs."""
     if not tokens:
         return False
     run = 1
@@ -111,14 +118,17 @@ def has_repetition(tokens: Sequence[str]) -> bool:
 
 
 def source_origin(item: dict[str, Any]) -> str:
+    """Return the normalized real, synthetic, clean, or unknown origin."""
     return str(item.get("audio_origin") or "unknown").strip().lower()
 
 
 def scenario_name(item: dict[str, Any]) -> str:
+    """Return a non-empty scenario label for aggregation."""
     return str(item.get("scenario") or "unknown").strip() or "unknown"
 
 
 def row_identity(item: dict[str, Any], fallback: int | None = None) -> str:
+    """Build a readable identity for validation errors and diagnostics."""
     for field in ("sample_id", "inference_key"):
         if item.get(field) is not None and str(item[field]).strip():
             return f"{field}:{item[field]}"
@@ -129,6 +139,12 @@ def score_item(
     item: dict[str, Any],
     item_index: int | None = None,
 ) -> dict[str, Any]:
+    """Score one prediction and attach metric plus failure diagnostics.
+
+    English rows use WER and Chinese rows use CER. Inference failures are
+    deliberately scored as empty hypotheses so operational errors cannot
+    silently improve the reported recognition metric.
+    """
     reference_raw = str(item.get("answer") or "")
     prediction_raw = str(item.get("prediction") or "")
     reference_normalized = normalize_text(reference_raw)
@@ -200,6 +216,7 @@ def score_item(
 
 
 def _new_bucket() -> dict[str, Any]:
+    """Create the mutable accumulator shared by all aggregate views."""
     return {
         "samples": 0,
         "num_edits": 0,
@@ -214,6 +231,7 @@ def _new_bucket() -> dict[str, Any]:
 
 
 def _add_to_bucket(bucket: dict[str, Any], row: dict[str, Any]) -> None:
+    """Accumulate edit totals and output-failure counters from one row."""
     bucket["samples"] += 1
     bucket["num_edits"] += int(row["num_edits"])
     bucket["ref_len"] += int(row["ref_len"])
@@ -226,6 +244,7 @@ def _add_to_bucket(bucket: dict[str, Any], row: dict[str, Any]) -> None:
 
 
 def _finish_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    """Convert an accumulator into a serializable metric summary."""
     samples = int(bucket["samples"])
     metrics = sorted(bucket["metrics"])
     mixed = len(metrics) != 1
@@ -250,6 +269,11 @@ def aggregate(
     rows: Sequence[dict[str, Any]],
     group_keys: str | Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """Micro-average scored rows over zero or more grouping fields.
+
+    Mixed WER/CER buckets expose failure rates but leave ``error_rate`` null;
+    language-specific error rates remain available in ``by_language``.
+    """
     if isinstance(group_keys, str):
         keys = [group_keys]
     else:
@@ -270,6 +294,7 @@ def aggregate(
 
 
 def overall_summary(rows: Sequence[dict[str, Any]], by_language: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Build overall failure statistics and a macro over language metrics."""
     if not rows:
         empty = _finish_bucket(_new_bucket())
         empty["group"] = "ALL"
@@ -288,6 +313,7 @@ def overall_summary(rows: Sequence[dict[str, Any]], by_language: Sequence[dict[s
 def subset_language_macro(
     rows: Sequence[dict[str, Any]], condition_groups: set[str]
 ) -> float | None:
+    """Macro-average language error rates for selected condition groups."""
     selected = [row for row in rows if str(row.get("condition_group")) in condition_groups]
     rates = [
         float(item["error_rate"])
@@ -298,6 +324,7 @@ def subset_language_macro(
 
 
 def bench_cells(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Aggregate the fixed 2-language x 2-origin x 8-scenario Bench grid."""
     eligible = [
         row for row in rows
         if row.get("language") in {"en", "zh"}
@@ -321,6 +348,7 @@ def bench_cells(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], d
     rates = [float(row["error_rate"]) for row in cells if row["error_rate"] is not None]
 
     def macro_breakdown(field: str, values: Sequence[str], expected_count: int) -> list[dict[str, Any]]:
+        """Summarize Bench completeness and cell macro for one axis."""
         result: list[dict[str, Any]] = []
         for value in values:
             selected = [row for row in cells if row[field] == value]
@@ -355,6 +383,7 @@ def bench_cells(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], d
 
 
 def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
+    """Write aggregate rows with stable high-value columns first."""
     path.parent.mkdir(parents=True, exist_ok=True)
     preferred = [
         "group", "language", "source_type", "audio_origin", "scenario", "condition_group",
@@ -372,6 +401,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the dependency-free evaluator command-line interface."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--predictions-jsonl", required=True)
     parser.add_argument("--output-dir", required=True)
@@ -379,10 +409,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse evaluator arguments, accepting an explicit list for tests."""
     return build_parser().parse_args(argv)
 
 
 def evaluate(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Score rows and construct every release metric view in one pass."""
     scored = [
         score_item(row, item_index=index)
         for index, row in enumerate(rows)
@@ -417,6 +449,7 @@ def evaluate(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Evaluate one prediction JSONL and write detailed reusable artifacts."""
     args = parse_args(argv)
     rows = read_jsonl(Path(args.predictions_jsonl).expanduser())
     scored, metrics = evaluate(rows)

@@ -28,6 +28,7 @@ LANGUAGE_NAMES = {
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read a JSONL manifest and reject malformed or non-object rows."""
     rows: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -44,6 +45,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def row_key(item: dict[str, Any]) -> str:
+    """Return the stable resume key required for every manifest row."""
     value = str(item.get("sample_id") or "").strip()
     if not value:
         raise ValueError("Manifest row is missing sample_id")
@@ -51,6 +53,7 @@ def row_key(item: dict[str, Any]) -> str:
 
 
 def indexed_rows(rows: Iterable[dict[str, Any]]) -> list[tuple[int, str, dict[str, Any]]]:
+    """Attach source indexes and fail early when sample IDs are duplicated."""
     result: list[tuple[int, str, dict[str, Any]]] = []
     seen: set[str] = set()
     for index, item in enumerate(rows):
@@ -93,6 +96,7 @@ def ensure_append_boundary(path: Path) -> None:
 
 
 def resolve_audio_path(audio: str, manifest_path: Path, audio_root: str | None) -> Path:
+    """Resolve relative audio against the explicit root, manifest, then CWD."""
     path = Path(audio).expanduser()
     if path.is_absolute():
         return path
@@ -104,6 +108,7 @@ def resolve_audio_path(audio: str, manifest_path: Path, audio_root: str | None) 
 
 
 def normalize_language(language: Any) -> str:
+    """Map manifest language codes to names accepted by qwen-asr."""
     value = str(language or "").strip().lower()
     if value not in LANGUAGE_NAMES:
         raise ValueError(f"Invalid manifest language: {language!r}")
@@ -145,12 +150,14 @@ def load_model(adapter_dir: str | None) -> Any:
 
 
 def first_result(result: Any) -> Any:
+    """Unwrap the first qwen-asr result while tolerating API shape variants."""
     if isinstance(result, (list, tuple)):
         return result[0] if result else None
     return result
 
 
 def result_text(result: Any) -> str:
+    """Extract normalized transcript text from string, mapping, or object output."""
     if result is None:
         return ""
     if isinstance(result, str):
@@ -161,6 +168,7 @@ def result_text(result: Any) -> str:
 
 
 def result_language(result: Any) -> str:
+    """Extract the model-reported language without overriding the request."""
     if result is None:
         return ""
     if isinstance(result, dict):
@@ -169,6 +177,7 @@ def result_language(result: Any) -> str:
 
 
 def transcribe_one(model: Any, audio_path: Path, language: str | None) -> tuple[str, str]:
+    """Transcribe one audio file and return text plus detected language."""
     result = first_result(model.transcribe(audio=str(audio_path), language=language))
     return result_text(result), result_language(result)
 
@@ -181,6 +190,7 @@ def append_durable(handle: TextIO, row: dict[str, Any]) -> None:
 
 
 def prediction_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    """Record the immutable model and decoding contract on every output row."""
     adapter = str(Path(args.adapter_dir).expanduser().resolve()) if args.adapter_dir else None
     return {
         "mode": "adapter" if adapter else "base",
@@ -204,6 +214,12 @@ def infer_rows(
     output_handle: TextIO,
     args: argparse.Namespace,
 ) -> int:
+    """Infer pending rows, persisting success or error after every sample.
+
+    A sample-level exception is serialized into the row instead of terminating
+    the batch. This makes long Colab runs resumable and keeps failures visible
+    to the evaluator, where they are scored as full deletions.
+    """
     written = 0
     metadata = prediction_metadata(args)
     for manifest_index, key, item in pending:
@@ -244,6 +260,7 @@ def infer_rows(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the fixed base-or-adapter inference command-line interface."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, help="Input JSONL with audio/answer fields.")
     parser.add_argument("--output-jsonl", required=True, help="Incremental prediction JSONL.")
@@ -255,10 +272,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments, accepting an explicit list for tests."""
     return build_parser().parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Run resumable inference without loading the model when no rows remain."""
     args = parse_args(argv)
     manifest_path = Path(args.manifest).expanduser()
     output_path = Path(args.output_jsonl).expanduser()
@@ -266,6 +285,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.limit > 0:
         rows = rows[: args.limit]
     prepared = indexed_rows(rows)
+    # Determine pending work before model loading; a completed resumed job exits
+    # quickly and does not allocate GPU memory.
     done = completed_keys(output_path) if args.resume else set()
     pending = [entry for entry in prepared if entry[1] not in done]
 

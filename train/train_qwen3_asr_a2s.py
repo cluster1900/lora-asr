@@ -66,6 +66,7 @@ class TargetSpec:
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read a manifest into memory and reject malformed JSONL rows."""
     rows: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -82,6 +83,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
+    """Load the training YAML and require a top-level mapping."""
     try:
         import yaml
     except ImportError as exc:
@@ -95,6 +97,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 
 def atomic_write_json(path: Path, payload: Any) -> None:
+    """Durably replace a JSON state file without exposing partial content."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
@@ -110,6 +113,7 @@ def atomic_write_json(path: Path, payload: Any) -> None:
 
 
 def sha256_file(path: Path) -> str:
+    """Return a streaming SHA-256 digest for a reproducibility artifact."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
@@ -118,6 +122,7 @@ def sha256_file(path: Path) -> str:
 
 
 def canonical_module_name(name: str) -> str:
+    """Strip wrapper prefixes while retaining the stable ``thinker.*`` path."""
     marker = "thinker."
     index = name.find(marker)
     return name[index:] if index >= 0 else name
@@ -146,6 +151,7 @@ def classify_target(name: str, class_name: str) -> tuple[str, int | None] | None
 
 
 def target_specs_from_records(records: Iterable[dict[str, Any]]) -> list[TargetSpec]:
+    """Convert runtime module records into sorted allowed LoRA targets."""
     targets: list[TargetSpec] = []
     for record in records:
         module_name = str(record.get("module_name", ""))
@@ -197,6 +203,7 @@ def expected_target_specs() -> list[TargetSpec]:
 
 
 def discover_runtime_targets(model: Any) -> list[TargetSpec]:
+    """Discover the target map directly from the loaded official model."""
     records = [
         {"module_name": name, "class_name": module.__class__.__name__}
         for name, module in model.named_modules()
@@ -205,6 +212,7 @@ def discover_runtime_targets(model: Any) -> list[TargetSpec]:
 
 
 def target_group_counts(targets: Sequence[TargetSpec]) -> dict[str, int]:
+    """Count target modules by the five fixed architectural families."""
     counts = {name: 0 for name in EXPECTED_GROUPS}
     for target in targets:
         counts[target.group] = counts.get(target.group, 0) + 1
@@ -212,6 +220,7 @@ def target_group_counts(targets: Sequence[TargetSpec]) -> dict[str, int]:
 
 
 def target_map_hash(targets: Sequence[TargetSpec]) -> str:
+    """Hash the canonical target contract independently of wrapper prefixes."""
     payload = [
         {"name": item.canonical_name, "group": item.group, "layer": item.layer}
         for item in sorted(targets, key=lambda value: value.canonical_name)
@@ -225,6 +234,7 @@ def validate_target_map(
     expected_groups: dict[str, int] | None = None,
     expected_total: int = 343,
 ) -> None:
+    """Enforce exact target families, total, uniqueness, and exclusions."""
     expected = expected_groups or EXPECTED_GROUPS
     actual = target_group_counts(targets)
     if actual != expected:
@@ -248,6 +258,11 @@ def active_target_names(
     active_scope: str,
     upper_audio_layers: int = 4,
 ) -> set[str]:
+    """Select LoRA module names enabled in one A2S phase.
+
+    Phase I enables projection plus the upper audio layers, Phase II enables
+    decoder modules, and Phase III enables the complete 343-target map.
+    """
     if active_scope == "all":
         return {item.canonical_name for item in targets}
     if active_scope == "decoder":
@@ -278,6 +293,7 @@ def active_target_names(
 
 
 def target_for_parameter(parameter_name: str, targets: Sequence[TargetSpec]) -> TargetSpec | None:
+    """Map a PEFT ``lora_*`` parameter back to its canonical target module."""
     canonical_parameter = canonical_module_name(parameter_name)
     for target in targets:
         if f"{target.canonical_name}.lora_" in canonical_parameter:
@@ -291,10 +307,13 @@ def configure_phase_trainability(
     phase: dict[str, Any],
     upper_audio_layers: int,
 ) -> dict[str, Any]:
+    """Freeze all parameters, then enable only the current phase's LoRA tensors."""
     active = active_target_names(targets, str(phase["active_scope"]), upper_audio_layers)
     seen: set[str] = set()
     trainable_parameters = 0
 
+    # Reset every flag before enabling the selected adapters. This prevents
+    # trainability from leaking across phase boundaries on the reused model.
     for _, parameter in model.named_parameters():
         parameter.requires_grad = False
     for name, parameter in model.named_parameters():
@@ -397,6 +416,7 @@ def materialize_curriculum(
 
 
 def find_latest_checkpoint(output_dir: Path) -> Path | None:
+    """Return the highest numbered Trainer checkpoint in a phase directory."""
     if not output_dir.is_dir():
         return None
     candidates: list[tuple[int, Path]] = []
@@ -408,6 +428,7 @@ def find_latest_checkpoint(output_dir: Path) -> Path | None:
 
 
 def validate_config(config: dict[str, Any]) -> None:
+    """Validate the non-negotiable fast-path configuration invariants."""
     required_sections = {"model", "data", "lora", "training", "phases", "evaluation"}
     missing = sorted(required_sections - config.keys())
     if missing:
@@ -441,6 +462,7 @@ def validate_config(config: dict[str, Any]) -> None:
 
 
 def build_plan(config: dict[str, Any]) -> dict[str, Any]:
+    """Build a compact serializable summary for preflight inspection."""
     phases: list[dict[str, Any]] = []
     for phase in config["phases"]:
         phases.append(
@@ -469,6 +491,7 @@ def build_plan(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def resolve_audio_path(audio: str, manifest: Path, data_root: Path) -> Path:
+    """Resolve an audio reference using the canonical three-location order."""
     path = Path(audio).expanduser()
     if path.is_absolute():
         return path
@@ -486,6 +509,12 @@ def prepare_rows(
     seed: int,
     smoke_limit: int = 0,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Validate manifest rows and materialize the phase-specific row order.
+
+    Formal Phase I expands the selected 30k rows into ordered curriculum
+    exposure. Smoke mode keeps the first 128 rows and skips that expansion so
+    checkpoint behavior can be tested quickly.
+    """
     rows = read_jsonl(manifest)
     source_rows = len(rows)
     if smoke_limit:
@@ -557,6 +586,7 @@ def patch_outer_forward(model: Any) -> None:
         labels: Any = None,
         **kwargs: Any,
     ) -> Any:
+        """Delegate Trainer calls to the official model's thinker forward."""
         return self.thinker.forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -571,6 +601,7 @@ def patch_outer_forward(model: Any) -> None:
 
 
 def build_prefix_messages(prompt: str, audio_array: Any) -> list[dict[str, Any]]:
+    """Build the system-plus-audio message prefix expected by qwen-asr."""
     return [
         {"role": "system", "content": prompt or ""},
         {"role": "user", "content": [{"type": "audio", "audio": audio_array}]},
@@ -578,7 +609,10 @@ def build_prefix_messages(prompt: str, audio_array: Any) -> list[dict[str, Any]]
 
 
 def make_preprocess_fn(processor: Any) -> Any:
+    """Create the lightweight dataset mapper that renders prompt prefixes."""
+
     def preprocess(example: dict[str, Any]) -> dict[str, Any]:
+        """Render the prompt separately so the collator can mask its labels."""
         messages = build_prefix_messages(str(example.get("prompt", "")), None)
         prefix_text = processor.apply_chat_template(
             [messages], add_generation_prompt=True, tokenize=False
@@ -590,10 +624,13 @@ def make_preprocess_fn(processor: Any) -> Any:
 
 @dataclass
 class DataCollatorForQwen3ASR:
+    """Load audio and construct answer-only labels for Qwen3-ASR SFT."""
+
     processor: Any
     sampling_rate: int = 16000
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+        """Batch waveforms, tokenize full text, and mask prompt/padding tokens."""
         import librosa
 
         audio_paths = [str(item["audio"]) for item in features]
@@ -617,6 +654,8 @@ class DataCollatorForQwen3ASR:
             padding=True,
             truncation=False,
         )
+        # Tokenizing the prefix independently gives the exact prompt boundary;
+        # only gold transcript tokens after this boundary contribute to loss.
         prefix_lengths = prefix_inputs["attention_mask"].sum(dim=1).tolist()
         labels = full_inputs["input_ids"].clone()
         for index, prefix_length in enumerate(prefix_lengths):
@@ -631,16 +670,21 @@ class DataCollatorForQwen3ASR:
 
 
 def make_trainer_class() -> type[Any]:
+    """Create a Trainer variant for dtype, curriculum order, and grouped LR."""
     import torch
     from transformers import Trainer
 
     class A2STrainer(Trainer):
+        """Trainer with sequential curriculum sampling and fixed optimizer groups."""
+
         def __init__(self, *args: Any, optimizer_groups: list[dict[str, Any]], sequential: bool, **kwargs: Any):
+            """Store phase-specific optimizer groups and sampler policy."""
             self._a2s_optimizer_groups = optimizer_groups
             self._a2s_sequential = sequential
             super().__init__(*args, **kwargs)
 
         def _prepare_inputs(self, inputs: Any) -> Any:
+            """Cast floating processor tensors to the model's BF16 dtype."""
             inputs = super()._prepare_inputs(inputs)
             model_dtype = getattr(self.model, "dtype", None)
             if model_dtype is not None:
@@ -650,12 +694,14 @@ def make_trainer_class() -> type[Any]:
             return inputs
 
         def _get_train_sampler(self, train_dataset: Any = None) -> Any:
+            """Preserve curriculum order; otherwise use Trainer's sampler."""
             if self._a2s_sequential:
                 dataset = train_dataset if train_dataset is not None else self.train_dataset
                 return torch.utils.data.SequentialSampler(dataset)
             return super()._get_train_sampler(train_dataset)
 
         def create_optimizer(self) -> Any:
+            """Create AdamW from prevalidated audio and decoder LR groups."""
             if self.optimizer is None:
                 self.optimizer = torch.optim.AdamW(
                     self._a2s_optimizer_groups,
@@ -671,6 +717,7 @@ def make_trainer_class() -> type[Any]:
 def load_dataset_for_phase(
     rows: list[dict[str, Any]], processor: Any
 ) -> Any:
+    """Convert prepared rows into the minimal dataset consumed by the collator."""
     from datasets import Dataset
 
     dataset = Dataset.from_list(rows)
@@ -683,6 +730,7 @@ def load_dataset_for_phase(
 
 
 def load_qwen_runtime(config: dict[str, Any]) -> tuple[Any, Any]:
+    """Load the pinned official Qwen3-ASR BF16 runtime for training."""
     import torch
     from qwen_asr import Qwen3ASRModel
     from transformers import GenerationConfig
@@ -710,6 +758,7 @@ def inject_or_load_adapter(
     lora_config: dict[str, Any],
     adapter_path: Path | None,
 ) -> Any:
+    """Create the sole PEFT adapter or resume the prior phase's adapter."""
     from peft import LoraConfig, PeftModel, get_peft_model
 
     if adapter_path is not None:
@@ -734,6 +783,7 @@ def make_training_arguments(
     curriculum_ordered: bool,
     smoke_steps: int,
 ) -> Any:
+    """Translate fixed config fields into Transformers TrainingArguments."""
     from transformers import TrainingArguments
 
     training = config["training"]
@@ -777,6 +827,7 @@ def make_training_arguments(
 
 
 def load_pipeline_state(output_dir: Path) -> dict[str, Any]:
+    """Load durable cross-phase state or return a fresh schema-v1 state."""
     path = output_dir / "pipeline_state.json"
     if not path.is_file():
         return {"schema_version": 1, "completed_phases": [], "current_phase": None}
@@ -792,6 +843,7 @@ def save_resolved_contract(
     config: dict[str, Any],
     targets: Sequence[TargetSpec],
 ) -> None:
+    """Persist resolved config, hashes, and target map before training."""
     output_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "config_path": str(config_path.resolve()),
@@ -805,6 +857,7 @@ def save_resolved_contract(
 
 
 def resolve_resume_checkpoint(resume: str, phase_dir: Path) -> Path | None:
+    """Resolve ``auto`` or an explicit checkpoint for one phase."""
     value = resume.strip()
     if not value:
         return None
@@ -841,6 +894,12 @@ def run_phase_training(
     resume: str,
     smoke_steps: int = 0,
 ) -> tuple[Path, dict[str, Any]]:
+    """Train one phase and save both the adapter and audit summary.
+
+    The caller owns phase ordering and canary evaluation. This function owns
+    phase trainability, data preparation, optimizer grouping, Trainer resume,
+    and the final phase-local artifacts.
+    """
     training = config["training"]
     lora = config["lora"]
     scope_summary = configure_phase_trainability(
@@ -920,6 +979,7 @@ def run_canary(
     adapter_dir: Path,
     output_root: Path,
 ) -> None:
+    """Run adapter inference/evaluation and enforce the post-phase gate."""
     manifest = Path(config["data"]["canary_manifest"]).expanduser()
     if not manifest.is_file():
         raise FileNotFoundError(f"Canary manifest is required after {phase_name}: {manifest}")
@@ -966,6 +1026,7 @@ def evaluate_canary_gate(
     adapter_metrics: dict[str, Any],
     gate_config: dict[str, Any],
 ) -> dict[str, Any]:
+    """Compare adapter metrics with pinned BF16 base safety thresholds."""
     base = base_metrics["overall"]
     adapter = adapter_metrics["overall"]
     failures: list[str] = []
@@ -1022,6 +1083,7 @@ def evaluate_canary_gate(
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse validation, smoke, formal training, and resume options."""
     parser = argparse.ArgumentParser(description="Run the single-adapter Qwen3-ASR A2S fast path")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -1034,6 +1096,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Validate contracts, run smoke or all phases, and publish release files."""
     args = parse_args(argv)
     config_path = args.config.expanduser().resolve()
     config = load_yaml(config_path)
@@ -1045,6 +1108,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     expected_targets = expected_target_specs()
     expected_groups = {key: int(value) for key, value in config["lora"]["expected_groups"].items()}
     validate_target_map(expected_targets, expected_groups, int(config["lora"]["expected_total"]))
+    # Pipeline state is written before each phase and only marked complete after
+    # its canary passes. An interrupted or rejected phase can never be skipped.
     for phase in config["phases"]:
         count = len(
             active_target_names(
