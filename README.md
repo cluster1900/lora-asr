@@ -23,13 +23,17 @@
 ```text
 configs/      数据与训练的唯一配置
 docs/         架构、开发、数据、训练、测试、进度和风险
-notebooks/    唯一 Colab 快速微调入口
-scripts/      公开数据 manifest/curriculum
+notebooks/    唯一 Colab 快速微调入口，详见 notebooks/README.md
+scripts/      公开数据 manifest/curriculum，详见 scripts/README.md
 train/        单 adapter A2S runner
-inference/    base/adapter 统一批量推理
-evaluation/   WER/CER 与聚合评测
+inference/    base/adapter 统一批量推理，详见 inference/README.md
+evaluation/   WER/CER 与聚合评测，详见 evaluation/README.md
 tests/        不依赖模型下载的合同测试
 ```
+
+目录说明：[notebooks](notebooks/README.md) · [scripts](scripts/README.md) ·
+[inference](inference/README.md) · [evaluation](evaluation/README.md)。这些目录的文件或职责变化时，
+必须在同一提交维护对应 README。
 
 ## 本地验证
 
