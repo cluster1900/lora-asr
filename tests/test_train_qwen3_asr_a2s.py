@@ -169,6 +169,8 @@ class PipelineContractTest(unittest.TestCase):
         base = {
             "overall": {
                 "language_macro_error_rate": 0.4,
+                "robust_language_macro_error_rate": 0.4,
+                "clean_language_macro_error_rate": 0.1,
                 "inference_error_rate": 0.0,
                 "empty_output_rate": 0.01,
                 "repeat_like_output_rate": 0.01,
@@ -179,6 +181,8 @@ class PipelineContractTest(unittest.TestCase):
         adapter = {
             "overall": {
                 "language_macro_error_rate": 0.42,
+                "robust_language_macro_error_rate": 0.42,
+                "clean_language_macro_error_rate": 0.11,
                 "inference_error_rate": 0.01,
                 "empty_output_rate": 0.02,
                 "repeat_like_output_rate": 0.01,
@@ -191,12 +195,28 @@ class PipelineContractTest(unittest.TestCase):
             adapter,
             {
                 "max_relative_robust_regression": 0.15,
+                "max_clean_macro_increase": 0.02,
                 "min_valid_output_rate": 0.95,
                 "max_failure_rate_increase": 0.05,
             },
         )
         self.assertTrue(result["passed"])
         self.assertAlmostEqual(result["relative_robust_regression"], 0.05)
+        self.assertAlmostEqual(result["clean_macro_increase"], 0.01)
+
+        adapter["overall"]["clean_language_macro_error_rate"] = 0.13
+        failed = evaluate_canary_gate(
+            base,
+            adapter,
+            {
+                "max_relative_robust_regression": 0.15,
+                "max_clean_macro_increase": 0.02,
+                "min_valid_output_rate": 0.95,
+                "max_failure_rate_increase": 0.05,
+            },
+        )
+        self.assertFalse(failed["passed"])
+        self.assertTrue(any("clean macro" in reason for reason in failed["failures"]))
 
     def test_config_rejects_effective_batch_drift(self) -> None:
         config = {

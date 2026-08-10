@@ -6,6 +6,10 @@
 仅作为方法和外部 baseline；不导入其 wrapper、训练入口或 target 规则。本轮不做 router、RL、
 teacher、自建增强或多 adapter 编排。
 
+本轮的合理目标是验证“Mega-ASR-Base 方法可迁移到 Qwen3-ASR”的假设，不承诺用 200k 数据和
+单 adapter 等价复现完整 Mega-ASR 的数据规模与 RL 收益。是否达到外部 baseline 只由固定 Bench
+同 evaluator 结果决定。
+
 ## 模块
 
 ```text
@@ -21,7 +25,7 @@ BF16 base/adapter -> inference/qwen3_asr_infer.py -> predictions.jsonl
              adapter/checkpoint                 WER/CER/report
 ```
 
-- 数据层只负责选择、校验和 curriculum，不加载训练模型。
+- 数据层只负责 pinned Hub streaming、音频物化、选择、校验和 curriculum，不加载训练模型。
 - 训练层只消费固定 manifest/config，不负责下载数据。
 - 推理层固定模型 revision、BF16、`cuda:0`、batch 1 和 manifest 语言，只允许切换 base/adapter；
   单条失败写入结果而不中断批次。
@@ -50,4 +54,5 @@ resolved config、target map hash、pipeline state、checkpoint 和 adapter。
 ## 影响
 
 本次精简删除历史复现资产和可造成评测漂移的推理参数。历史指标只存在于 Git 历史，不能继续
-作为正式产品证据。
+作为正式产品证据。远端数据只经 `stage` 进入本地 SSD；Notebook 只编排四个正式入口，不保存
+第二份业务逻辑。

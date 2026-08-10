@@ -81,6 +81,38 @@ class EvalWerTest(unittest.TestCase):
         self.assertEqual(summary["repeat_like_output_rate"], 0.5)
         self.assertEqual(summary["empty_output_rate"], 0.5)
 
+    def test_clean_and_robust_language_macros_are_separate(self) -> None:
+        rows = [
+            {
+                "answer": "one two",
+                "prediction": "one",
+                "language": "en",
+                "condition_group": "atomic",
+            },
+            {
+                "answer": "正确",
+                "prediction": "正确",
+                "language": "zh",
+                "condition_group": "compound",
+            },
+            {
+                "answer": "clean words",
+                "prediction": "clean words",
+                "language": "en",
+                "condition_group": "clean",
+            },
+            {
+                "answer": "干净",
+                "prediction": "干净",
+                "language": "zh",
+                "condition_group": "clean",
+            },
+        ]
+        _, metrics = eval_wer.evaluate(rows)
+
+        self.assertEqual(metrics["overall"]["robust_language_macro_error_rate"], 0.25)
+        self.assertEqual(metrics["overall"]["clean_language_macro_error_rate"], 0.0)
+
     def test_complete_bench_has_32_cells(self) -> None:
         rows = []
         for language in ("en", "zh"):

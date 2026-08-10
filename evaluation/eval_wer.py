@@ -285,6 +285,18 @@ def overall_summary(rows: Sequence[dict[str, Any]], by_language: Sequence[dict[s
     return result
 
 
+def subset_language_macro(
+    rows: Sequence[dict[str, Any]], condition_groups: set[str]
+) -> float | None:
+    selected = [row for row in rows if str(row.get("condition_group")) in condition_groups]
+    rates = [
+        float(item["error_rate"])
+        for item in aggregate(selected, ["language"])
+        if item["error_rate"] is not None
+    ]
+    return round(fmean(rates), 6) if rates else None
+
+
 def bench_cells(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     eligible = [
         row for row in rows
@@ -381,8 +393,13 @@ def evaluate(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict
     scenario_keys = ["scenario"] if len(languages) <= 1 else ["language", "scenario"]
     by_scenario = aggregate(scored, scenario_keys)
     cells, cell_macro = bench_cells(scored)
+    overall = overall_summary(scored, by_language)
+    overall["robust_language_macro_error_rate"] = subset_language_macro(
+        scored, {"atomic", "compound"}
+    )
+    overall["clean_language_macro_error_rate"] = subset_language_macro(scored, {"clean"})
     metrics = {
-        "overall": overall_summary(scored, by_language),
+        "overall": overall,
         "by_language": by_language,
         "by_scenario": by_scenario,
         "by_audio_origin": aggregate(

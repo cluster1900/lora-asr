@@ -7,6 +7,7 @@ import unittest
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -234,6 +235,58 @@ class SelectionTest(unittest.TestCase):
             {row["sample_id"] for row in validation},
         )
 
+    def test_full_selection_honors_staged_train_validation_roles(self) -> None:
+        config = test_config()
+        config["sources"]["robust"].update(
+            {"expected_splits": 1, "expected_compound_splits": 0, "atomic_splits": ["noise"]}
+        )
+        config["selection"].update(
+            {
+                "robust_train": {"atomic_per_split": 2, "compound_total": 0},
+                "robust_validation": {"atomic_per_split": 2, "compound_total": 0},
+                "clean_train_per_language": 1,
+                "clean_validation_per_language": 1,
+                "expected_bench_rows": 1,
+            }
+        )
+        config["canary"] = {"expected_rows": 4, "robust_rows": 2, "clean_rows": 2}
+        robust = []
+        for index, (role, language) in enumerate(
+            (("train", "en"), ("train", "zh"), ("validation", "en"), ("validation", "zh"))
+        ):
+            row = canonical_row(index, language=language)
+            row["selection_role"] = role
+            robust.append(row)
+        english = []
+        chinese = []
+        for offset, role in enumerate(("train", "validation")):
+            en = canonical_row(100 + offset, language="en")
+            zh = canonical_row(200 + offset, language="zh")
+            for row in (en, zh):
+                row.update(
+                    {
+                        "selection_role": role,
+                        "condition_group": "clean",
+                        "scenario": "clean",
+                        "audio_origin": "clean",
+                    }
+                )
+            english.append(en)
+            chinese.append(zh)
+        bench = [canonical_row(999, role="test")]
+
+        selected = tool.build_full_selection(config, robust, english, chinese, bench)
+
+        self.assertEqual({row["selection_role"] for row in selected["train"]}, {"train"})
+        self.assertEqual(
+            {row["selection_role"] for row in selected["validation"]}, {"validation"}
+        )
+        self.assertTrue(
+            tool.selected_source_ids(selected["train"]).isdisjoint(
+                tool.selected_source_ids(selected["validation"])
+            )
+        )
+
 
 class CurriculumTest(unittest.TestCase):
     def test_evaluator_error_rate_supports_chinese_curriculum(self) -> None:
@@ -372,6 +425,139 @@ class ValidationTest(unittest.TestCase):
         self.assertTrue(report["hard_checks_pass"], report["errors"])
 
 
+class StageTest(unittest.TestCase):
+    def test_robust_identity_and_partition_are_shared_across_scenarios(self) -> None:
+        source = {
+            "dataset_id": "example/robust",
+            "revision": "a" * 40,
+            "license": "apache-2.0",
+        }
+        row = {"index": 42, "name": "utterance_noise", "answer": "hello world"}
+        noise = tool.stage_descriptor(
+            row,
+            source_name="robust",
+            source_config=source,
+            source_split="noise",
+            seed=17,
+            validation_percent=10,
+            fallback_index=0,
+            mode="full",
+        )
+        echo = tool.stage_descriptor(
+            row,
+            source_name="robust",
+            source_config=source,
+            source_split="echo",
+            seed=17,
+            validation_percent=10,
+            fallback_index=0,
+            mode="full",
+        )
+        self.assertEqual(noise["source_utterance_id"], echo["source_utterance_id"])
+        self.assertEqual(noise["selection_role"], echo["selection_role"])
+        self.assertNotEqual(noise["sample_id"], echo["sample_id"])
+
+    def test_clean_official_splits_get_fixed_roles(self) -> None:
+        source = {
+            "dataset_id": "example/clean",
+            "revision": "b" * 40,
+            "license": "cc-by-4.0",
+            "train_split": "train",
+            "validation_split": "validation",
+        }
+        row = {"id": "clean-1", "text": "hello"}
+        train = tool.stage_descriptor(
+            row,
+            source_name="english_clean",
+            source_config=source,
+            source_split="train",
+            seed=17,
+            validation_percent=10,
+            fallback_index=0,
+            mode="full",
+        )
+        validation = tool.stage_descriptor(
+            row,
+            source_name="english_clean",
+            source_config=source,
+            source_split="validation",
+            seed=17,
+            validation_percent=10,
+            fallback_index=0,
+            mode="full",
+        )
+        self.assertEqual(train["selection_role"], "train")
+        self.assertEqual(validation["selection_role"], "validation")
+
+        path_only = tool.stage_source_identity(
+            {"audio": {"path": "speaker/utterance.wav"}},
+            source_name="chinese_clean",
+            dataset_id="example/clean",
+            source_split="train",
+            fallback_index=9,
+        )
+        self.assertEqual(path_only, "example/clean:speaker/utterance.wav")
+
+    def test_stage_resume_repairs_hash_mismatch_without_duplicates(self) -> None:
+        source = {
+            "dataset_id": "example/robust",
+            "revision": "a" * 40,
+            "license": "apache-2.0",
+        }
+        rows = [
+            {
+                "index": index,
+                "name": f"sample-{index}",
+                "answer": "hello world",
+                "audio": {"bytes": f"audio-{index}".encode(), "path": f"{index}.wav"},
+            }
+            for index in range(2)
+        ]
+        target = {("smoke", "noise", "en"): 2}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_path = root / "candidates.jsonl"
+            candidate_rows: list[dict] = []
+            rejects: list[dict] = []
+            kwargs = {
+                "source_name": "robust",
+                "source_config": source,
+                "source_split": "noise",
+                "mode": "smoke",
+                "seed": 17,
+                "validation_percent": 10,
+                "targets": target,
+                "active_buckets": set(target),
+                "candidate_rows": candidate_rows,
+                "candidate_path": candidate_path,
+                "data_root": root / "audio",
+                "minimum_duration": 0.5,
+                "maximum_duration": 30.0,
+                "checkpoint_rows": 1,
+                "rejects": rejects,
+            }
+            with mock.patch.object(tool, "_audio_duration", return_value=1.0):
+                self.assertEqual(tool.stage_rows(rows, **kwargs), 2)
+                self.assertEqual(tool.stage_rows(rows, **kwargs), 0)
+            self.assertEqual(len(tool.read_jsonl(candidate_path)), 2)
+
+            damaged = root / "audio" / candidate_rows[0]["audio"]
+            damaged.write_bytes(b"changed")
+            repaired_rows, dropped = tool.load_valid_stage_rows(candidate_path, root / "audio")
+            self.assertEqual(dropped, 1)
+            self.assertEqual(len(repaired_rows), 1)
+            kwargs["candidate_rows"] = repaired_rows
+            with mock.patch.object(tool, "_audio_duration", return_value=1.0):
+                self.assertEqual(tool.stage_rows(rows, **kwargs), 1)
+            final_rows = tool.read_jsonl(candidate_path)
+            self.assertEqual(len(final_rows), 2)
+            self.assertEqual(len({row["sample_id"] for row in final_rows}), 2)
+            for row in final_rows:
+                self.assertEqual(
+                    row["audio_sha256"], tool.file_sha256(root / "audio" / row["audio"])
+                )
+
+
 class ProbeTest(unittest.TestCase):
     def test_probe_passes_revision_and_never_loads_rows(self) -> None:
         captured = {}
@@ -402,6 +588,7 @@ class ProbeTest(unittest.TestCase):
         compounds = [f"compound_{index:02d}" for index in range(47)]
         report = {
             "split_rows": {name: 3 for name in [*ATOMIC, *compounds]},
+            "split_rows_known": True,
             "errors": [],
             "passed": True,
         }
@@ -413,6 +600,42 @@ class ProbeTest(unittest.TestCase):
         tool.add_robust_quota_capacity_check(report, config)
         self.assertFalse(report["quota_total_capacity_passed"])
         self.assertFalse(report["passed"])
+
+    def test_probe_falls_back_to_config_info_for_split_names(self) -> None:
+        source = {
+            "dataset_id": "example/many-splits",
+            "revision": "c" * 40,
+            "expected_splits": 2,
+            "required_source_fields": ["answer"],
+        }
+
+        def fake_builder(*args: object, **kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                info=SimpleNamespace(
+                    splits={},
+                    features={"answer": object()},
+                    download_size=0,
+                    dataset_size=0,
+                )
+            )
+
+        def fake_config_info(*args: object, **kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                splits={"noise": {"name": "noise"}, "echo": {"name": "echo"}},
+                features={"answer": object()},
+                download_size=0,
+                dataset_size=0,
+            )
+
+        report = tool.probe_dataset_source(
+            "robust",
+            source,
+            loader=fake_builder,
+            config_info_loader=fake_config_info,
+        )
+        self.assertTrue(report["passed"])
+        self.assertEqual(sorted(report["split_rows"]), ["echo", "noise"])
+        self.assertFalse(report["split_rows_known"])
 
 
 class CliTest(unittest.TestCase):

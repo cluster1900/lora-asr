@@ -25,6 +25,18 @@ python3 evaluation/eval_wer.py --help
 检查通过。正式 manifest 的行数必须精确匹配 200k/10k/512/30k/5k 合同，CLI 不允许覆盖这些
 固定数量或跳过计数检查。
 
+staging 本地 fixture 还必须验证：
+
+- 同一命令第二次执行不重复下载或追加；中断后能补齐剩余配额。
+- candidate 指向的音频缺失或 hash 改变时，该行不计入 resume 进度并被重新物化。
+- Robust 同一个 source index 在不同 scenario 得到同一 `source_utterance_id`，且只进入一个
+  train/validation 分区。
+- Clean train/validation 分别来自配置指定 split；Bench smoke 覆盖 en/zh x real/synthetic。
+- `stage_report.json` 的 requested/materialized/resumed/rejected/shortage 数量与文件一致。
+
+Notebook 静态测试必须确认它是合法 JSON，且包含 probe、smoke staging、10+2 resume、full staging、
+逐级 curriculum 评分、base canary、正式训练和 release 评测命令；Notebook 不得出现 Teacher/API key。
+
 ## 训练与推理测试
 
 - 10+2 step resume 后 checkpoint、配置、global step 和 adapter 可恢复。
@@ -41,6 +53,8 @@ python3 evaluation/eval_wer.py --help
 - normalization 固定为 lowercase + 去标点，不提供运行时覆盖。
 - 空 reference 硬失败；inference error 按全删除计分并进入失败率。
 - 报告 clean regression、空输出、重复输出、过长和幻觉式输出。
+- Canary gate 不得用 clean+robust 混合宏平均冒充 robust 指标；测试必须证明 clean 不能掩盖
+  degraded regression，robust 也不能掩盖 clean regression。
 
 ## 阶段验收
 

@@ -13,6 +13,8 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import shutil
 import sys
 import unicodedata
 from collections import Counter, defaultdict
@@ -25,6 +27,7 @@ CONDITION_GROUPS = {"clean", "atomic", "compound"}
 AUDIO_ORIGINS = {"clean", "real", "synthetic"}
 DERIVED_ROLES = {"canary", "curriculum"}
 PINNED_REVISION_LENGTH = 40
+STAGE_SOURCE_NAMES = ("robust", "english_clean", "chinese_clean", "robust_test")
 
 
 class ConfigError(RuntimeError):
@@ -120,6 +123,39 @@ def write_json(path: Path, data: Mapping[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+class StageWriter:
+    """Append candidate rows with bounded durable-checkpoint overhead."""
+
+    def __init__(self, path: Path, checkpoint_rows: int) -> None:
+        self.path = path
+        self.checkpoint_rows = max(1, int(checkpoint_rows))
+        self.handle: Any = None
+        self.pending = 0
+
+    def __enter__(self) -> "StageWriter":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a", encoding="utf-8")
+        return self
+
+    def append(self, row: Mapping[str, Any]) -> None:
+        self.handle.write(json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n")
+        self.pending += 1
+        if self.pending >= self.checkpoint_rows:
+            self.sync()
+
+    def sync(self) -> None:
+        if self.handle is None or not self.pending:
+            return
+        self.handle.flush()
+        os.fsync(self.handle.fileno())
+        self.pending = 0
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if self.handle is not None:
+            self.sync()
+            self.handle.close()
 
 
 def file_sha256(path: Path) -> str:
@@ -258,6 +294,338 @@ def finite_float(value: Any, field: str) -> float:
     return parsed
 
 
+def safe_path_component(value: Any) -> str:
+    """Make a stable, portable directory component."""
+    cleaned = "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "_"
+        for char in str(value)
+    ).strip("._")
+    return cleaned or "unknown"
+
+
+def stage_source_identity(
+    row: Mapping[str, Any],
+    *,
+    source_name: str,
+    dataset_id: str,
+    source_split: str,
+    fallback_index: int,
+) -> str:
+    """Use the pre-augmentation index for robust cross-scenario isolation."""
+    source_index = row.get("index")
+    if source_name in {"robust", "robust_test"} and source_index not in (None, ""):
+        return f"{dataset_id}:{source_index}"
+    audio = row.get("audio")
+    streamed_audio_path = audio.get("path") if isinstance(audio, Mapping) else None
+    identity = (
+        row.get("source_utterance_id")
+        or row.get("id")
+        or row.get("name")
+        or row.get("file_name")
+        or row.get("audio_path")
+        or streamed_audio_path
+    )
+    if identity in (None, ""):
+        identity = f"{source_split}:{fallback_index}"
+    return f"{dataset_id}:{identity}"
+
+
+def robust_partition_role(identity: str, seed: int, validation_percent: int) -> str:
+    """Assign one base utterance to a fixed train or validation partition."""
+    if not 1 <= validation_percent <= 50:
+        raise ConfigError("staging.robust_validation_percent must be in [1, 50]")
+    bucket = int(stable_key(seed, "robust-partition", identity)[:8], 16) % 100
+    return "validation" if bucket < validation_percent else "train"
+
+
+def stage_descriptor(
+    row: Mapping[str, Any],
+    *,
+    source_name: str,
+    source_config: Mapping[str, Any],
+    source_split: str,
+    seed: int,
+    validation_percent: int,
+    fallback_index: int,
+    mode: str,
+) -> dict[str, Any]:
+    """Create candidate metadata before downloading or copying audio bytes."""
+    answer = str(row.get("answer") or row.get("text") or "").strip()
+    if not answer:
+        raise ManifestError("answer is empty")
+    if source_name == "english_clean":
+        language = "en"
+    elif source_name == "chinese_clean":
+        language = "zh"
+    else:
+        language = str(row.get("language") or "").lower()
+        if language not in LANGUAGES:
+            language = infer_language(answer) or ""
+    if language not in LANGUAGES:
+        raise ManifestError("language is mixed or could not be inferred")
+
+    dataset_id = str(source_config.get("dataset_id") or "")
+    revision = assert_pinned_revision(source_config.get("revision"), source_name)
+    identity = stage_source_identity(
+        row,
+        source_name=source_name,
+        dataset_id=dataset_id,
+        source_split=source_split,
+        fallback_index=fallback_index,
+    )
+    source_index = row.get("index")
+    if source_index in (None, ""):
+        source_index = row.get("id") or identity
+    if source_name == "robust":
+        scenario = source_split
+        origin = "synthetic"
+        role = (
+            robust_partition_role(identity, seed, validation_percent)
+            if mode == "full"
+            else "train"
+        )
+    elif source_name == "robust_test":
+        scenario = source_split.removeprefix("real_").removeprefix("syn_")
+        origin = "real" if source_split.startswith("real_") else "synthetic"
+        role = "test"
+    else:
+        scenario = "clean"
+        origin = "clean"
+        role = (
+            "validation"
+            if mode == "full" and source_split == str(source_config["validation_split"])
+            else "train"
+        )
+    descriptor: dict[str, Any] = {
+        "sample_id": f"{dataset_id}:{source_split}:{source_index}",
+        "answer": answer,
+        "language": language,
+        "scenario": scenario,
+        "audio_origin": origin,
+        "selection_role": role,
+        "source_dataset": dataset_id,
+        "source_revision": revision,
+        "source_split": source_split,
+        "source_index": source_index,
+        "source_utterance_id": identity,
+        "license": str(source_config.get("license") or ""),
+        "seed": seed,
+    }
+    for source_field, output_field in (
+        ("name", "source_name"),
+        ("file_name", "file_name"),
+        ("speaker_id", "speaker_id"),
+    ):
+        if row.get(source_field) not in (None, ""):
+            descriptor[output_field] = row[source_field]
+    return descriptor
+
+
+def _audio_suffix(audio: Any, row: Mapping[str, Any]) -> str:
+    candidates: list[Any] = []
+    if isinstance(audio, Mapping):
+        candidates.append(audio.get("path"))
+    candidates.extend((row.get("file_name"), row.get("audio_path")))
+    for candidate in candidates:
+        if candidate:
+            suffix = Path(str(candidate)).suffix.lower()
+            if suffix and len(suffix) <= 6:
+                return suffix
+    return ".wav"
+
+
+def _audio_duration(path: Path) -> float:
+    try:
+        import soundfile as sf  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ConfigError(
+            "audio staging requires soundfile; install requirements-colab.txt"
+        ) from exc
+    try:
+        return float(sf.info(str(path)).duration)
+    except Exception as exc:
+        raise ManifestError(f"audio cannot be decoded: {path}: {exc}") from exc
+
+
+def materialize_stage_audio(
+    row: Mapping[str, Any],
+    descriptor: Mapping[str, Any],
+    *,
+    source_name: str,
+    data_root: Path,
+) -> tuple[str, float, str, int]:
+    """Materialize one streaming Audio value and return canonical metadata."""
+    audio = row.get("audio")
+    suffix = _audio_suffix(audio, row)
+    identity_hash = hashlib.sha256(str(descriptor["sample_id"]).encode("utf-8")).hexdigest()[:24]
+    relative = (
+        Path(safe_path_component(source_name))
+        / safe_path_component(descriptor["source_split"])
+        / f"{identity_hash}{suffix}"
+    )
+    destination = data_root / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.tmp")
+
+    if not destination.exists():
+        try:
+            if isinstance(audio, Mapping) and audio.get("bytes") is not None:
+                payload = audio["bytes"]
+                if isinstance(payload, memoryview):
+                    payload = payload.tobytes()
+                if not isinstance(payload, (bytes, bytearray)):
+                    raise ManifestError("audio.bytes is not bytes")
+                temporary.write_bytes(bytes(payload))
+            elif isinstance(audio, Mapping) and audio.get("array") is not None:
+                try:
+                    import soundfile as sf  # type: ignore[import-not-found]
+                except ImportError as exc:
+                    raise ConfigError(
+                        "decoded audio staging requires soundfile"
+                    ) from exc
+                sampling_rate = int(audio.get("sampling_rate") or 16000)
+                sf.write(str(temporary), audio["array"], sampling_rate, format="WAV")
+            else:
+                source_value = audio.get("path") if isinstance(audio, Mapping) else audio
+                if not source_value:
+                    source_value = row.get("audio_path")
+                source_path = Path(str(source_value or "")).expanduser()
+                if not source_path.is_file():
+                    raise ManifestError("streamed audio has neither bytes nor a readable path")
+                shutil.copyfile(source_path, temporary)
+            temporary.replace(destination)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    duration = _audio_duration(destination)
+    return relative.as_posix(), duration, file_sha256(destination), destination.stat().st_size
+
+
+def stage_bucket(row: Mapping[str, Any], source_name: str, mode: str) -> tuple[str, ...]:
+    if source_name == "robust":
+        role = str(row.get("selection_role") or "train") if mode == "full" else "smoke"
+        return role, str(row["scenario"]), str(row["language"])
+    if source_name in {"english_clean", "chinese_clean"}:
+        role = str(row.get("selection_role") or "train") if mode == "full" else "train"
+        return role, str(row["language"])
+    if mode == "full":
+        return (str(row["source_split"]),)
+    return str(row["audio_origin"]), str(row["language"])
+
+
+def load_valid_stage_rows(path: Path, data_root: Path) -> tuple[list[dict[str, Any]], int]:
+    """Repair a candidate manifest and retain only complete, hash-valid rows."""
+    if not path.exists():
+        return [], 0
+    valid: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    dropped = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+                sample_id = str(row["sample_id"])
+                audio_path = Path(str(row["audio"]))
+                resolved = audio_path if audio_path.is_absolute() else data_root / audio_path
+                if sample_id in seen or not resolved.is_file():
+                    raise ValueError("duplicate sample or missing audio")
+                if str(row.get("audio_sha256") or "") != file_sha256(resolved):
+                    resolved.unlink(missing_ok=True)
+                    raise ValueError("audio hash mismatch")
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError):
+                dropped += 1
+                continue
+            seen.add(sample_id)
+            valid.append(row)
+    write_jsonl(path, valid)
+    return valid, dropped
+
+
+def stage_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    source_name: str,
+    source_config: Mapping[str, Any],
+    source_split: str,
+    mode: str,
+    seed: int,
+    validation_percent: int,
+    targets: Mapping[tuple[str, ...], int],
+    active_buckets: set[tuple[str, ...]],
+    candidate_rows: list[dict[str, Any]],
+    candidate_path: Path,
+    data_root: Path,
+    minimum_duration: float,
+    maximum_duration: float,
+    checkpoint_rows: int,
+    rejects: list[dict[str, Any]],
+) -> int:
+    """Consume one source split until its active staging buckets are full."""
+    counts = Counter(stage_bucket(row, source_name, mode) for row in candidate_rows)
+    if all(counts[key] >= int(targets[key]) for key in active_buckets):
+        return 0
+    known_ids = {str(row["sample_id"]) for row in candidate_rows}
+    materialized = 0
+    with StageWriter(candidate_path, checkpoint_rows) as writer:
+        for index, source_row in enumerate(rows):
+            try:
+                descriptor = stage_descriptor(
+                    source_row,
+                    source_name=source_name,
+                    source_config=source_config,
+                    source_split=source_split,
+                    seed=seed,
+                    validation_percent=validation_percent,
+                    fallback_index=index,
+                    mode=mode,
+                )
+                bucket = stage_bucket(descriptor, source_name, mode)
+                if bucket not in active_buckets or counts[bucket] >= int(targets[bucket]):
+                    continue
+                if str(descriptor["sample_id"]) in known_ids:
+                    continue
+                audio, duration, audio_hash, audio_size = materialize_stage_audio(
+                    source_row,
+                    descriptor,
+                    source_name=source_name,
+                    data_root=data_root,
+                )
+                if not minimum_duration <= duration <= maximum_duration:
+                    (data_root / audio).unlink(missing_ok=True)
+                    raise ManifestError(
+                        f"duration_s {duration} outside [{minimum_duration}, {maximum_duration}]"
+                    )
+                candidate = dict(descriptor)
+                candidate.update(
+                    {
+                        "audio": audio,
+                        "duration_s": duration,
+                        "audio_sha256": audio_hash,
+                        "audio_size_bytes": audio_size,
+                    }
+                )
+                writer.append(candidate)
+                candidate_rows.append(candidate)
+                known_ids.add(str(candidate["sample_id"]))
+                counts[bucket] += 1
+                materialized += 1
+                if all(counts[key] >= int(targets[key]) for key in active_buckets):
+                    break
+            except (ConfigError, ManifestError, KeyError, TypeError, ValueError, OSError) as exc:
+                rejects.append(
+                    {
+                        "source": source_name,
+                        "source_split": source_split,
+                        "source_index": source_row.get("index", index),
+                        "reason": str(exc),
+                    }
+                )
+    return materialized
+
+
 def normalize_candidate(
     row: Mapping[str, Any],
     *,
@@ -335,6 +703,8 @@ def normalize_candidate(
         canonical["source_name"] = str(source_name)
     if row.get("benchmark_id") not in (None, ""):
         canonical["benchmark_id"] = str(row["benchmark_id"])
+    if row.get("selection_role") not in (None, ""):
+        canonical["selection_role"] = str(row["selection_role"])
     return canonical
 
 
@@ -577,15 +947,28 @@ def build_full_selection(
         int(val_plan["compound_total"]),
         expected_compounds,
     )
+    robust_roles = {str(row.get("selection_role")) for row in robust_rows if row.get("selection_role")}
+    if robust_roles:
+        if robust_roles != {"train", "validation"} or any(
+            not row.get("selection_role") for row in robust_rows
+        ):
+            raise ManifestError("staged robust candidates require complete train/validation roles")
+        robust_train_pool = [row for row in robust_rows if row["selection_role"] == "train"]
+        robust_validation_pool = [
+            row for row in robust_rows if row["selection_role"] == "validation"
+        ]
+    else:
+        robust_train_pool = list(robust_rows)
+        robust_validation_pool = list(robust_rows)
     robust_train = select_stratified(
-        robust_rows,
+        robust_train_pool,
         plan_language_quotas(train_scenarios),
         seed=seed,
         namespace="robust-train",
     )
     train_sources = selected_source_ids(robust_train)
     robust_validation = select_stratified(
-        robust_rows,
+        robust_validation_pool,
         plan_language_quotas(val_scenarios),
         seed=seed,
         namespace="robust-validation",
@@ -594,22 +977,43 @@ def build_full_selection(
 
     clean_train_count = int(selection["clean_train_per_language"])
     clean_val_count = int(selection["clean_validation_per_language"])
+    english_roles = {str(row.get("selection_role")) for row in english_rows if row.get("selection_role")}
+    chinese_roles = {str(row.get("selection_role")) for row in chinese_rows if row.get("selection_role")}
+    if english_roles or chinese_roles:
+        if english_roles != {"train", "validation"} or chinese_roles != {
+            "train",
+            "validation",
+        }:
+            raise ManifestError("staged clean candidates require train and validation roles")
+        if any(not row.get("selection_role") for row in [*english_rows, *chinese_rows]):
+            raise ManifestError("staged clean candidate role is missing")
+        english_train_pool = [row for row in english_rows if row["selection_role"] == "train"]
+        english_validation_pool = [
+            row for row in english_rows if row["selection_role"] == "validation"
+        ]
+        chinese_train_pool = [row for row in chinese_rows if row["selection_role"] == "train"]
+        chinese_validation_pool = [
+            row for row in chinese_rows if row["selection_role"] == "validation"
+        ]
+    else:
+        english_train_pool = english_validation_pool = list(english_rows)
+        chinese_train_pool = chinese_validation_pool = list(chinese_rows)
     en_train = select_clean(
-        english_rows,
+        english_train_pool,
         language="en",
         count=clean_train_count,
         seed=seed,
         namespace="english-clean-train",
     )
     zh_train = select_clean(
-        chinese_rows,
+        chinese_train_pool,
         language="zh",
         count=clean_train_count,
         seed=seed,
         namespace="chinese-clean-train",
     )
     en_validation = select_clean(
-        english_rows,
+        english_validation_pool,
         language="en",
         count=clean_val_count,
         seed=seed,
@@ -617,7 +1021,7 @@ def build_full_selection(
         excluded_source_ids=selected_source_ids(en_train),
     )
     zh_validation = select_clean(
-        chinese_rows,
+        chinese_validation_pool,
         language="zh",
         count=clean_val_count,
         seed=seed,
@@ -1081,6 +1485,7 @@ def probe_dataset_source(
     source_config: Mapping[str, Any],
     *,
     loader: Callable[..., Any] | None = None,
+    config_info_loader: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Inspect one pinned Hub dataset builder without loading any examples."""
     dataset_id = str(source_config.get("dataset_id") or "")
@@ -1102,10 +1507,27 @@ def probe_dataset_source(
     builder = loader(dataset_id, **kwargs)
     info = builder.info
     split_info = info.splits or {}
+    if not split_info:
+        if config_info_loader is None:
+            try:
+                from datasets import get_dataset_config_info  # type: ignore[import-not-found]
+            except ImportError as exc:
+                raise ConfigError(
+                    "metadata split discovery requires `datasets`"
+                ) from exc
+            config_info_loader = get_dataset_config_info
+        fallback_kwargs: dict[str, Any] = {"revision": revision}
+        if source_config.get("config"):
+            fallback_kwargs["config_name"] = source_config["config"]
+        fallback_info = config_info_loader(dataset_id, **fallback_kwargs)
+        split_info = fallback_info.splits or {}
+        if not _feature_names(info.features):
+            info = fallback_info
     split_rows = {
         str(name): int(getattr(value, "num_examples", 0) or 0)
         for name, value in split_info.items()
     }
+    split_rows_known = bool(split_rows) and all(value > 0 for value in split_rows.values())
     features = _feature_names(info.features)
     errors: list[str] = []
     if source_config.get("expected_splits") is not None:
@@ -1120,9 +1542,12 @@ def probe_dataset_source(
         errors.append("missing source fields: " + ", ".join(missing_fields))
     if source_config.get("expected_rows") is not None:
         expected_rows = int(source_config["expected_rows"])
-        actual_rows = sum(split_rows.values())
-        if actual_rows != expected_rows:
-            errors.append(f"rows {actual_rows} != expected {expected_rows}")
+        if not split_rows_known:
+            errors.append("split row counts are unavailable")
+        else:
+            actual_rows = sum(split_rows.values())
+            if actual_rows != expected_rows:
+                errors.append(f"rows {actual_rows} != expected {expected_rows}")
     download_size = int(getattr(info, "download_size", 0) or 0)
     dataset_size = int(getattr(info, "dataset_size", 0) or 0)
     if source_config.get("max_download_bytes") is not None and download_size:
@@ -1143,6 +1568,7 @@ def probe_dataset_source(
         "features": features,
         "split_count": len(split_rows),
         "split_rows": dict(sorted(split_rows.items())),
+        "split_rows_known": split_rows_known,
         "download_size_bytes": download_size,
         "dataset_size_bytes": dataset_size,
         "quota_language_check": "deferred_to_materialized_candidate_build",
@@ -1179,6 +1605,12 @@ def add_robust_quota_capacity_check(
         int(source["expected_compound_splits"]),
     )
     required = {name: train[name] + validation[name] for name in split_names}
+    if not report.get("split_rows_known"):
+        report["quota_required_rows_by_split"] = required
+        report["quota_total_capacity_passed"] = "deferred_to_staging"
+        report["quota_shortages"] = {}
+        report["quota_language_check"] = "deferred_to_materialized_candidate_build"
+        return
     shortages = {
         name: {"available": split_rows[name], "required": required[name]}
         for name in split_names
@@ -1193,6 +1625,274 @@ def add_robust_quota_capacity_check(
             f"{len(shortages)} splits do not have enough rows for train plus validation"
         )
         report["passed"] = False
+
+
+def stream_hub_split(
+    source_name: str,
+    source_config: Mapping[str, Any],
+    split: str,
+    *,
+    seed: int,
+    shuffle_buffer_rows: int,
+    loader: Callable[..., Any] | None = None,
+) -> Iterable[Mapping[str, Any]]:
+    """Open one pinned Hub split as a deterministic decode-free stream."""
+    if loader is None:
+        try:
+            from datasets import Audio, load_dataset  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise ConfigError(
+                "audio staging requires `datasets`; install requirements-colab.txt"
+            ) from exc
+        loader = load_dataset
+    else:
+        Audio = None  # type: ignore[misc,assignment]
+    kwargs: dict[str, Any] = {
+        "split": split,
+        "revision": assert_pinned_revision(source_config.get("revision"), source_name),
+        "streaming": True,
+    }
+    if source_config.get("config"):
+        kwargs["name"] = source_config["config"]
+    stream = loader(str(source_config["dataset_id"]), **kwargs)
+    if Audio is not None and hasattr(stream, "cast_column"):
+        stream = stream.cast_column("audio", Audio(decode=False))
+    if hasattr(stream, "shuffle") and shuffle_buffer_rows > 1:
+        split_seed = int(stable_key(seed, f"stage:{source_name}", split)[:8], 16)
+        stream = stream.shuffle(seed=split_seed, buffer_size=shuffle_buffer_rows)
+    return stream
+
+
+def stage_candidate_paths(
+    staging: Mapping[str, Any], candidate_dir: Path
+) -> dict[str, Path]:
+    outputs = require_mapping(staging.get("outputs"), "staging.outputs")
+    required = (*STAGE_SOURCE_NAMES, "rejects", "report")
+    missing = [name for name in required if not outputs.get(name)]
+    if missing:
+        raise ConfigError("missing staging outputs: " + ", ".join(missing))
+    return {name: candidate_dir / str(outputs[name]) for name in required}
+
+
+def robust_stage_targets(
+    config: Mapping[str, Any], split_names: Sequence[str], mode: str
+) -> dict[tuple[str, ...], int]:
+    source = require_mapping(config_section(config, "sources").get("robust"), "sources.robust")
+    if mode == "smoke":
+        per_language = int(config_section(config, "smoke")["robust_per_language_per_split"])
+        return {
+            ("smoke", scenario, language): per_language
+            for scenario in sorted(split_names)
+            for language in LANGUAGES
+        }
+    selection = config_section(config, "selection")
+    train_plan = require_mapping(selection.get("robust_train"), "selection.robust_train")
+    validation_plan = require_mapping(
+        selection.get("robust_validation"), "selection.robust_validation"
+    )
+    atomic = [str(item) for item in source["atomic_splits"]]
+    expected_compounds = int(source["expected_compound_splits"])
+    train = plan_language_quotas(
+        plan_scenario_quotas(
+            split_names,
+            atomic,
+            int(train_plan["atomic_per_split"]),
+            int(train_plan["compound_total"]),
+            expected_compounds,
+        )
+    )
+    validation = plan_language_quotas(
+        plan_scenario_quotas(
+            split_names,
+            atomic,
+            int(validation_plan["atomic_per_split"]),
+            int(validation_plan["compound_total"]),
+            expected_compounds,
+        )
+    )
+    targets = {
+        ("train", scenario, language): count
+        for (scenario, language), count in train.items()
+    }
+    targets.update(
+        {
+            ("validation", scenario, language): count
+            for (scenario, language), count in validation.items()
+        }
+    )
+    return targets
+
+
+def clean_stage_targets(
+    config: Mapping[str, Any], source_name: str, mode: str
+) -> dict[tuple[str, ...], int]:
+    language = "en" if source_name == "english_clean" else "zh"
+    if mode == "smoke":
+        return {("train", language): int(config_section(config, "smoke")["clean_per_language"])}
+    selection = config_section(config, "selection")
+    return {
+        ("train", language): int(selection["clean_train_per_language"]),
+        ("validation", language): int(selection["clean_validation_per_language"]),
+    }
+
+
+def bench_stage_targets(
+    config: Mapping[str, Any], split_rows: Mapping[str, int], mode: str
+) -> dict[tuple[str, ...], int]:
+    if mode == "full":
+        return {(str(split),): int(count) for split, count in split_rows.items()}
+    per_stratum = int(config_section(config, "smoke")["bench_per_language_origin"])
+    return {
+        (origin, language): per_stratum
+        for origin in ("real", "synthetic")
+        for language in LANGUAGES
+    }
+
+
+def _source_stage_plan(
+    config: Mapping[str, Any],
+    source_name: str,
+    source_config: Mapping[str, Any],
+    split_rows: Mapping[str, int],
+    mode: str,
+) -> tuple[list[str], dict[tuple[str, ...], int], Callable[[str], set[tuple[str, ...]]]]:
+    if source_name == "robust":
+        splits = sorted(split_rows)
+        targets = robust_stage_targets(config, splits, mode)
+
+        def active(split: str) -> set[tuple[str, ...]]:
+            return {key for key in targets if len(key) == 3 and key[1] == split}
+
+        return splits, targets, active
+    if source_name in {"english_clean", "chinese_clean"}:
+        if mode == "smoke":
+            splits = [str(source_config["train_split"])]
+        else:
+            splits = [
+                str(source_config["train_split"]),
+                str(source_config["validation_split"]),
+            ]
+        targets = clean_stage_targets(config, source_name, mode)
+        language = "en" if source_name == "english_clean" else "zh"
+
+        def active(split: str) -> set[tuple[str, ...]]:
+            role = "validation" if mode == "full" and split == str(source_config["validation_split"]) else "train"
+            return {(role, language)}
+
+        return splits, targets, active
+    splits = sorted(split_rows)
+    targets = bench_stage_targets(config, split_rows, mode)
+
+    def active(split: str) -> set[tuple[str, ...]]:
+        if mode == "full":
+            return {(split,)}
+        origin = "real" if split.startswith("real_") else "synthetic"
+        return {(origin, language) for language in LANGUAGES}
+
+    return splits, targets, active
+
+
+def command_stage(args: argparse.Namespace) -> dict[str, Any]:
+    config = load_config(Path(args.config).expanduser())
+    staging = config_section(config, "staging")
+    sources = config_section(config, "sources")
+    seed, minimum, maximum = _selection_settings(config)
+    candidate_dir = Path(args.candidate_dir or staging["candidate_dir"]).expanduser()
+    data_root = Path(args.data_root or config_section(config, "project")["data_root"]).expanduser()
+    paths = stage_candidate_paths(staging, candidate_dir)
+    checkpoint_rows = int(staging["checkpoint_rows"])
+    shuffle_buffer = int(
+        staging["smoke_shuffle_buffer_rows"]
+        if args.mode == "smoke"
+        else staging["shuffle_buffer_rows"]
+    )
+    validation_percent = int(staging["robust_validation_percent"])
+    rejects: list[dict[str, Any]] = []
+    report: dict[str, Any] = {
+        "mode": args.mode,
+        "candidate_dir": str(candidate_dir),
+        "data_root": str(data_root),
+        "seed": seed,
+        "sources": {},
+        "passed": False,
+    }
+
+    for source_name in STAGE_SOURCE_NAMES:
+        source = require_mapping(sources.get(source_name), f"sources.{source_name}")
+        metadata = probe_dataset_source(source_name, source)
+        if source_name == "robust" and metadata["passed"]:
+            add_robust_quota_capacity_check(metadata, config)
+        if not metadata["passed"]:
+            report["sources"][source_name] = {"metadata": metadata, "passed": False}
+            write_json(paths["report"], report)
+            raise ManifestError(f"{source_name} metadata probe failed")
+
+        candidate_path = paths[source_name]
+        candidate_rows, dropped = load_valid_stage_rows(candidate_path, data_root)
+        resumed_rows = len(candidate_rows)
+        splits, targets, active_for_split = _source_stage_plan(
+            config, source_name, source, metadata["split_rows"], args.mode
+        )
+        materialized = 0
+        rejected_before = len(rejects)
+        for split in splits:
+            active = active_for_split(split)
+            counts = Counter(stage_bucket(row, source_name, args.mode) for row in candidate_rows)
+            if all(counts[key] >= int(targets[key]) for key in active):
+                continue
+            stream = stream_hub_split(
+                source_name,
+                source,
+                split,
+                seed=seed,
+                shuffle_buffer_rows=shuffle_buffer,
+            )
+            materialized += stage_rows(
+                stream,
+                source_name=source_name,
+                source_config=source,
+                source_split=split,
+                mode=args.mode,
+                seed=seed,
+                validation_percent=validation_percent,
+                targets=targets,
+                active_buckets=active,
+                candidate_rows=candidate_rows,
+                candidate_path=candidate_path,
+                data_root=data_root,
+                minimum_duration=minimum,
+                maximum_duration=maximum,
+                checkpoint_rows=checkpoint_rows,
+                rejects=rejects,
+            )
+        counts = Counter(stage_bucket(row, source_name, args.mode) for row in candidate_rows)
+        shortages = {
+            "/".join(key): {"actual": counts[key], "required": int(required)}
+            for key, required in sorted(targets.items())
+            if counts[key] < int(required)
+        }
+        report["sources"][source_name] = {
+            "metadata": metadata,
+            "candidate_path": str(candidate_path),
+            "requested_rows": sum(int(value) for value in targets.values()),
+            "candidate_rows": len(candidate_rows),
+            "resumed_rows": resumed_rows,
+            "materialized_rows": materialized,
+            "dropped_resume_rows": dropped,
+            "rejected_rows": len(rejects) - rejected_before,
+            "shortages": shortages,
+            "manifest_sha256": file_sha256(candidate_path),
+            "passed": not shortages,
+        }
+
+    write_jsonl(paths["rejects"], rejects)
+    report["rejects"] = str(paths["rejects"])
+    report["rejected_rows"] = len(rejects)
+    report["passed"] = all(item["passed"] for item in report["sources"].values())
+    write_json(paths["report"], report)
+    if not report["passed"]:
+        raise ManifestError("staging quota shortage; inspect stage_report.json")
+    return report
 
 
 def output_directory(config: Mapping[str, Any], override: str | None) -> Path:
@@ -1435,6 +2135,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe.add_argument("--output", default="")
     probe.set_defaults(handler=command_probe)
+
+    stage = subparsers.add_parser(
+        "stage", help="stream pinned Hub audio into resumable local candidates"
+    )
+    stage.add_argument("--config", required=True)
+    stage.add_argument("--mode", required=True, choices=("smoke", "full"))
+    stage.add_argument("--candidate-dir", default="")
+    stage.add_argument("--data-root", default="")
+    stage.set_defaults(handler=command_stage)
 
     smoke = subparsers.add_parser("smoke", help="build the 128-row local fixture")
     smoke.add_argument("--config", required=True)

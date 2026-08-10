@@ -15,14 +15,15 @@
 - LoRA：r=8、alpha=16、dropout=0.05，27/196/343 target 分阶段启用。
 - Eval：English WER、Chinese CER、scenario 和 32-cell 聚合。
 
-历史 v1-v6A、router、旧 notebook、已提交数据、checkpoint 和 prediction 已移除。正式数据物化、
-GPU smoke 和训练结果尚未完成。
+历史 v1-v6A、router、旧 notebook、已提交数据、checkpoint 和 prediction 已移除。当前唯一 Colab
+入口已补齐；正式数据物化、GPU smoke 和训练结果尚未完成。
 
 ## 文件
 
 ```text
 configs/      数据与训练的唯一配置
 docs/         架构、开发、数据、训练、测试、进度和风险
+notebooks/    唯一 Colab 快速微调入口
 scripts/      公开数据 manifest/curriculum
 train/        单 adapter A2S runner
 inference/    base/adapter 统一批量推理
@@ -39,6 +40,8 @@ python3 -m py_compile scripts/prepare_public_robust_manifests.py \
 ```
 
 ## 入口
+
+[打开唯一 Colab Notebook](notebooks/12_fast_finetune_colab.ipynb)，或检查底层 CLI：
 
 ```bash
 python scripts/prepare_public_robust_manifests.py --help

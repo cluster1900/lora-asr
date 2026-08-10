@@ -428,6 +428,16 @@ def validate_config(config: dict[str, Any]) -> None:
         )
     if config["model"].get("dtype") != "bfloat16":
         raise ValueError("Formal A2S comparison requires model.dtype=bfloat16")
+    required_gates = {
+        "base_canary_metrics",
+        "min_valid_output_rate",
+        "max_relative_robust_regression",
+        "max_clean_macro_increase",
+        "max_failure_rate_increase",
+    }
+    missing_gates = sorted(required_gates - config["evaluation"].keys())
+    if missing_gates:
+        raise ValueError(f"Missing evaluation gates: {missing_gates}")
 
 
 def build_plan(config: dict[str, Any]) -> dict[str, Any]:
@@ -959,15 +969,25 @@ def evaluate_canary_gate(
     base = base_metrics["overall"]
     adapter = adapter_metrics["overall"]
     failures: list[str] = []
-    base_macro = base.get("language_macro_error_rate")
-    adapter_macro = adapter.get("language_macro_error_rate")
+    base_macro = base.get("robust_language_macro_error_rate")
+    adapter_macro = adapter.get("robust_language_macro_error_rate")
     if base_macro is None or adapter_macro is None or float(base_macro) <= 0:
-        failures.append("missing positive language_macro_error_rate")
+        failures.append("missing positive robust_language_macro_error_rate")
         relative_regression = None
     else:
         relative_regression = (float(adapter_macro) - float(base_macro)) / float(base_macro)
         if relative_regression > float(gate_config["max_relative_robust_regression"]):
             failures.append(f"robust macro regression {relative_regression:.4f}")
+
+    base_clean = base.get("clean_language_macro_error_rate")
+    adapter_clean = adapter.get("clean_language_macro_error_rate")
+    if base_clean is None or adapter_clean is None:
+        failures.append("missing clean_language_macro_error_rate")
+        clean_increase = None
+    else:
+        clean_increase = float(adapter_clean) - float(base_clean)
+        if clean_increase > float(gate_config["max_clean_macro_increase"]):
+            failures.append(f"clean macro increase {clean_increase:.4f}")
 
     valid_output_rate = 1.0 - max(
         float(adapter.get("inference_error_rate", 0.0)),
@@ -995,6 +1015,7 @@ def evaluate_canary_gate(
         "relative_robust_regression": (
             round(relative_regression, 6) if relative_regression is not None else None
         ),
+        "clean_macro_increase": round(clean_increase, 6) if clean_increase is not None else None,
         "valid_output_rate": round(valid_output_rate, 6),
         "failure_rate_increases": failure_increases,
     }

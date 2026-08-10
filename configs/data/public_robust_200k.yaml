@@ -3,6 +3,20 @@ project:
   data_root: /content/qwen3-asr-runtime/data
   output_dir: data/jsonl
 
+staging:
+  candidate_dir: /content/drive/MyDrive/qwen3-asr-public-a2s/candidates
+  robust_validation_percent: 10
+  shuffle_buffer_rows: 4096
+  smoke_shuffle_buffer_rows: 64
+  checkpoint_rows: 100
+  outputs:
+    robust: robust.jsonl
+    english_clean: english_clean.jsonl
+    chinese_clean: chinese_clean.jsonl
+    robust_test: bench.jsonl
+    rejects: stage_rejects.jsonl
+    report: stage_report.json
+
 sources:
   robust:
     dataset_id: zhifeixie/Voices-in-the-Wild-2M
@@ -44,14 +58,21 @@ sources:
     license: cc-by-4.0
     train_split: train.100
     validation_split: validation
-    test_split: test
+    required_source_fields:
+      - audio
+      - text
+      - id
   chinese_clean:
-    dataset_id: AISHELL/AISHELL-1
-    revision: bbe295d530192a4cd41644b711c9aecd087df653
+    dataset_id: knoveleng/aishell1-mandarin
+    revision: c6dde006238091dc7c81cf5888208140bba33cba
     license: apache-2.0
+    license_url: https://www.openslr.org/33/
     train_split: train
     validation_split: validation
-    test_split: test
+    required_source_fields:
+      - audio
+      - text
+      - duration
 
 selection:
   robust_train:

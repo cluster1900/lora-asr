@@ -7,7 +7,7 @@
 
 ## 唯一流程
 
-1. `scripts/prepare_public_robust_manifests.py`：probe、smoke、build、validate、curriculum。
+1. `scripts/prepare_public_robust_manifests.py`：probe、stage、smoke、build、validate、curriculum。
 2. `inference/qwen3_asr_infer.py`：生成 BF16 base curriculum 分数和 base/test prediction。
 3. `train/train_qwen3_asr_a2s.py`：运行 smoke 或 Phase I/II/III，并保存完整状态。
 4. `evaluation/eval_wer.py`：接收 prediction 和 output directory，固定生成 scored JSONL、metrics
@@ -24,12 +24,16 @@ revision、精度、device、batch 或语言，防止正式比较漂移。
 
 ## 开发步骤
 
-1. 在唯一 Colab notebook 中实现可恢复 candidate staging，输出四份 candidate JSONL。
-2. 运行 metadata probe 和 128-row smoke；不满足 schema、配额、音频或泄漏检查时停止。
-3. 生成 BF16 base prediction，构建 30k curriculum。
-4. 运行 10+2 step resume smoke，确认 checkpoint、optimizer、scheduler、RNG 和配置可恢复。
-5. 训练器只按 Phase I -> II -> III 推进；每阶段后运行 512 canary，失败则停止。
-6. 对 base 与 adapter 使用同一 validation/test manifest 和 evaluator。
+1. 数据脚本从 pinned Hub revision 流式 staging，仅物化配额需要的音频，输出四份 candidate
+   JSONL、rejects 和报告；重复执行从已落盘且 hash 有效的行继续。
+2. 唯一 notebook `notebooks/12_fast_finetune_colab.ipynb` 只编排现有 CLI，不复制数据、训练或
+   评测逻辑。
+3. 运行 metadata probe 和 128-row smoke；不满足 schema、配额、音频或泄漏检查时停止。
+4. BF16 base curriculum 评分先跑 60k，数量不足再扩到 100k/160k/200k，不预先推理全部 200k。
+5. 生成 30k curriculum，并固定生成 512-row base canary 指标。
+6. 运行 10+2 step resume smoke，确认 checkpoint、optimizer、scheduler、RNG 和配置可恢复。
+7. 训练器只按 Phase I -> II -> III 推进；每阶段后运行 512 canary，失败则停止。
+8. 对 base 与 adapter 使用同一 validation/test manifest 和 evaluator。
 
 ## 测试
 
