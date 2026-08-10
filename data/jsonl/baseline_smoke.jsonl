@@ -1,2 +1,0 @@
-{"audio": "/content/drive/MyDrive/qwen3-asr/audio/smoke/clean_0001.wav", "answer": "Please call me when the meeting starts.", "language": "en", "scenario": "clean", "source": "local_smoke", "is_degraded": false}
-{"audio": "/content/drive/MyDrive/qwen3-asr/audio/smoke/noise_0001.wav", "answer": "Please call me when the meeting starts.", "language": "en", "scenario": "noise", "source": "local_smoke", "is_degraded": true}

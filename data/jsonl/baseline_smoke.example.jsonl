@@ -1,3 +1,0 @@
-{"audio":"audio/smoke/clean_0001.wav","answer":"THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG","language":"en","scenario":"clean","source":"example","is_degraded":false}
-{"audio":"audio/smoke/noise_0001.wav","answer":"PLEASE CALL ME WHEN THE MEETING STARTS","language":"en","scenario":"noise","source":"example","is_degraded":true}
-

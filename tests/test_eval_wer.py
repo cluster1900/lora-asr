@@ -27,7 +27,7 @@ class EvalWerTest(unittest.TestCase):
             },
         ]
 
-        scored, metrics = eval_wer.evaluate(rows, lowercase=True, remove_punctuation=True)
+        scored, metrics = eval_wer.evaluate(rows)
 
         self.assertEqual(scored[0]["metric"], "wer")
         self.assertEqual(scored[0]["ref_len"], 3)
@@ -118,22 +118,21 @@ class EvalWerTest(unittest.TestCase):
                 "prediction": "hello world",
                 "language": "en",
                 "scenario": "noise",
-                "source_type": "real",
+                "audio_origin": "real",
             }) + "\n", encoding="utf-8")
 
             eval_wer.main([
                 "--predictions-jsonl", str(predictions),
-                "--scored-jsonl", str(root / "scored.jsonl"),
-                "--metrics-json", str(root / "metrics.json"),
-                "--metrics-by-scenario-csv", str(root / "scenario.csv"),
-                "--metrics-by-cell-csv", str(root / "cell.csv"),
+                "--output-dir", str(root / "report"),
             ])
 
-            metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+            report = root / "report"
+            metrics = json.loads((report / "metrics.json").read_text(encoding="utf-8"))
             self.assertEqual(metrics["overall"]["error_rate"], 0.0)
-            self.assertTrue((root / "scored.jsonl").is_file())
-            self.assertTrue((root / "scenario.csv").is_file())
-            self.assertTrue((root / "cell.csv").is_file())
+            self.assertTrue((report / "scored.jsonl").is_file())
+            self.assertTrue((report / "by_scenario.csv").is_file())
+            self.assertTrue((report / "by_cell.csv").is_file())
+            self.assertTrue((report / "by_language.csv").is_file())
 
 
 if __name__ == "__main__":

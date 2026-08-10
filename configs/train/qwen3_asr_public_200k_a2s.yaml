@@ -1,23 +1,20 @@
 schema_version: 1
-run_name: qwen3-asr-public-200k-a2s-v1
+run_name: qwen3-asr-public-a2s
 seed: 20260722
 
 model:
   id: Qwen/Qwen3-ASR-1.7B
   revision: 7278e1e70fe206f11671096ffdd38061171dd6e5
-  qwen_source_commit: 7c6daf77a2421100f5fb066495372c00129d39ff
   dtype: bfloat16
   attn_implementation: flash_attention_2
 
 data:
-  data_root: /content/mega-asr-runtime/data
-  train_manifest: /content/drive/MyDrive/mega-asr-artifacts/manifests/public_robust_200k_train.jsonl
-  curriculum_manifest: /content/drive/MyDrive/mega-asr-artifacts/manifests/public_robust_30k_curriculum.jsonl
-  validation_manifest: /content/drive/MyDrive/mega-asr-artifacts/manifests/public_robust_10k_val.jsonl
-  canary_manifest: /content/drive/MyDrive/mega-asr-artifacts/manifests/public_robust_512_canary.jsonl
-  smoke_manifest: /content/drive/MyDrive/mega-asr-artifacts/manifests/public_robust_smoke_128.jsonl
-  min_audio_seconds: 0.5
-  max_audio_seconds: 30.0
+  data_root: /content/qwen3-asr-runtime/data
+  train_manifest: /content/drive/MyDrive/qwen3-asr-public-a2s/manifests/public_robust_200k_train.jsonl
+  curriculum_manifest: /content/drive/MyDrive/qwen3-asr-public-a2s/manifests/public_robust_30k_curriculum.jsonl
+  validation_manifest: /content/drive/MyDrive/qwen3-asr-public-a2s/manifests/public_robust_10k_val.jsonl
+  canary_manifest: /content/drive/MyDrive/qwen3-asr-public-a2s/manifests/public_robust_512_canary.jsonl
+  smoke_manifest: /content/drive/MyDrive/qwen3-asr-public-a2s/manifests/public_robust_smoke_128.jsonl
   sampling_rate: 16000
 
 lora:
@@ -47,7 +44,7 @@ training:
   dataloader_num_workers: 4
   gradient_checkpointing: true
   group_by_duration: true
-  output_dir: /content/drive/MyDrive/mega-asr-artifacts/runs/qwen3-asr-public-200k-a2s-v1
+  output_dir: /content/drive/MyDrive/qwen3-asr-public-a2s/runs/main
 
 phases:
   - name: phase_1
@@ -55,7 +52,6 @@ phases:
     manifest: curriculum_manifest
     logical_epochs: 2
     curriculum_thresholds: [0.30, 0.50, 0.70]
-    curriculum_equal_segments: true
     active_scope: upper_audio_projection
     audio_learning_rate: 0.000001
     decoder_learning_rate: 0.0
@@ -78,18 +74,11 @@ phases:
     warmup_ratio: 0.03
 
 evaluation:
-  canary_size: 512
-  base_canary_metrics: /content/drive/MyDrive/mega-asr-artifacts/base/validation_canary_512.metrics.json
+  base_canary_metrics: /content/drive/MyDrive/qwen3-asr-public-a2s/base/validation_canary_512.metrics.json
   min_valid_output_rate: 0.95
   max_relative_robust_regression: 0.15
   max_failure_rate_increase: 0.05
-  run_canary_after_each_phase: true
 
 release:
   adapter_dir: release/adapter
   manifest: release/release_manifest.json
-
-assumptions:
-  learning_rate_source: Mega-ASR Appendix E.1 Table 22 and public 1e-6 command
-  phase_1_schedule: Equal optimizer-step thirds across cumulative base-error thresholds; paper does not disclose the exact allocation.
-  teacher: Disabled; gold transcripts and BF16 base error are sufficient.

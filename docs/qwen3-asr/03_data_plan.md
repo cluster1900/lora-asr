@@ -1,183 +1,42 @@
 # 数据方案
 
-最后更新：2026-07-22
+## 背景与范围
 
-## 背景
+第一轮使用公开数据快速形成可复现闭环，不生成自有训练语音。训练覆盖 clean、noise、reverb、
+far_field、dropout 及 Voices-in-the-Wild 的其余场景；固定 benchmark 不进入训练。
 
-历史数据只有 120 条独立 TTS train source，增加退化副本不能替代 speaker、文本和真实
-声学多样性。第一轮正式训练直接使用公开鲁棒数据，不再开发自建 noise/RIR 工厂。
+## 来源与切分
 
-## 范围
+- Robust train/validation：`zhifeixie/Voices-in-the-Wild-2M`，160k/8k。
+- Robust test：`zhifeixie/Voices-in-the-Wild-Bench`，5k。
+- English clean：LibriSpeech，train 20k、validation 1k，另保留官方 test-clean。
+- Chinese clean：AISHELL-1，train 20k、validation 1k，另保留官方 test。
 
-本轮只准备：
+revision、license、split 和配额固定在 `configs/data/public_robust_200k.yaml`。总计 200k train、
+10k validation、512 canary、30k curriculum 和 5k robust test。
 
-- 200k train。
-- 10k validation。
-- 30k A2S curriculum。
-- Voices-in-the-Wild-Bench 5k fixed test。
-- LibriSpeech test-clean 与 AISHELL-1 test clean regression。
+## Manifest
 
-不做 200k 全量 difficulty scoring，不调用 teacher，不生成新的合成退化。
+每行 JSON 必须含音频路径、目标文本、语言、场景、真实/合成来源、数据集/revision/split/index、
+source utterance ID、时长、license、seed 和音频 SHA-256。选择由固定 seed 决定，与输入行顺序无关。
 
-## 数据源
+音频存 Colab 本地 SSD；Google Drive 保存 shard、manifest、hash 和结果。大音频、缓存和生成物不
+提交 Git。
 
-| 用途 | 数据源 | 当前事实 |
-| --- | --- | --- |
-| robust train/val | `zhifeixie/Voices-in-the-Wild-2M` | 645,925 条，54 split（7 atomic + 47 compound），约 197.5 GB，Apache-2.0，非 gated |
-| English clean | LibriSpeech | train-clean 子集用于 retention，test-clean 用于固定 test |
-| Chinese clean | AISHELL-1 | train/dev 用于 retention/validation，test 用于固定 test |
-| robust test | `zhifeixie/Voices-in-the-Wild-Bench` | 5,000 条，中英、real/synthetic、8 类 condition |
+## 质量检查
 
-每个数据源必须 pin revision 或发布版本，并把 license、revision 和 source split 写入
-manifest 与统计文件。
+- 音频存在、可读、0.5-30 秒，目标文本非空。
+- train/validation/test 的 source ID 和 audio hash 不重叠。
+- 行数、语言和 scenario 配额完全匹配配置。
+- 正式 `build/validate` 必须检查音频存在或可解码，不提供跳过行数合同的开关。
+- 单条错误进入 rejects；正式 build 有任何硬错误即失败。
+- curriculum 只使用 `base_error_rate < 0.70` 的 BF16 base 评分，不用预测文本替代 gold label。
 
-## Metadata-only probe
+## 测试与验收
 
-下载音频前先读取 Hub revision、dataset card、split 和 parquet metadata，只验证字段、行数、
-语言推断、source identity 候选、配额和磁盘预算。当前 Hub card 同时写有“54 compound
-scenarios”和“54 subset categories”，但 pinned revision 实际发布为 54 个 split；实现以实际
-split 列表为准，不把 54 当作 compound 数量。
+先用 128-row smoke 覆盖全部 robust split 与两种语言，再运行正式 build。验收产物包括各 manifest、
+sources、stats、validation report、rejects 和 SHA-256。未完成真实音频 staging 前，数据阶段不算完成。
 
-Probe 必须验证 `answer`、`name`、`index`、`file_name`、`subset`，并抽样确认同一 clean
-source 的跨退化 `name` 关系。结论写入 report；source identity 无法稳定派生时不开始 full
-物化。
+## 影响
 
-## 固定配比
-
-### Train 200k
-
-- Robust 160k：7 个 atomic split 各 16k，共 112k；47 个 compound split 共 48k。
-- English clean 20k。
-- Chinese clean 20k。
-- Robust 各 condition 内 English/Chinese 尽量 1:1，任何配额不足必须硬失败。
-
-Compound quota 固定为：split 名排序后每个先取 1,021 条，剩余 13 条依次分配给前 13 个
-split。不得使用按遍历速度动态填满的方式，否则重跑可能改变场景分布。
-
-### Validation 10k
-
-- Robust 8k：atomic 5.6k（每个 800）+ compound 2.4k（按 47 split 确定性分配）。
-- English clean 1k。
-- Chinese clean 1k。
-
-Validation 必须包含 clean，用于每阶段 canary 和最终 checkpoint 的 clean regression；不再
-用于 50%/100% checkpoint sweep。
-
-### A2S Curriculum 30k
-
-从 robust train 按固定 seed、language 和 split 分层产生候选，使用 BF16 base prediction
-与 gold label 计算 `base_error_rate`。English 为 WER，Chinese 为 CER。持续读取固定候选
-顺序直到得到 30k 个 `<0.70` 样本，并生成 `<0.30`、`<0.50`、`<0.70` 三个累计视图。
-Curriculum 是 train 的派生视图，不是新 split，不允许混入 validation/test。
-
-## Canonical JSONL
-
-训练、validation 和 test 统一使用一个 schema：
-
-```json
-{
-  "sample_id": "vitw2m:noise:123",
-  "audio": "audio/train/shard-0001/sample-000123.flac",
-  "answer": "reference transcript",
-  "language": "en",
-  "scenario": "noise",
-  "condition_group": "atomic",
-  "audio_origin": "synthetic",
-  "source_dataset": "zhifeixie/Voices-in-the-Wild-2M",
-  "source_revision": "a8a35d3319737190d6fd3d39157b258eaab35980",
-  "source_split": "noise",
-  "source_index": 123,
-  "source_utterance_id": "derived-stable-id",
-  "speaker_id": null,
-  "duration_s": 7.42,
-  "license": "apache-2.0",
-  "seed": 20260711,
-  "audio_sha256": "..."
-}
-```
-
-字段约定：
-
-- `answer` 是唯一 reference 字段；不再同时维护 `text` 和 `answer`。
-- `language` 只允许 `en` 或 `zh`。Trainer 在运行时构造
-  `language English<asr_text>...` 或 `language Chinese<asr_text>...`。
-- `scenario` 使用标准 condition 名称；`condition_group` 只允许
-  `clean|atomic|compound`。
-- `audio_origin` 在 Bench 中使用 `real|synthetic`，clean test 使用 `clean`。
-- `source_dataset` 取代历史 `source` 字段。
-- `audio` 是相对 `data_root` 的路径；训练前解析后的真实文件必须存在。
-- Curriculum 行额外包含 `base_prediction`、`base_error_rate` 和 `base_metric`；其他 train
-  行不需要这些字段。
-
-Voices-in-the-Wild-2M 当前没有显式 language 字段。语言由 gold transcript 使用固定规则
-推断；中英文混合或无法确定的样本写入 rejects，不调用外部模型猜语言或改写 transcript。
-
-## Source 分组与防泄漏
-
-同一 clean source 的多个退化版本必须先归并成一个 `source_utterance_id`，再按 group 切分。
-派生优先级：公开 `name` -> 可解析的 file/audio path -> 数据集稳定 index 规则。
-若无法可靠派生，样本不得进入正式 train/validation。
-
-硬门槛：
-
-- train/validation/test 的 `sample_id` overlap 为 0。
-- train/validation 的 `source_utterance_id` overlap 为 0。
-- train/validation/Bench 的相同公开 name、source path、benchmark id 和 audio SHA256 overlap
-  为 0。
-- LibriSpeech/AISHELL-1 按官方 split，能获得 speaker id 时额外报告 speaker overlap。
-
-归一化 transcript overlap 只报告并抽查，不作为通用硬失败条件；不同 speaker 说同一句话
-不等于数据泄漏。若 transcript overlap 同时伴随相同 source metadata，则按 source 泄漏处理。
-
-## 时长与质量过滤
-
-第一轮只保留 0.5-30 秒音频。以下样本写入 rejects：
-
-- 空 transcript 或语言不明。
-- 音频不存在、无法解码、时长异常、NaN/Inf。
-- 峰值或静音比例明显异常。
-- source identity 缺失，无法保证 group split。
-- 与 fixed test 存在硬 overlap。
-
-每个 reject 保存 `reason` 和原始 source locator，不能静默丢弃。
-
-## 缓存与 Colab I/O
-
-公开 robust 数据压缩体积很大，160k 预计仍为几十 GB。为避免 Google Drive 小文件 I/O：
-
-1. Drive 或其他持久盘只缓存原始 parquet/打包 tar shard 和构建状态。
-2. Notebook 启动后把需要的 shard staging 到 `/content/mega-asr-runtime/`。
-3. 在本地 SSD 解包/物化音频并生成 resolved manifest。
-4. Trainer 只读本地 SSD。
-5. Drive 只持续写 checkpoint、manifest、stats 和 prediction 增量。
-
-不得把 200k 个独立 wav/flac 逐个写入或逐个读取 Google Drive。
-
-## 输出
-
-- `data/jsonl/public_robust_200k_train.jsonl`
-- `data/jsonl/public_robust_10k_val.jsonl`
-- `data/jsonl/public_robust_30k_curriculum.jsonl`
-- `data/jsonl/vitw_bench_5k_test.jsonl`
-- `data/jsonl/public_clean_tests.jsonl`
-- `data/jsonl/public_robust_200k_stats.json`
-- `data/jsonl/public_robust_200k_validation.json`
-- `data/jsonl/public_robust_200k_rejects.jsonl`
-- `data/jsonl/public_robust_200k_sources.json`
-
-## 测试
-
-- `--help`、`--probe` 和 `--smoke` 可执行。
-- Metadata probe 不下载音频即可验证 revision、54 split、字段、配额和磁盘预算。
-- Smoke 覆盖 en/zh、clean、7 atomic、compound 和 Bench real/synthetic。
-- Full 行数精确等于 200k/10k/5k。
-- 所有 resolved audio 路径存在且可解码。
-- 固定 seed/revision/config 重跑得到相同 sample id 顺序和 manifest hash。
-- Curriculum 精确 30k、全部来自 train、`base_error_rate < 0.70`，三个累计视图单调包含。
-- 硬 overlap 全部为 0，transcript overlap 单独报告。
-- 每个 language/condition 抽听至少 10 条并记录结果。
-
-## 验收与影响
-
-`public_robust_200k_validation.json` 所有硬检查通过才允许训练。旧 TTS、MVP 150 和 v6A
-保留为 smoke/history，不再参与正式模型选择，也不能用于证明数据规模。
+本次精简删除历史本地 TTS/MVP 数据。后续测试不得依赖已提交音频，测试 fixture 应在临时目录构造。

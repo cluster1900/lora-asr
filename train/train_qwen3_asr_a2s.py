@@ -26,7 +26,6 @@ from typing import Any, Iterable, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = PROJECT_ROOT / "configs/train/qwen3_asr_public_200k_a2s.yaml"
-DEFAULT_SNAPSHOT = PROJECT_ROOT / "outputs/lora_probe/qwen3_asr_1_7b/module_snapshot.json"
 PHASE_NAMES = ("phase_1", "phase_2", "phase_3")
 
 EXPECTED_GROUPS = {
@@ -167,11 +166,33 @@ def target_specs_from_records(records: Iterable[dict[str, Any]]) -> list[TargetS
     return sorted(targets, key=lambda item: item.canonical_name)
 
 
-def target_specs_from_snapshot(path: Path) -> list[TargetSpec]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    records = payload.get("modules", [])
-    if not isinstance(records, list):
-        raise ValueError(f"Snapshot has no modules list: {path}")
+def expected_target_specs() -> list[TargetSpec]:
+    """Build the pinned Qwen3-ASR-1.7B target contract without generated files."""
+    records: list[dict[str, str]] = []
+    for layer in range(24):
+        prefix = f"thinker.audio_tower.layers.{layer}"
+        records.extend(
+            {"module_name": f"{prefix}.self_attn.{name}", "class_name": "Linear"}
+            for name in ("q_proj", "k_proj", "v_proj", "out_proj")
+        )
+        records.extend(
+            {"module_name": f"{prefix}.{name}", "class_name": "Linear"}
+            for name in ("fc1", "fc2")
+        )
+    records.extend(
+        {"module_name": name, "class_name": "Linear"}
+        for name in sorted(_PROJECTION_NAMES)
+    )
+    for layer in range(28):
+        prefix = f"thinker.model.layers.{layer}"
+        records.extend(
+            {"module_name": f"{prefix}.self_attn.{name}", "class_name": "Linear"}
+            for name in ("q_proj", "k_proj", "v_proj", "o_proj")
+        )
+        records.extend(
+            {"module_name": f"{prefix}.mlp.{name}", "class_name": "Linear"}
+            for name in ("gate_proj", "up_proj", "down_proj")
+        )
     return target_specs_from_records(records)
 
 
@@ -407,8 +428,6 @@ def validate_config(config: dict[str, Any]) -> None:
         )
     if config["model"].get("dtype") != "bfloat16":
         raise ValueError("Formal A2S comparison requires model.dtype=bfloat16")
-    if config.get("assumptions", {}).get("teacher") is None:
-        raise ValueError("Config must record the no-teacher decision")
 
 
 def build_plan(config: dict[str, Any]) -> dict[str, Any]:
@@ -436,7 +455,6 @@ def build_plan(config: dict[str, Any]) -> dict[str, Any]:
         "effective_batch_size": config["training"]["effective_batch_size"],
         "sample_exposure": 460000,
         "phases": phases,
-        "teacher": "disabled",
     }
 
 
@@ -449,14 +467,6 @@ def resolve_audio_path(audio: str, manifest: Path, data_root: Path) -> Path:
         if candidate.exists():
             return candidate.resolve()
     return candidates[0]
-
-
-def answer_from_row(row: dict[str, Any]) -> str:
-    for field in ("answer", "text", "transcript", "reference"):
-        value = row.get(field)
-        if value is not None and str(value).strip():
-            return str(value).strip()
-    raise ValueError("Row is missing a non-empty answer")
 
 
 def prepare_rows(
@@ -483,22 +493,26 @@ def prepare_rows(
     missing: list[str] = []
     for index, source in enumerate(rows):
         row = dict(source)
-        audio_value = row.get("audio") or row.get("audio_path")
+        sample_id = str(row.get("sample_id") or "").strip()
+        audio_value = row.get("audio")
+        answer = str(row.get("answer") or "").strip()
+        if not sample_id:
+            raise ValueError(f"Row {index + 1} has no sample_id")
         if not audio_value:
-            raise ValueError(f"Row {index + 1} has no audio path")
+            raise ValueError(f"Row {index + 1} has no audio")
+        if not answer:
+            raise ValueError(f"Row {index + 1} has no answer")
         resolved_audio = resolve_audio_path(str(audio_value), manifest, data_root)
         if not resolved_audio.is_file():
             missing.append(str(resolved_audio))
             if len(missing) >= 10:
                 break
-        duration = float(
-            row.get("duration", row.get("duration_s", row.get("duration_seconds", 0.0))) or 0.0
-        )
+        duration = float(row.get("duration_s") or 0.0)
         prepared.append(
             {
                 **row,
                 "audio": str(resolved_audio),
-                "text": answer_from_row(row),
+                "text": answer,
                 "prompt": str(row.get("prompt", "")),
                 "duration": duration,
             }
@@ -658,7 +672,7 @@ def load_dataset_for_phase(
     return dataset
 
 
-def load_qwen_runtime(config: dict[str, Any]) -> tuple[Any, Any, Any]:
+def load_qwen_runtime(config: dict[str, Any]) -> tuple[Any, Any]:
     import torch
     from qwen_asr import Qwen3ASRModel
     from transformers import GenerationConfig
@@ -672,16 +686,12 @@ def load_qwen_runtime(config: dict[str, Any]) -> tuple[Any, Any, Any]:
         "device_map": None,
         "attn_implementation": model_config.get("attn_implementation", "flash_attention_2"),
     }
-    try:
-        wrapper = Qwen3ASRModel.from_pretrained(model_config["id"], **kwargs)
-    except TypeError:
-        kwargs["torch_dtype"] = kwargs.pop("dtype")
-        wrapper = Qwen3ASRModel.from_pretrained(model_config["id"], **kwargs)
+    wrapper = Qwen3ASRModel.from_pretrained(model_config["id"], **kwargs)
     model = wrapper.model
     patch_outer_forward(model)
     model.generation_config = GenerationConfig.from_model_config(model.config)
     model.config.use_cache = False
-    return wrapper, model, wrapper.processor
+    return model, wrapper.processor
 
 
 def inject_or_load_adapter(
@@ -899,19 +909,13 @@ def run_canary(
     phase_name: str,
     adapter_dir: Path,
     output_root: Path,
-    skip_canary: bool,
 ) -> None:
-    if skip_canary or not bool(config["evaluation"].get("run_canary_after_each_phase", True)):
-        return
     manifest = Path(config["data"]["canary_manifest"]).expanduser()
     if not manifest.is_file():
         raise FileNotFoundError(f"Canary manifest is required after {phase_name}: {manifest}")
     canary_dir = output_root / "canary" / phase_name
     predictions = canary_dir / "predictions.jsonl"
     metrics = canary_dir / "metrics.json"
-    scored = canary_dir / "scored.jsonl"
-    scenario_csv = canary_dir / "by_scenario.csv"
-    language_csv = canary_dir / "by_language.csv"
     inference_command = [
         sys.executable,
         str(PROJECT_ROOT / "inference/qwen3_asr_infer.py"),
@@ -919,16 +923,10 @@ def run_canary(
         str(manifest),
         "--output-jsonl",
         str(predictions),
-        "--model-id",
-        str(config["model"]["id"]),
-        "--model-revision",
-        str(config["model"]["revision"]),
         "--adapter-dir",
         str(adapter_dir),
         "--audio-root",
         str(config["data"]["data_root"]),
-        "--dtype",
-        "bfloat16",
         "--resume",
     ]
     evaluation_command = [
@@ -936,14 +934,8 @@ def run_canary(
         str(PROJECT_ROOT / "evaluation/eval_wer.py"),
         "--predictions-jsonl",
         str(predictions),
-        "--scored-jsonl",
-        str(scored),
-        "--metrics-json",
-        str(metrics),
-        "--metrics-by-scenario-csv",
-        str(scenario_csv),
-        "--metrics-by-language-csv",
-        str(language_csv),
+        "--output-dir",
+        str(canary_dir),
     ]
     canary_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(inference_command, cwd=PROJECT_ROOT, check=True)
@@ -1013,12 +1005,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--data-root", type=Path, default=None)
-    parser.add_argument("--module-snapshot", type=Path, default=DEFAULT_SNAPSHOT)
-    parser.add_argument("--adapter-dir", type=Path, default=None)
-    parser.add_argument("--phase", choices=("all",) + PHASE_NAMES, default="all")
     parser.add_argument("--resume", default="", help="Empty, 'auto', or a checkpoint directory")
     parser.add_argument("--smoke-steps", type=int, default=0, help="Run only a 128-row Phase-I smoke")
-    parser.add_argument("--skip-canary", action="store_true", help="Allowed for smoke/development only")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--print-plan", action="store_true")
     return parser.parse_args(argv)
@@ -1033,27 +1021,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.print_plan:
         print(json.dumps(plan, ensure_ascii=False, indent=2))
 
-    snapshot_targets = target_specs_from_snapshot(args.module_snapshot.expanduser().resolve())
+    expected_targets = expected_target_specs()
     expected_groups = {key: int(value) for key, value in config["lora"]["expected_groups"].items()}
-    validate_target_map(snapshot_targets, expected_groups, int(config["lora"]["expected_total"]))
+    validate_target_map(expected_targets, expected_groups, int(config["lora"]["expected_total"]))
     for phase in config["phases"]:
         count = len(
             active_target_names(
-                snapshot_targets,
+                expected_targets,
                 phase["active_scope"],
                 int(config["lora"]["phase_1_upper_audio_layers"]),
             )
         )
         expected = {"phase_1": 27, "phase_2": 196, "phase_3": 343}[phase["name"]]
         if count != expected:
-            raise ValueError(f"Snapshot {phase['name']} scope mismatch: expected={expected}, actual={count}")
+            raise ValueError(f"Target {phase['name']} scope mismatch: expected={expected}, actual={count}")
     if args.validate_only:
         print(
             json.dumps(
                 {
                     "status": "ok",
-                    "target_map_hash": target_map_hash(snapshot_targets),
-                    "target_groups": target_group_counts(snapshot_targets),
+                    "target_map_hash": target_map_hash(expected_targets),
+                    "target_groups": target_group_counts(expected_targets),
                     "plan": plan,
                 },
                 ensure_ascii=False,
@@ -1064,8 +1052,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.smoke_steps < 0:
         raise ValueError("--smoke-steps must be non-negative")
-    if args.skip_canary and not args.smoke_steps:
-        raise ValueError("--skip-canary is only allowed with --smoke-steps")
 
     output_root = (
         args.output_dir.expanduser().resolve()
@@ -1077,11 +1063,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.data_root
         else Path(config["data"]["data_root"]).expanduser()
     )
-    wrapper, base_model, processor = load_qwen_runtime(config)
+    base_model, processor = load_qwen_runtime(config)
     runtime_targets = discover_runtime_targets(base_model)
     validate_target_map(runtime_targets, expected_groups, int(config["lora"]["expected_total"]))
-    if target_map_hash(runtime_targets) != target_map_hash(snapshot_targets):
-        raise ValueError("Runtime target map differs from the controlled module snapshot")
+    if target_map_hash(runtime_targets) != target_map_hash(expected_targets):
+        raise ValueError("Runtime target map differs from the pinned Qwen3-ASR-1.7B contract")
 
     output_root.mkdir(parents=True, exist_ok=True)
     state = load_pipeline_state(output_root)
@@ -1089,9 +1075,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("Pipeline target-map hash differs from this runtime")
     save_resolved_contract(output_root, config_path, config, runtime_targets)
 
-    adapter_source = args.adapter_dir.expanduser().resolve() if args.adapter_dir else None
-    if adapter_source is None and state.get("last_adapter"):
-        adapter_source = Path(state["last_adapter"])
+    adapter_source = Path(state["last_adapter"]) if state.get("last_adapter") else None
     model = inject_or_load_adapter(base_model, runtime_targets, config["lora"], adapter_source)
 
     if args.smoke_steps:
@@ -1118,15 +1102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
 
-    selected_phases = list(config["phases"])
-    if args.phase != "all":
-        selected_phases = [phase for phase in selected_phases if phase["name"] == args.phase]
-        prior_names = list(PHASE_NAMES[: PHASE_NAMES.index(args.phase)])
-        if prior_names and not all(name in state.get("completed_phases", []) for name in prior_names):
-            if args.adapter_dir is None:
-                raise ValueError(f"Starting {args.phase} requires completed prior phases or --adapter-dir")
-
-    for phase in selected_phases:
+    for phase in config["phases"]:
         phase_name = phase["name"]
         if phase_name in state.get("completed_phases", []):
             print(f"[pipeline] skip completed {phase_name}")
@@ -1160,7 +1136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             phase_dir,
             phase_resume,
         )
-        run_canary(config, phase_name, final_adapter, output_root, args.skip_canary)
+        run_canary(config, phase_name, final_adapter, output_root)
         completed = list(state.get("completed_phases", []))
         completed.append(phase_name)
         state.update(

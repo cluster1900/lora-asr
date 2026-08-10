@@ -1,7 +1,6 @@
 project:
-  name: qwen3-asr-public-robust-200k
   seed: 20260722
-  data_root: /content/mega-asr-runtime/data
+  data_root: /content/qwen3-asr-runtime/data
   output_dir: data/jsonl
 
 sources:

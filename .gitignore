@@ -11,18 +11,16 @@ venv/
 env/
 conda/
 
-# Logs and outputs
+# Generated data and artifacts
+audio/
+checkpoints/
+data/
 logs/
+outputs/
 *.log
 runs/
 wandb/
 tensorboard/
-
-# Regenerable v6A hard-profile data
-data/v6a_hard_profile/
-data/jsonl/v6a_hard_profile_*.local.jsonl
-data/jsonl/v6a_hard_profile_*.local.json
-data/jsonl/v6a_hard_profile_*.difficulty.local.jsonl
 
 # Checkpoints and model weights
 ckpt/

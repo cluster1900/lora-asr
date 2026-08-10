@@ -1,6 +1,0 @@
-group,samples,num_edits,ref_len,error_rate,empty_output_rate
-clean,30,4,479,0.008351,0.0
-dropout,30,366,479,0.764092,0.0
-far_field,30,474,479,0.989562,0.0
-noise,30,211,479,0.440501,0.0
-reverb,30,255,479,0.532359,0.0

@@ -1,117 +1,47 @@
 # 开发进度
 
-最后更新：2026-08-05
+最后更新：2026-08-10
 
 ## 当前状态
 
-历史探索闭环已完成。新的快速主线已经完成 manifest 选择/curriculum、统一推理、双语评测和
-单-adapter A2S runner 的最小代码；正式数据物化、Colab 10+2 GPU smoke 和训练结果尚未执行。
+仓库已重置为单一 A2S 主线。历史 v1-v6A 训练、合成数据、checkpoint、预测结果、router
+占位和旧 Colab notebook 已退出当前设计，不再保留其实现或复现材料。
 
-因此当前应区分：**实现 2/3，正式运行 0/3**。未跑 GPU 和固定测试前不能把代码完成误写成
-模型效果完成。
+已实现：
 
-快速主线固定为：
+- 固定公开数据配额、JSONL 校验、泄漏检查、512-row canary 和 30k curriculum。
+- 单 adapter 三阶段 A2S runner，包含 target 合同、checkpoint/resume 和阶段 canary。
+- BF16 base/adapter 统一推理，逐条持久化并支持 resume。
+- English WER、Chinese CER、scenario/32-cell 聚合和失败输出统计。
+- 上述核心逻辑的本地自动测试。
 
-1. 完成 metadata probe，准备公开 200k train、10k validation、30k curriculum pool 和
-   固定 test。
-2. 实现 Qwen 官方 Trainer 薄适配、A2S 三阶段 target 切换和 10+2 resume smoke。
-3. 执行一次 A2S 编排训练，经过阶段 512 canary、最终 validation 和固定 test。
+尚未完成：
 
-唯一执行合同见 `02_development_plan.md`。
+- 从干净 Colab 环境物化公开音频和正式 manifest。
+- 10+2 step GPU smoke、checkpoint 加载和继续训练验证。
+- Phase I/II/III 正式训练、canary、10k validation 和固定 test。
+- release adapter、processor、结果摘要和 Mega-ASR 同 evaluator 外部 baseline。
 
-## 历史结果
+因此当前状态是“代码合同可本地验证，正式数据与 GPU 结果未验证”。
 
-已完成：
+## 本次重置验证
 
-- Qwen3-ASR baseline 推理、JSONL prediction、WER/CER 和错误分析。
-- MVP 150 合成 hard-profile test。
-- Qwen3-ASR 模块探测、Unsloth 兼容性检查和 Transformers + PEFT smoke。
-- LoRA v1-v5 训练与 held-out 评测。
-- 4bit base recheck 与 v3-v5 checkpoint 对比。
-- v6A 合成数据入口和 difficulty 脚本 smoke。
-
-关键指标：
-
-| 模型 | overall | noise | reverb | noise+reverb | clean |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 4bit base recheck | 0.550313 | 0.450939 | 0.544885 | 0.497912 | 0.008351 |
-| v3 target-focus | 0.540292 | 0.413361 | 0.515658 | 0.464509 | 0.008351 |
-
-v3 相对 4bit base 的 noise+reverb 改善 6.71%，overall 改善 1.82%。但历史非量化
-baseline overall 为 0.483925，明显优于 v3，因此不能把量化损失误判为 LoRA 收益。
-
-更重要的是：MVP 150 只有 30 条独立 TTS utterance；v3 对 150 行中的 128 行 edit 数完全
-不变，仅 12 行改善、10 行变差。历史结果只说明 LoRA 通路可运行，没有证明可泛化的鲁棒
-提升。
-
-## 当前代码事实
-
-可复用：
-
-- 数据 JSONL、音频生成和校验基础。
-- Qwen3-ASR base/LoRA 历史推理入口。
-- WER/CER、scenario 聚合和错误分析。
-- 模块快照与 343 个候选 Linear target 证据。
-
-历史入口不能直接用于 200k：
-
-- `train/train_qwen3_asr_lora.py` 强制 batch size 1，逐样本重复处理音频。
-- YAML 中的 validation、epochs、部分 include_scenarios 没有形成可靠训练合同。
-- 没有 scheduler、grad clip、训练期 validation 或 best-checkpoint。
-- checkpoint 只保存 adapter/processor，不能恢复 optimizer、scheduler、RNG 和 global step。
-- 历史 base/LoRA 推理实现重复，整批结束才写结果；新统一入口已替代它们。
-- 历史 evaluator 不能计算 32-cell 指标且会错误处理空 reference；新 evaluator 已修正。
-- 当前仍没有 CI；本地已增加高风险合同的 stdlib 自动测试。
-
-当前 checkout 的 v3-v5 adapter 目录缺少 `adapter_model.safetensors`，不能从仓库直接复载
-历史最佳模型；历史 prediction 和 metrics 仍可用于审计。
-
-## 快速主线 Checklist
-
-- [x] `scripts/prepare_public_robust_manifests.py`
-- [x] `configs/data/public_robust_200k.yaml`
-- [x] `requirements-colab.txt`
-- [x] `train/train_qwen3_asr_a2s.py`
-- [x] `configs/train/qwen3_asr_public_200k_a2s.yaml`
-- [ ] `notebooks/12_fast_finetune_colab.ipynb`
-- [x] 统一可恢复推理入口
-- [x] 32-cell evaluator 与最小自动测试
-- [ ] metadata-only probe、200k/10k/5k manifest 和 validation report
-- [ ] BF16 base validation/test prediction 与 30k curriculum scoring
-- [ ] 10+2 resume 和 A2S target-switch smoke
-- [ ] Phase I/II/III 512 canary
-- [ ] 最终 10k validation
-- [ ] 固定 test 与 release adapter
-- [ ] Mega-ASR 发布模型同 evaluator 外部 baseline
-
-## 当前固定决策
-
-- Train：160k robust + 20k English clean + 20k Chinese clean。
-- Validation：8k robust + 1k English clean + 1k Chinese clean。
-- Precision：BF16；正式效果不使用 4bit base 口径。
-- LoRA：单 adapter 预注入 343 target；Phase I 只启用 upper-4 audio+projection 27 个，
-  Phase II 只启用 decoder 196 个，Phase III 启用全部 343 个。
-- 训练：30k x 2 epoch -> 200k x 1 epoch -> 200k x 1 epoch，effective batch 128。
-- 学习率：Phase I/II `1e-6`；Phase III audio/projection `5e-7`、decoder `1e-6`。
-- Direct SFT 前置实验、teacher、router、RL、自建增强和全量 difficulty scoring 不进入第一轮。
+- `python3 -m unittest discover -s tests -v`：38 项通过。
+- 四个正式入口的 `--help` 与 `py_compile`：通过。
+- 训练配置 `--validate-only --print-plan`：通过，target 分组为 96/48/3/112/84，合计 343。
+- Hub metadata probe：本机缺少 `datasets`，未做真实远端验证；该依赖已固定在 Colab requirements。
+- 新训练入口已去除旧 adapter 注入、跳阶段、旧 manifest 字段和旧依赖参数兼容路径。
+- 推理入口已固定 BF16 运行合同，删除会造成 base/adapter 对比漂移的覆盖参数。
+- YAML 已删除代码不读取的重复/占位字段；数据集 split 作为后续 staging 合同保留。
 
 ## 下一步
 
-补齐 pinned Hub 数据到四份 candidate JSONL/本地音频的可恢复 staging，并把它接入唯一 Notebook
-12。随后依次运行 metadata probe、128-row manifest smoke、Trainer 10+2 GPU resume、golden
-batch 和 target-switch smoke；全部通过后才启动正式 A2S。
+1. 新建唯一 Colab notebook，完成依赖安装、Drive 挂载和 candidate staging。
+2. 生成 128-row smoke manifest，跑 BF16 base clean/degraded 推理。
+3. 跑 10 step、保存 checkpoint，再继续 2 step；核对 target、状态和配置。
+4. 门禁通过后才启动完整数据和三阶段训练。
 
-## 未完成风险
+## 验收
 
-- 公开 robust 数据体积约 197.5 GB，错误的 Drive 小文件方案会比训练更慢。
-- 当前数据 CLI 从已物化 candidate JSONL 开始，Hub 下载/落盘 staging 与 Notebook 12 仍未实现；
-  在补齐前还不是从干净 Colab 可一键执行的闭环。
-- Voices-in-the-Wild-2M 缺少显式 language/speaker 字段，需要先用 metadata probe 验证语言
-  规则、`name` source identity 与配额。
-- A2S decoder/joint 阶段可能造成 clean regression 或 hallucination，必须依赖 20% clean 与
-  阶段 canary。
-- 200k A2S 仍小于论文训练规模且不含 RL，目标是快速接近 Mega-ASR-Base，不承诺完整
-  Mega-ASR 绝对指标。
-
-未生成 BF16 正式结果、release adapter 和 Mega-ASR 同 evaluator 外部 baseline 前，阶段不得
-标记完成，也不得声称达到 Mega-ASR。
+只有固定 manifest、配置、随机种子、base 对比、WER/CER、原始预测和 release artifacts
+全部存在时，才可标记训练阶段完成。当前不得声称达到或超过 Mega-ASR。

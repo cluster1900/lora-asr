@@ -28,26 +28,6 @@ BENCH_SCENARIOS = (
     "obstructed",
     "recording",
 )
-LANGUAGE_ALIASES = {
-    "en": "en",
-    "eng": "en",
-    "english": "en",
-    "zh": "zh",
-    "cn": "zh",
-    "zho": "zh",
-    "cmn": "zh",
-    "chinese": "zh",
-    "mandarin": "zh",
-}
-ORIGIN_ALIASES = {
-    "real": "real",
-    "recorded": "real",
-    "natural": "real",
-    "synthetic": "synthetic",
-    "synth": "synthetic",
-    "syn": "synthetic",
-    "generated": "synthetic",
-}
 FAILURE_FIELDS = (
     "inference_errors",
     "empty_outputs",
@@ -80,31 +60,20 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def has_cjk(text: str) -> bool:
-    return any("\u4e00" <= char <= "\u9fff" for char in text)
-
-
-def normalize_text(text: str, lowercase: bool, remove_punctuation: bool) -> str:
-    value = str(text or "").strip()
-    if lowercase:
-        value = value.lower()
-    if remove_punctuation:
-        value = "".join(
-            " " if unicodedata.category(char).startswith("P") else char
-            for char in value
-        )
+def normalize_text(text: str) -> str:
+    value = str(text or "").strip().lower()
+    value = "".join(
+        " " if unicodedata.category(char).startswith("P") else char
+        for char in value
+    )
     return re.sub(r"\s+", " ", value).strip()
 
 
-def canonical_language(item: dict[str, Any], reference: str, prediction: str) -> str:
+def canonical_language(item: dict[str, Any]) -> str:
     declared = str(item.get("language") or "").strip().lower()
-    if declared in LANGUAGE_ALIASES:
-        return LANGUAGE_ALIASES[declared]
-    return "zh" if has_cjk(reference + prediction) else "en"
-
-
-def metric_for_item(item: dict[str, Any], ref: str, pred: str) -> str:
-    return "cer" if canonical_language(item, ref, pred) == "zh" else "wer"
+    if declared not in {"en", "zh"}:
+        raise ValueError(f"Invalid language for {row_identity(item)}: {declared!r}")
+    return declared
 
 
 def tokenize(text: str, metric: str) -> list[str]:
@@ -142,16 +111,15 @@ def has_repetition(tokens: Sequence[str]) -> bool:
 
 
 def source_origin(item: dict[str, Any]) -> str:
-    value = str(item.get("audio_origin") or item.get("source_type") or "unknown")
-    return ORIGIN_ALIASES.get(value.strip().lower(), value.strip().lower() or "unknown")
+    return str(item.get("audio_origin") or "unknown").strip().lower()
 
 
 def scenario_name(item: dict[str, Any]) -> str:
-    return str(item.get("scenario") or item.get("condition") or "unknown").strip() or "unknown"
+    return str(item.get("scenario") or "unknown").strip() or "unknown"
 
 
 def row_identity(item: dict[str, Any], fallback: int | None = None) -> str:
-    for field in ("sample_id", "id", "utterance_id", "inference_key"):
+    for field in ("sample_id", "inference_key"):
         if item.get(field) is not None and str(item[field]).strip():
             return f"{field}:{item[field]}"
     return f"index:{fallback}" if fallback is not None else "unknown"
@@ -159,18 +127,16 @@ def row_identity(item: dict[str, Any], fallback: int | None = None) -> str:
 
 def score_item(
     item: dict[str, Any],
-    lowercase: bool = True,
-    remove_punctuation: bool = True,
     item_index: int | None = None,
 ) -> dict[str, Any]:
-    reference_raw = str(item.get("answer") or item.get("text") or "")
+    reference_raw = str(item.get("answer") or "")
     prediction_raw = str(item.get("prediction") or "")
-    reference_normalized = normalize_text(reference_raw, lowercase, remove_punctuation)
-    prediction_normalized = normalize_text(prediction_raw, lowercase, remove_punctuation)
+    reference_normalized = normalize_text(reference_raw)
+    prediction_normalized = normalize_text(prediction_raw)
     if not reference_normalized:
         raise ValueError(f"Empty reference for {row_identity(item, item_index)}")
 
-    language = canonical_language(item, reference_raw, prediction_raw)
+    language = canonical_language(item)
     metric = "cer" if language == "zh" else "wer"
     reference_tokens = tokenize(reference_normalized, metric)
     inference_error = bool(str(item.get("error") or "").strip())
@@ -396,13 +362,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--predictions-jsonl", required=True)
-    parser.add_argument("--scored-jsonl", required=True)
-    parser.add_argument("--metrics-json", required=True)
-    parser.add_argument("--metrics-by-scenario-csv", required=True)
-    parser.add_argument("--metrics-by-cell-csv", default=None)
-    parser.add_argument("--metrics-by-language-csv", default=None)
-    parser.add_argument("--no-lowercase", action="store_true")
-    parser.add_argument("--keep-punctuation", action="store_true")
+    parser.add_argument("--output-dir", required=True)
     return parser
 
 
@@ -410,20 +370,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return build_parser().parse_args(argv)
 
 
-def evaluate(rows: Sequence[dict[str, Any]], lowercase: bool, remove_punctuation: bool) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def evaluate(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     scored = [
-        score_item(
-            row,
-            lowercase=lowercase,
-            remove_punctuation=remove_punctuation,
-            item_index=index,
-        )
+        score_item(row, item_index=index)
         for index, row in enumerate(rows)
     ]
     by_language = aggregate(scored, ["language"])
     languages = {str(row["language"]) for row in scored}
-    # Preserve the historical scenario shape for one-language runs. Mixed runs
-    # include language in each group so word and character edits stay separate.
+    # Mixed-language groups include language so word and character edits stay separate.
     scenario_keys = ["scenario"] if len(languages) <= 1 else ["language", "scenario"]
     by_scenario = aggregate(scored, scenario_keys)
     cells, cell_macro = bench_cells(scored)
@@ -448,24 +402,19 @@ def evaluate(rows: Sequence[dict[str, Any]], lowercase: bool, remove_punctuation
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     rows = read_jsonl(Path(args.predictions_jsonl).expanduser())
-    scored, metrics = evaluate(
-        rows,
-        lowercase=not args.no_lowercase,
-        remove_punctuation=not args.keep_punctuation,
-    )
+    scored, metrics = evaluate(rows)
 
-    write_jsonl(Path(args.scored_jsonl).expanduser(), scored)
-    metrics_path = Path(args.metrics_json).expanduser()
-    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(args.output_dir).expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_jsonl(output_dir / "scored.jsonl", scored)
+    metrics_path = output_dir / "metrics.json"
     metrics_path.write_text(
         json.dumps(metrics, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    write_csv(Path(args.metrics_by_scenario_csv).expanduser(), metrics["by_scenario"])
-    if args.metrics_by_cell_csv:
-        write_csv(Path(args.metrics_by_cell_csv).expanduser(), metrics["by_cell"])
-    if args.metrics_by_language_csv:
-        write_csv(Path(args.metrics_by_language_csv).expanduser(), metrics["by_language"])
+    write_csv(output_dir / "by_scenario.csv", metrics["by_scenario"])
+    write_csv(output_dir / "by_cell.csv", metrics["by_cell"])
+    write_csv(output_dir / "by_language.csv", metrics["by_language"])
     print(json.dumps({"overall": metrics["overall"], "cell_macro": metrics["cell_macro"]}, ensure_ascii=False, indent=2))
 
 

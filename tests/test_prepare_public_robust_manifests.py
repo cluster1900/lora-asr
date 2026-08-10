@@ -437,8 +437,14 @@ class CliTest(unittest.TestCase):
             train_path = root / "train.jsonl"
             scored_path = root / "scored.jsonl"
             output_path = root / "curriculum.jsonl"
-            tool.write_json(config_path, test_config())
+            config = test_config()
+            config["selection"]["expected_train_rows"] = 4
+            tool.write_json(config_path, config)
             train = [canonical_row(index, language="en" if index % 2 == 0 else "zh") for index in range(4)]
+            for row in train:
+                audio = root / row["audio"]
+                audio.parent.mkdir(parents=True, exist_ok=True)
+                audio.touch()
             scored = [
                 {
                     "sample_id": row["sample_id"],
@@ -487,9 +493,8 @@ class CliTest(unittest.TestCase):
                     str(train_path),
                     "--curriculum",
                     str(output_path),
-                    "--audio-mode",
-                    "ignore",
-                    "--skip-counts",
+                    "--data-root",
+                    str(root),
                 ],
                 cwd=ROOT,
                 check=False,

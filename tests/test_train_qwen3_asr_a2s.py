@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,8 +11,10 @@ from train.train_qwen3_asr_a2s import (
     classify_target,
     configure_phase_trainability,
     evaluate_canary_gate,
+    expected_target_specs,
     find_latest_checkpoint,
     materialize_curriculum,
+    prepare_rows,
     resume_value_for_phase,
     target_group_counts,
     target_map_hash,
@@ -94,6 +97,12 @@ class TargetContractTest(unittest.TestCase):
         self.assertEqual(len(self.targets), 343)
         self.assertEqual(target_map_hash(self.targets), target_map_hash(list(reversed(self.targets))))
 
+    def test_generated_contract_matches_runtime_shape_fixture(self) -> None:
+        self.assertEqual(
+            target_map_hash(expected_target_specs()),
+            target_map_hash(self.targets),
+        )
+
     def test_phase_scopes_are_27_196_343(self) -> None:
         self.assertEqual(len(active_target_names(self.targets, "upper_audio_projection")), 27)
         self.assertEqual(len(active_target_names(self.targets, "decoder")), 196)
@@ -143,6 +152,19 @@ class CurriculumTest(unittest.TestCase):
 
 
 class PipelineContractTest(unittest.TestCase):
+    def test_training_manifest_requires_current_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio = root / "sample.wav"
+            audio.touch()
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                json.dumps({"audio": str(audio), "answer": "text", "duration_s": 1.0}) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "no sample_id"):
+                prepare_rows(manifest, root, {"name": "phase_2"}, seed=1)
+
     def test_canary_gate_uses_base_relative_metrics(self) -> None:
         base = {
             "overall": {
@@ -193,7 +215,6 @@ class PipelineContractTest(unittest.TestCase):
                 {"name": "phase_3"},
             ],
             "evaluation": {},
-            "assumptions": {"teacher": "disabled"},
         }
         with self.assertRaisesRegex(ValueError, "Effective batch"):
             validate_config(config)

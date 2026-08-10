@@ -705,7 +705,6 @@ def build_smoke_selection(
     sources = config_section(config, "sources")
     robust_config = require_mapping(sources.get("robust"), "sources.robust")
     smoke = config_section(config, "smoke")
-    atomic_splits = [str(item) for item in robust_config["atomic_splits"]]
     split_names = sorted({str(row["scenario"]) for row in robust_rows})
     if len(split_names) != int(robust_config["expected_splits"]):
         raise ManifestError(
@@ -1355,7 +1354,7 @@ def command_validate(args: argparse.Namespace) -> dict[str, Any]:
         data_root=data_root,
         audio_mode=args.audio_mode,
         allow_absolute_audio=args.allow_absolute_audio,
-        check_counts=not args.skip_counts,
+        check_counts=True,
     )
     if args.output:
         write_json(Path(args.output).expanduser(), report)
@@ -1370,7 +1369,7 @@ def command_curriculum(args: argparse.Namespace) -> dict[str, Any]:
     seed = int(config_section(config, "project")["seed"])
     train_rows = read_jsonl(Path(args.train).expanduser())
     scored_rows = read_jsonl(Path(args.scored).expanduser())
-    target = int(args.target_rows or settings["target_rows"])
+    target = int(settings["target_rows"])
     maximum = float(settings["maximum_error_rate"])
     rows = build_curriculum_rows(
         train_rows,
@@ -1452,7 +1451,7 @@ def build_parser() -> argparse.ArgumentParser:
     _candidate_args(build)
     build.add_argument("--output-dir", default="")
     build.add_argument("--data-root", default="")
-    build.add_argument("--audio-mode", choices=("ignore", "exists", "decode"), default="exists")
+    build.add_argument("--audio-mode", choices=("exists", "decode"), default="exists")
     build.add_argument("--allow-absolute-audio", action="store_true")
     build.add_argument("--force", action="store_true")
     build.set_defaults(handler=command_build)
@@ -1465,9 +1464,8 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--test", default="")
     validate.add_argument("--curriculum", default="")
     validate.add_argument("--data-root", default="")
-    validate.add_argument("--audio-mode", choices=("ignore", "exists", "decode"), default="exists")
+    validate.add_argument("--audio-mode", choices=("exists", "decode"), default="exists")
     validate.add_argument("--allow-absolute-audio", action="store_true")
-    validate.add_argument("--skip-counts", action="store_true")
     validate.add_argument("--output", default="")
     validate.set_defaults(handler=command_validate)
 
@@ -1479,7 +1477,6 @@ def build_parser() -> argparse.ArgumentParser:
     curriculum.add_argument("--scored", required=True)
     curriculum.add_argument("--output", required=True)
     curriculum.add_argument("--report", default="")
-    curriculum.add_argument("--target-rows", type=int, default=0)
     curriculum.add_argument("--force", action="store_true")
     curriculum.set_defaults(handler=command_curriculum)
     return parser
