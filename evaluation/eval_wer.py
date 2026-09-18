@@ -145,7 +145,7 @@ def score_item(
     deliberately scored as empty hypotheses so operational errors cannot
     silently improve the reported recognition metric.
     """
-    reference_raw = str(item.get("answer") or "")
+    reference_raw = str(item.get("text") if item.get("text") is not None else item.get("answer") or "")
     prediction_raw = str(item.get("prediction") or "")
     reference_normalized = normalize_text(reference_raw)
     prediction_normalized = normalize_text(prediction_raw)
@@ -194,6 +194,8 @@ def score_item(
         "reference_normalized": reference_normalized,
         "prediction_normalized": prediction_normalized,
         "scored_prediction_normalized": scored_prediction,
+        "text": reference_raw,
+        "answer": reference_raw,
         "language": language,
         "metric": metric,
         "error_rate": round(error_rate, 6),
@@ -427,7 +429,7 @@ def evaluate(rows: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict
     cells, cell_macro = bench_cells(scored)
     overall = overall_summary(scored, by_language)
     overall["robust_language_macro_error_rate"] = subset_language_macro(
-        scored, {"atomic", "compound"}
+        scored, {"degraded", "robust", "atomic", "compound"}
     )
     overall["clean_language_macro_error_rate"] = subset_language_macro(scored, {"clean"})
     metrics = {

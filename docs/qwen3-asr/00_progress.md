@@ -14,6 +14,8 @@
 - 完成 V100 服务器资源、CUDA、磁盘、网络镜像和现有进程的只读盘点。
 - 确认 V100 主线必须采用 FP16、eager attention、独立环境和单机多卡 DDP。
 - 完成 SFT → DPO → RL 完整链路、4 卡 DDP、数据角色隔离和阶段 gate 规划。
+- 完善执行合同关键机制：固化 LoRA targets（LLM Decoder + 音频 Projection）、各阶段 `merge_and_unload()` 权重接力、DPO 离线预计算 logps（显存减半）、RL GRPO $G=4$ 采样约束、Clean 候选池 5x 扩充应对平局过滤、以及全局 Base 锚定的 clean 累积退化上限（≤0.025）。
+- 评测模块与测试用例同步支持 `text` 字段与 `clean|degraded` 条件分组。
 - 本地合同测试通过；这些测试只覆盖静态逻辑，不能替代 V100 GPU 验证。
 - 已同步架构、开发、数据、训练、测试、风险和根 README 的规划说明。
 
@@ -34,11 +36,10 @@
 
 ## 下一步
 
-1. 先把 V100 环境、FP16/eager attention、`/data/mega-asr` 路径和 world-size-aware batch 合同
-   写入配置与代码。
-2. 运行 128-row 数据 smoke、base baseline 和 10+2 checkpoint resume。
-3. 通过 smoke 后执行 5k robust + 2k clean pilot，并按 degraded/clean gate 判断是否扩大规模。
-4. SFT、DPO、RL 三个 pilot 全部通过后，按 08 号合同依次运行 full 和最终 test。
+1. 先实现完整数据下载/物化和角色池 builder，直到 `DATASET_COMPLETE.json` 通过。
+2. 数据门禁通过后再创建 V100 FP16/eager 环境，运行 base smoke 和 10+2 checkpoint resume。
+3. 依次执行 SFT、DPO、RL 三个 pilot，并检查 merge、preference、reward、KL 和 clean 累积退化。
+4. 三个 pilot 全部通过后，按 08 号合同依次运行 full 和最终 test。
 
 ## 验收
 

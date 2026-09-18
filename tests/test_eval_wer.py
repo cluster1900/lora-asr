@@ -81,28 +81,52 @@ class EvalWerTest(unittest.TestCase):
         self.assertEqual(summary["repeat_like_output_rate"], 0.5)
         self.assertEqual(summary["empty_output_rate"], 0.5)
 
+    def test_text_field_is_supported_and_preferred(self) -> None:
+        row = eval_wer.score_item({
+            "sample_id": "text-1",
+            "text": "Hello world from Qwen",
+            "answer": "wrong old transcript",
+            "prediction": "hello world from qwen",
+            "language": "en",
+            "scenario": "clean",
+        })
+        self.assertEqual(row["text"], "Hello world from Qwen")
+        self.assertEqual(row["reference_raw"], "Hello world from Qwen")
+        self.assertEqual(row["error_rate"], 0.0)
+
+        # Also verify fallback to answer when text is absent
+        row_legacy = eval_wer.score_item({
+            "sample_id": "legacy-1",
+            "answer": "Legacy transcript",
+            "prediction": "legacy transcript",
+            "language": "en",
+            "scenario": "clean",
+        })
+        self.assertEqual(row_legacy["text"], "Legacy transcript")
+        self.assertEqual(row_legacy["error_rate"], 0.0)
+
     def test_clean_and_robust_language_macros_are_separate(self) -> None:
         rows = [
             {
-                "answer": "one two",
+                "text": "one two",
                 "prediction": "one",
                 "language": "en",
-                "condition_group": "atomic",
+                "condition_group": "degraded",
             },
             {
-                "answer": "正确",
+                "text": "正确",
                 "prediction": "正确",
                 "language": "zh",
-                "condition_group": "compound",
+                "condition_group": "degraded",
             },
             {
-                "answer": "clean words",
+                "text": "clean words",
                 "prediction": "clean words",
                 "language": "en",
                 "condition_group": "clean",
             },
             {
-                "answer": "干净",
+                "text": "干净",
                 "prediction": "干净",
                 "language": "zh",
                 "condition_group": "clean",

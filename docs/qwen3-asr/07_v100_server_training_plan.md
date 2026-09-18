@@ -30,8 +30,13 @@ Tesla V100-SXM2-32GB 上，用官方 `qwen-asr`/Transformers API 对 `Qwen/Qwen3
 - 不安装或依赖 FlashAttention-2。V100 属于 SM70，而官方 FlashAttention-2 支持矩阵以
   Ampere/Ada/Hopper 为主。
 - 训练：`torchrun --nproc_per_node=4`，DDP 不使用 `device_map`。
-- 推理：固定单卡、batch 1、相同模型 revision 和解码上限。
-- gradient checkpointing：开启。
+- LoRA 目标固定为 199 个 Linear：音频 `thinker.audio_tower.conv_out/proj1/proj2` 3 个，加上 28 层
+  LLM Decoder 的 attention/MLP 196 个；完整 canonical allowlist、禁止模块和 `target_map_hash` 见 08 号合同；$r=16, \alpha=32$。
+- 阶段权重交接：SFT、DPO、RL 各阶段完成并通过门禁后，统一执行 `merge_and_unload()` 产出合并基座作为下阶段起点。
+- DPO 显存优化：支持离线预计算参考模型 logprobs，DPO 训练无需在 GPU 常驻参考模型，显存直降 50%。
+- RL 算法：采用带 KL 正则的 GRPO，候选组大小 $G=4$，采样 `temperature=0.7`、`top_p=0.9`，避免 $G=2$ 时的方差归零。
+- 推理：固定单卡、batch 1、相同模型 revision 和解码上限；支持 4 进程按 manifest shard 分片并行推理后合并去重。
+- gradient checkpointing：开启（PEFT 需配合 `enable_input_require_grads()`）。
 - 初始 micro batch：每卡 1；初始 accumulation：16；global batch 为 `1 × 16 × 4 = 64`。
   只有显存和吞吐稳定后才提高到 128。
 - 所有 run 保存 resolved config、代码 commit、model revision、method、manifest hash、world size、seed、
@@ -53,63 +58,62 @@ Tesla V100-SXM2-32GB 上，用官方 `qwen-asr`/Transformers API 对 `Qwen/Qwen3
 
 ## 从 0 的阶段
 
-### S0：环境和代码迁移
+### S0：合同冻结
 
-固定 Python、PyTorch、`qwen-asr`、Transformers、Accelerate、PEFT、datasets 版本，设置
-`HF_ENDPOINT`、`HF_HOME` 和 `/data/mega-asr` 路径。把训练和推理从 BF16/FlashAttention/Colab
-合同迁移到 FP16/eager/server 合同。
+只更新配置、schema、数据角色、SFT/DPO/RL 合同和 gate；不下载模型、不启动训练。通过标准是所有
+输入输出字段、revision、seed、阈值和停止条件已冻结。
 
-完成标准：配置能解析；不加载模型的本地测试通过；依赖、路径、dtype、attention 和 world size
-均可在 resolved config 中看到。
+### S1：完整数据下载/物化（第一个可执行步骤）
 
-### S1：数据 smoke 和 base baseline
+先完整下载或物化四个 pinned source 的原始音频、metadata、source identity 和许可证信息，再创建
+`sft_train`、`dpo_train_pool`、`dpo_val_pool`、`rl_train_pool`、`rl_val_pool`、`validation` 和 `bench_test`
+的 source manifest。不得在数据未完成前下载模型、跑 base inference 或启动任何训练。
 
-先生成 128-row smoke，覆盖 robust split、clean 两种语言和至少一个 degraded 音频。随后只在
-同一 smoke/512-canary 上跑 FP16 base，保存原始 prediction、WER/CER、scenario 和失败统计。
+通过标准：四个 source 有完整 hash；所有角色配额准确、source identity 不重叠、音频可解码、manifest
+可恢复；写出 `DATASET_COMPLETE.json`。DPO pairs 和 RL rollouts 需要模型输出，分别在 S5/S6 从已经
+准备好的 source pool 生成。
 
-完成标准：音频可读、无 source leakage、base 输出可恢复、空输出和推理错误均有记录。
+### S2：环境、模型加载和 base smoke
 
-### S2：LoRA checkpoint smoke
+在 `DATASET_COMPLETE.json` 存在后创建独立环境，加载固定 model revision，以 FP16/eager attention
+跑 128-row smoke 和 base baseline。保存 `environment.json`、base predictions、WER/CER、scenario 和
+失败统计。
 
-用 4 卡 DDP 运行 10 step，保存 checkpoint；新进程恢复并继续 2 step。检查 optimizer、scheduler、
-RNG、adapter、global step、world size 和配置是否一致。
+通过标准：4 卡 world size 正确；clean/degraded 至少各一条成功；无 OOM/NaN；所有失败有 `error`。
 
-完成标准：无 OOM、loss/gradient/learning rate 有限、step 从 10 连续到 12、adapter 可重新加载。
+### S3：SFT checkpoint smoke
 
-### S3：SFT pilot
+用 4 卡 DDP 运行 10 step，保存 checkpoint；新进程恢复并继续 2 step。检查 optimizer、scheduler、RNG、
+adapter、global step、world size、`adapter.save_pretrained()` 和副本 `merge_and_unload()`。
 
-使用 `sft_train` 的 5k robust + 1k English clean + 1k Chinese clean，先训练 SFT adapter。
+通过标准：step 10→12 连续、所有训练状态可恢复、adapter 和 merged 权重均可加载。
 
-通过条件：至少一个 degraded scenario 改善；clean 错误率绝对增加不超过 0.02；有效输出率不少于
-0.95；失败率增加不超过 0.05；新进程能加载 SFT adapter。
+### S4：SFT pilot
 
-### S4：DPO pair 与 DPO pilot
+使用 `sft_train` 的 5k robust + 1k English clean + 1k Chinese clean。通过 SFT gate 后保存 adapter 和
+merged DPO 起始底座。
 
-从独立 `dpo_pool` 生成 chosen/rejected pairs，不能读取 validation/test。先运行 2k robust + 500
-English clean + 500 Chinese clean 的 DPO pilot，起点为 SFT release。
+### S5：DPO pair 与 DPO pilot
 
-通过条件：held-out preference accuracy ≥0.55；至少一个 degraded scenario 相对 SFT 改善；clean
-回退不超过 0.02；有效输出率不少于 0.95；DPO 没有读取 gold/error-rate 审计字段。
+从已下载的 `dpo_train_pool`/`dpo_val_pool` 生成可审计 pairs，支持离线 reference logprobs；使用 4 卡
+DDP 从 merged SFT 底座运行 DPO pilot。通过 preference、ASR、clean 累积退化和 merge gate 后保存 merged RL 底座。
 
-### S5：RL rollout 与 RL pilot
+### S6：RL rollout 与 RL pilot
 
-从独立 `rl_pool` 取 2k robust + 500 English clean + 500 Chinese clean，以 DPO pilot 为 policy、
-冻结 DPO 副本为 reference policy，使用固定 WER/CER、空输出、重复、过长、hallucination 和 KL reward。
-四张 V100 同时生成 rollout 并训练，保存每条 reward、reward components、KL 和 sampled transcript。
+从已下载的 `rl_train_pool`/`rl_val_pool` 生成 rollout；使用 4 卡 GRPO（G=4、temperature=0.7、top_p=0.9），
+同一 `group_id` 的候选在 advantage 前完成 all-gather。通过 reward、KL、ASR、clean 累积退化和 merge gate 后保存最终 release。
 
-通过条件：held-out mean reward 相对 DPO reference 提升 ≥0.05；至少一个 degraded scenario 相对 DPO
-改善；clean 回退不超过 0.02；有效输出率不少于 0.95；reward、KL、gradient 均有限。
+### S7：full SFT → full DPO → full RL
 
-### S6：full SFT → full DPO → full RL
+SFT、DPO、RL 三个 pilot 全部通过后，才按 08 号合同的 full pool 依次运行。每阶段使用
+`torchrun --standalone --nproc_per_node=4`，保留 adapter、merged 权重、manifest hash、checkpoint、rollout
+和 gate；任何阶段失败都停止扩大并回退到最后有效版本。
 
-SFT、DPO、RL 三个 pilot 全部通过后，才按 08 号合同的 full pool 依次运行。每阶段使用 `torchrun --standalone --nproc_per_node=4`，保留上阶段 adapter、manifest hash、checkpoint 和 gate；任何阶段失败都停止
-扩大并回退到最后有效版本。
-
-### S7：release 和外部比较
+### S8：最终 release 和外部比较
 
 对 base、SFT、DPO、RL 四个版本在同一 validation 和 5,000 Bench test 上评测，保存四组 prediction、
-WER/CER、scenario、clean/degraded、失败统计、DPO preference 和 RL reward 摘要。最终 release 必须
-是 RL adapter；只有三阶段均通过，才可与 Mega-ASR 使用同一 evaluator 比较。
+WER/CER、scenario、clean/degraded、失败统计、DPO preference 和 RL reward 摘要。最终 release 包含
+RL adapter 与合并发布模型（且 clean 相对 Base 全局回退 ≤0.025）；只有三阶段均通过，才可与 Mega-ASR 使用同一 evaluator 比较。
 
 ## 目录产物
 

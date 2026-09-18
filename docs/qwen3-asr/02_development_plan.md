@@ -25,14 +25,13 @@ hash、manifest hash、world size、pipeline state、checkpoint 和 adapter。
 
 ## 开发步骤
 
-1. 先更新 V100 环境、配置、依赖和路径文档；正式目录固定为 `/data/mega-asr`。
-2. 把模型加载、Trainer 参数和推理合同改为 FP16/eager attention，移除对 FlashAttention-2 和
-   BF16 的硬依赖。
-3. 运行 metadata probe、128-row smoke 和 base smoke；schema、音频或泄漏失败时停止。
-4. 跑 10+2 checkpoint/resume；确认 optimizer、scheduler、RNG、world size 和配置可恢复。
-5. 对 `sft_train` 子集运行 SFT pilot，完成 degraded/clean gate。
-6. 从独立 `dpo_pool` 生成 preference pairs，运行 DPO pilot，完成 preference 和 ASR gate。
-7. 从独立 `rl_pool` 运行 DPO→RL rollout pilot，完成 reward、KL、degraded/clean gate。
+1. 先冻结 V100、SFT/DPO/RL、数据 schema、revision、seed 和 gate 合同；正式目录固定为 `/data/mega-asr`。
+2. 运行完整数据下载/物化和角色池 builder，直到 `DATASET_COMPLETE.json` 存在；数据未完成前不下载模型、不跑 inference、不训练。
+3. 创建独立 V100 环境，迁移 FP16/eager attention，移除 FlashAttention-2/BF16 依赖，并记录 environment.json。
+4. 运行 128-row base smoke、10+2 checkpoint/resume；确认 4 卡 world size、optimizer、scheduler、RNG、adapter 和 merge 可恢复。
+5. 对 `sft_train` 子集运行 SFT pilot，完成 degraded/clean gate，并通过 `merge_and_unload()` 产出 DPO 基座。
+6. 从独立 `dpo_train_pool` 与 `dpo_val_pool` 生成 preference pairs（支持 provenance 完整的预计算 logps），运行 DPO pilot，通过 merge 产出 RL 基座。
+7. 从独立 `rl_train_pool` 与 `rl_val_pool` 运行 4 卡 GRPO rollout pilot（同组 G=4，advantage 前 all-gather），完成 reward、KL、clean 累积约束 gate。
 8. 三个 pilot 全部通过后，才按 full 配额依次运行 SFT、DPO、RL 和 release test。
 
 ## 测试
@@ -53,7 +52,7 @@ revision、manifest hash、随机种子、dtype、attention、world size 和 gat
 - FP16/eager attention 的 clean/degraded 推理均能逐条写 prediction。
 - 10+2 resume 成功且 resolved config、world size、manifest hash 随 checkpoint 保存。
 - SFT、DPO、RL 前后均产出 English WER、Chinese CER、scenario、reward/preference 和失败统计。
-- release adapter 和 processor 可在新进程重新加载。
+- release adapter、合并发布模型和 processor 可在新进程重新加载。
 
 ## 影响
 

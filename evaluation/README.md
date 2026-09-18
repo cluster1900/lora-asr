@@ -23,11 +23,11 @@ WER/CER，而是通过 `by_language` 和 language macro 汇总。
 
 每行至少需要：
 
-- `answer`：gold transcript，不能为空。
+- `text`：gold transcript，不能为空（优先读取 `text`，向下兼容历史 `answer` 字段）。
 - `prediction`：模型预测文本；推理失败时可为空。
 - `language`：只接受 `en` 或 `zh`，用于选择 WER/CER。
 
-推荐保留 `sample_id`、`scenario`、`condition_group`、`audio_origin`、`error` 等字段，以便生成
+推荐保留 `sample_id`、`scenario`、`condition_group`（支持 `clean` 与 `degraded`，向下兼容历史 `atomic` 与 `compound`）、`audio_origin`、`error` 等字段，以便生成
 分场景指标和失败统计。标记了 `error` 的行按空预测计分，不能因为推理失败而获得虚假的低错误率。
 
 ## 输出

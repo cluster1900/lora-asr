@@ -17,14 +17,18 @@ python3 evaluation/eval_wer.py --help
 
 ## 数据测试
 
+数据下载/物化是第一个可执行阶段。模型下载、base inference、SFT、DPO 和 RL 都必须等待
+`DATASET_COMPLETE.json`。
+
 128-row smoke 必须覆盖全部 robust split、English/Chinese clean，且路径、时长、hash、配额和泄漏
 检查通过。SFT、DPO、RL pilot manifest 必须分别满足 08 号合同配额；只有三个 pilot 全部通过后才允许
 构建 full role pools。Bench/test 数据不能进入任何训练阶段。
 
-未来 data builder 的 fixture 必须验证：
+data builder 的 fixture 必须验证：
 
 - 同一命令第二次执行不重复下载或追加；中断后能补齐剩余配额。
 - candidate 指向的音频缺失或 hash 改变时，该行不计入 resume 进度并被重新物化。
+- 原始音频不可覆盖；处理后音频必须可读、mono、16 kHz、PCM/WAV、0.5–30 秒，并同时记录原始/处理后 hash 和处理版本。
 - Robust 同一个 source index 在不同 scenario 得到同一 source utterance ID，且只进入一个
   train/validation 分区。
 - Clean train/validation 分别来自配置指定 split；Bench smoke 覆盖 en/zh x real/synthetic。
@@ -48,32 +52,34 @@ CUDA/PyTorch 版本、dtype、attention 实现、world size 和 manifest hash。
 - Voices-in-the-Wild-Bench 输出 language x origin x scenario 的 32-cell macro。
 - 保存 raw/normalized reference、prediction、edit count 和所有指标。
 - 空 reference 硬失败；inference error 按全删除计分并进入失败率。
+- 评测支持官方 `text`（兼容历史 `answer`），条件分组支持 `clean` 与 `degraded`（兼容 `atomic`/`compound`）。
 - 报告 clean regression、空输出、重复输出、过长和幻觉式输出。
 - Canary gate 不得用 clean+robust 混合宏平均冒充 robust 指标。
 
 ## SFT/DPO/RL 阶段验收
 
 SFT pilot 必须在同一 manifest、同一 FP16 base、同一 evaluator 下改善至少一个 degraded 场景，同时
-clean 错误率绝对增加不超过 0.02，有效输出率不少于 0.95，失败率增加不超过 0.05。
+clean 错误率绝对增加不超过 0.02，有效输出率不少于 0.95，失败率增加不超过 0.05，且 adapter 能在新进程加载并成功 `merge_and_unload` 作为下阶段底座。
 
 DPO 测试必须验证：
 
-- chosen/rejected 非空、不同、可追溯，ties 和坏音频进入 rejects；
-- DPO trainer 不读取 gold/error-rate 审计字段；
+- chosen/rejected 非空、不同、可追溯，ties 和坏音频进入 rejects，Clean 数据通过扩大候选源保障足额产出；
+- DPO trainer 不读取 gold/error-rate 审计字段，支持预计算参考模型 logps；
 - held-out preference accuracy ≥0.55；
-- 相对 SFT 至少一个 degraded scenario 改善，clean 回退不超过 0.02；
-- DPO adapter 能在新进程加载。
+- 相对 SFT 至少一个 degraded scenario 改善，clean 相对 SFT 回退不超过 0.02，且相对 Base 全局累积回退不超过 0.025；
+- DPO adapter 能在新进程加载并成功 `merge_and_unload` 作为 RL 底座。
 
 RL 测试必须验证：
 
-- reward 组件和最终 reward 对空输出、重复、过长、hallucination 的单测；
+- GRPO 组大小 $G=4$，采样 `temperature=0.7`, `top_p=0.9`，避免同质方差归零；
+- reward 组件（asr 及各项惩罚）和最终 reward 对空输出、重复、过长、hallucination 的单测；
 - rollout 每行包含 policy checkpoint、seed、prediction、reward、KL 和 error；
-- reference policy 冻结，reward/gradient/KL 有限；
+- reference policy 冻结，KL 正则与 gradient 有限；
 - held-out mean reward 相对 DPO reference 提升 ≥0.05；
-- 相对 DPO 至少一个 degraded scenario 改善，clean 回退不超过 0.02；
+- 相对 DPO 至少一个 degraded scenario 改善，clean 相对 DPO 回退不超过 0.02，且相对 Base 全局累积回退不超过 0.025；
 - RL adapter 能在新进程加载并完成 clean/degraded 推理。
 
-没有 SFT、DPO、RL 三个阶段的 gate.json、四组 prediction 和固定 test 结果，不得标记完整后训练完成。
+没有 SFT、DPO、RL 三个阶段的 gate.json、四组 prediction、合并 release 模型和固定 test 结果，不得标记完整后训练完成。
 Router 不在当前范围。
 
 ## 影响

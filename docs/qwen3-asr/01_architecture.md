@@ -37,9 +37,7 @@ FP16 base -> inference runner（待实现） -> base predictions
 
 ## 训练策略
 
-SFT、DPO、RL 各使用一个独立 stage adapter 和独立输出目录。SFT 从 base 开始，DPO 从 SFT release 开始，
-RL 从 DPO release 开始；任何阶段都不能跳过前一阶段。SFT pilot 使用 5k robust + 1k English clean +
-1k Chinese clean；DPO 和 RL 使用各自不重叠的 pool，具体 schema、配额和 reward 见 08 号合同。
+SFT、DPO、RL 各使用一个独立 stage adapter 和独立输出目录。阶段交接采用 `merge_and_unload()` 策略：SFT 从 base 开始，通过门禁后合并权重作为 DPO 基座；DPO 阶段通过门禁后合并作为 RL 基座；RL 最终产出合并模型与 release adapter。LoRA 目标层同时覆盖 LLM Decoder 与音频塔 Projection 层。SFT pilot 使用 5k robust + 1k English clean + 1k Chinese clean；DPO 和 RL 使用各自不重叠的 pool 并包含独立验证集，DPO clean 音频候选池扩大 5 倍以过滤平局，RL 采用 GRPO（$G=4$），具体 schema、配额和 reward 见 08 号合同。
 
 ## 接口
 
