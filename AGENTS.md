@@ -12,8 +12,8 @@
 - 新工程代码不得写入 `references/mega-asr-upstream/`。
 - `references/` 必须保持在 `.gitignore` 中，不提交其中任何文件。
 - 新代码应面向 Qwen3-ASR 官方 `qwen-asr`/Transformers API 设计。
-- Colab 是第一优先训练环境，脚本和 notebook 要默认支持 Google Drive 路径。
-- 数据、训练、推理、router、评测应尽量解耦。
+- V100 服务器是第一优先训练环境；正式执行使用 `/data/mega-asr`，不以 Colab/Google Drive 作为训练合同。
+- 数据、SFT、DPO、RL、推理和评测应尽量解耦；SFT → DPO → RL 是正式后训练顺序。
 - 所有实验应能通过 JSONL manifest、配置文件和固定随机种子复现。
 
 ## 文档规范
@@ -85,6 +85,8 @@
 
 - 数据脚本：能生成 JSONL；每条样本包含 `audio` 和目标文本；音频路径存在；train/val/test 无明显泄漏。
 - 推理脚本：至少跑通 1 条 clean 音频和 1 条 degraded 音频；输出可写入 JSONL；失败样本要记录错误而不是中断整批任务。
+- DPO：必须验证 chosen/rejected schema、偏好审计、held-out preference accuracy 和 clean/degraded gate。
+- RL：必须验证 reward components、rollout、KL、reference freeze 和 held-out reward gate。
 - 训练脚本：先跑 5-20 step smoke test；checkpoint 可保存、加载、继续训练；训练配置必须随 checkpoint 保存。
 - 评测脚本：能计算 WER/CER；能按 `scenario` 聚合；保存原始预测、归一化预测和指标。
 - Router：必须报告 clean/degraded accuracy、precision、recall，并记录阈值来源。
@@ -93,7 +95,7 @@
 
 一个阶段只有同时满足以下条件才算完成：
 
-- 有可复现命令或 Colab notebook。
+- 有可复现服务器命令、配置、manifest 和固定随机种子。
 - 有固定输入 manifest、配置文件和随机种子。
 - 有输出结果文件和指标摘要。
 - 有 baseline 对比。
@@ -103,7 +105,8 @@ MVP 最低验收：
 
 - Qwen3-ASR baseline 可运行并产出 WER/CER。
 - 数据 MVP 至少覆盖 clean、noise、reverb、far_field、dropout。
-- LoRA MVP 至少在一个 degraded 场景上相对 base 改善 WER。
-- Router MVP 在混合测试集上优于 always-base，且 clean regression 有量化记录。
+- SFT pilot 至少在一个 degraded 场景上相对 base 改善 WER/CER。
+- DPO pilot 相对 SFT 通过 preference 和 clean/degraded gate。
+- RL pilot 相对 DPO 通过 reward、KL 和 clean/degraded gate。
 
 未满足验收标准时，不应标记阶段完成。

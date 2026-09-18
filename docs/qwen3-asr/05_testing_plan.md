@@ -2,18 +2,14 @@
 
 ## 范围
 
-测试覆盖数据、训练合同、推理恢复和双语评测。单元测试不下载模型或公开数据；GPU smoke 在 Colab
-单独执行。
+测试覆盖数据、训练合同、推理恢复和双语评测。单元测试不下载模型或公开数据；GPU smoke 在 V100
+服务器单独执行。
 
 ## 本地测试
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m py_compile scripts/prepare_public_robust_manifests.py \
-  train/train_qwen3_asr_a2s.py inference/qwen3_asr_infer.py evaluation/eval_wer.py
-python3 scripts/prepare_public_robust_manifests.py --help
-python3 train/train_qwen3_asr_a2s.py --help
-python3 inference/qwen3_asr_infer.py --help
+python3 -m py_compile evaluation/eval_wer.py
 python3 evaluation/eval_wer.py --help
 ```
 
@@ -22,26 +18,27 @@ python3 evaluation/eval_wer.py --help
 ## 数据测试
 
 128-row smoke 必须覆盖全部 robust split、English/Chinese clean，且路径、时长、hash、配额和泄漏
-检查通过。正式 manifest 的行数必须精确匹配 200k/10k/512/30k/5k 合同，CLI 不允许覆盖这些
-固定数量或跳过计数检查。
+检查通过。SFT、DPO、RL pilot manifest 必须分别满足 08 号合同配额；只有三个 pilot 全部通过后才允许
+构建 full role pools。Bench/test 数据不能进入任何训练阶段。
 
-staging 本地 fixture 还必须验证：
+未来 data builder 的 fixture 必须验证：
 
 - 同一命令第二次执行不重复下载或追加；中断后能补齐剩余配额。
 - candidate 指向的音频缺失或 hash 改变时，该行不计入 resume 进度并被重新物化。
-- Robust 同一个 source index 在不同 scenario 得到同一 `source_utterance_id`，且只进入一个
+- Robust 同一个 source index 在不同 scenario 得到同一 source utterance ID，且只进入一个
   train/validation 分区。
 - Clean train/validation 分别来自配置指定 split；Bench smoke 覆盖 en/zh x real/synthetic。
-- `stage_report.json` 的 requested/materialized/resumed/rejected/shortage 数量与文件一致。
+- stage report 的 requested/materialized/resumed/rejected/shortage 数量与文件一致。
 
-Notebook 静态测试必须确认它是合法 JSON，且包含 probe、smoke staging、10+2 resume、full staging、
-逐级 curriculum 评分、base canary、正式训练和 release 评测命令；Notebook 不得出现 Teacher/API key。
+目录 README 合同测试继续检查维护文件清单；它不能作为 V100 训练验收。V100 还必须记录 GPU 型号、
+CUDA/PyTorch 版本、dtype、attention 实现、world size 和 manifest hash。
 
-## 训练与推理测试
+## V100 训练与推理测试
 
-- 10+2 step resume 后 checkpoint、配置、global step 和 adapter 可恢复。
+- FP16 单 batch 前向和反向成功，loss、gradient、learning rate 均为有限值。
+- 4 卡 DDP 的 global batch 等于配置值；10+2 step resume 后 checkpoint、配置、world size、global
+  step 和 adapter 可恢复。
 - 缺少或重复 `sample_id`、缺少 `audio` 时必须明确报错或记录单条推理错误。
-- 推理帮助中不得重新出现模型、精度、device、batch 或语言覆盖参数。
 - clean 与 degraded 各至少一条成功；单条失败写 `error` 并继续。
 - prediction 每完成一条即 flush+fsync；重跑 `--resume` 不重复样本。
 
@@ -50,16 +47,34 @@ Notebook 静态测试必须确认它是合法 JSON，且包含 probe、smoke sta
 - English 计算 WER，Chinese 计算 CER，按 scenario 聚合。
 - Voices-in-the-Wild-Bench 输出 language x origin x scenario 的 32-cell macro。
 - 保存 raw/normalized reference、prediction、edit count 和所有指标。
-- normalization 固定为 lowercase + 去标点，不提供运行时覆盖。
 - 空 reference 硬失败；inference error 按全删除计分并进入失败率。
 - 报告 clean regression、空输出、重复输出、过长和幻觉式输出。
-- Canary gate 不得用 clean+robust 混合宏平均冒充 robust 指标；测试必须证明 clean 不能掩盖
-  degraded regression，robust 也不能掩盖 clean regression。
+- Canary gate 不得用 clean+robust 混合宏平均冒充 robust 指标。
 
-## 阶段验收
+## SFT/DPO/RL 阶段验收
 
-adapter 必须在同一 manifest、同一 BF16 base、同一 evaluator 下改善至少一个 degraded 场景，
-同时量化 clean regression。Router 不在当前范围；没有正式结果时不得标记模型阶段完成。
+SFT pilot 必须在同一 manifest、同一 FP16 base、同一 evaluator 下改善至少一个 degraded 场景，同时
+clean 错误率绝对增加不超过 0.02，有效输出率不少于 0.95，失败率增加不超过 0.05。
+
+DPO 测试必须验证：
+
+- chosen/rejected 非空、不同、可追溯，ties 和坏音频进入 rejects；
+- DPO trainer 不读取 gold/error-rate 审计字段；
+- held-out preference accuracy ≥0.55；
+- 相对 SFT 至少一个 degraded scenario 改善，clean 回退不超过 0.02；
+- DPO adapter 能在新进程加载。
+
+RL 测试必须验证：
+
+- reward 组件和最终 reward 对空输出、重复、过长、hallucination 的单测；
+- rollout 每行包含 policy checkpoint、seed、prediction、reward、KL 和 error；
+- reference policy 冻结，reward/gradient/KL 有限；
+- held-out mean reward 相对 DPO reference 提升 ≥0.05；
+- 相对 DPO 至少一个 degraded scenario 改善，clean 回退不超过 0.02；
+- RL adapter 能在新进程加载并完成 clean/degraded 推理。
+
+没有 SFT、DPO、RL 三个阶段的 gate.json、四组 prediction 和固定 test 结果，不得标记完整后训练完成。
+Router 不在当前范围。
 
 ## 影响
 

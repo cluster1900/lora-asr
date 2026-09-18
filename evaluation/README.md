@@ -19,7 +19,7 @@ WER/CER，而是通过 `by_language` 和 language macro 汇总。
 
 ## 输入
 
-`eval_wer.py` 接收 `inference/qwen3_asr_infer.py` 生成的 prediction JSONL。
+`eval_wer.py` 接收 inference runner 生成的 prediction JSONL；当前 runner 待按 V100 方案重新实现。
 
 每行至少需要：
 

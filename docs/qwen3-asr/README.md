@@ -1,16 +1,18 @@
 # Qwen3-ASR 文档
 
-本目录只描述当前可执行主线，不保存历史实验流水账。
+本目录描述 V100 服务器主线和迁移前的实际状态，不保存历史实验流水账。
 
 - `00_progress.md`：当前完成度、下一步和实验结论。
 - `01_architecture.md`：模块边界、数据流和交付物。
 - `02_development_plan.md`：开发顺序、接口和完成条件。
 - `03_data_plan.md`：公开数据、manifest 和质量门禁。
-- `04_colab_training_plan.md`：Colab 环境与 A2S 训练合同。
-- `05_testing_plan.md`：测试命令、指标和验收标准。
-- `06_risks_and_decisions.md`：当前风险、决策和回滚条件。
+- `05_testing_plan.md`：本地、V100 smoke、数据和评测验收标准。
+- `06_risks_and_decisions.md`：V100 运行时风险、决策和回滚条件。
+- `07_v100_server_training_plan.md`：当前正式的服务器训练总方案。
+- `08_execution_contract.md`：SFT、DPO、RL 的输入输出、数据角色、执行顺序和验收门禁。
 
-唯一执行入口：`notebooks/12_fast_finetune_colab.ipynb`。Notebook 只编排文档中的正式 CLI。
+当前正式执行入口规划为服务器上的 CLI。旧 Colab notebook、依赖和训练入口已经删除，待按 V100
+方案重新实现。
 
-项目只有一条正式路径：公开数据准备 -> BF16 base 评测 -> 单 adapter A2S -> 统一推理 ->
-WER/CER 评测。历史 v1-v6A、router、旧 notebook、checkpoint 和结果不属于当前仓库。
+项目的目标路径为：服务器环境 -> 固定数据 manifest -> FP16 base -> SFT -> DPO -> RL -> release ->
+统一推理和 WER/CER 评测。旧的 Colab/BF16/A2S 实现已删除，训练和推理 runner 待按该路径重新实现。

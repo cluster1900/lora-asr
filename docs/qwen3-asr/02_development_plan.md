@@ -2,38 +2,38 @@
 
 ## 背景与范围
 
-仓库只维护一个可运行闭环，避免历史实验入口与正式入口并存。当前范围是补齐 Colab 数据 staging
-并执行既有 A2S 流程；不新增模型分支、sweep、router 或独立评测器。
+仓库只维护一个 V100 服务器闭环，避免 Colab、A100 和服务器配置并存。当前范围是把现有静态
+合同迁移为 FP16/eager attention/4 卡 DDP，并完整实现 SFT → DPO → RL；不新增 router、sweep、
+Teacher 或独立评测器。
 
 ## 唯一流程
 
-1. `scripts/prepare_public_robust_manifests.py`：probe、stage、smoke、build、validate、curriculum。
-2. `inference/qwen3_asr_infer.py`：生成 BF16 base curriculum 分数和 base/test prediction。
-3. `train/train_qwen3_asr_a2s.py`：运行 smoke 或 Phase I/II/III，并保存完整状态。
+1. 新建 data builder：完成 pinned source、staging、manifest、泄漏检查和恢复。
+2. 新建 inference runner：生成 FP16 base smoke/baseline/pilot prediction。
+3. 新建 train runner：实现 SFT smoke/pilot、DPO pair training 和 RL rollout training，三阶段均使用 4 卡 DDP。
 4. `evaluation/eval_wer.py`：接收 prediction 和 output directory，固定生成 scored JSONL、metrics
    JSON 及 scenario/cell/language CSV。
 
-核心配置只有：
+核心配置必须覆盖：
 
-- `configs/data/public_robust_200k.yaml`
-- `configs/train/qwen3_asr_public_200k_a2s.yaml`
+- V100 训练配置：服务器路径、FP16、eager attention、world-size-aware global batch。
+- 数据配置：pinned revision、smoke/pilot/full 配额、manifest schema 和输出路径。
 
-当前接口只接受新 manifest 合同：每行必须有唯一 `sample_id` 和 `audio`。依赖版本已固定，不保留
-旧 prediction ID、旧 `audio_path` 字段或旧 `qwen-asr` 参数兼容层。推理 CLI 不允许覆盖模型、
-revision、精度、device、batch 或语言，防止正式比较漂移。
+当前接口只接受唯一 `sample_id` 和 `audio` 的 manifest；迁移时将官方训练字段统一为 `audio` +
+`text`，旧 `answer` 映射必须在代码变更中明确记录。训练输出必须保存 resolved config、target map
+hash、manifest hash、world size、pipeline state、checkpoint 和 adapter。
 
 ## 开发步骤
 
-1. 数据脚本从 pinned Hub revision 流式 staging，仅物化配额需要的音频，输出四份 candidate
-   JSONL、rejects 和报告；重复执行从已落盘且 hash 有效的行继续。
-2. 唯一 notebook `notebooks/12_fast_finetune_colab.ipynb` 只编排现有 CLI，不复制数据、训练或
-   评测逻辑。
-3. 运行 metadata probe 和 128-row smoke；不满足 schema、配额、音频或泄漏检查时停止。
-4. BF16 base curriculum 评分先跑 60k，数量不足再扩到 100k/160k/200k，不预先推理全部 200k。
-5. 生成 30k curriculum，并固定生成 512-row base canary 指标。
-6. 运行 10+2 step resume smoke，确认 checkpoint、optimizer、scheduler、RNG 和配置可恢复。
-7. 训练器只按 Phase I -> II -> III 推进；每阶段后运行 512 canary，失败则停止。
-8. 对 base 与 adapter 使用同一 validation/test manifest 和 evaluator。
+1. 先更新 V100 环境、配置、依赖和路径文档；正式目录固定为 `/data/mega-asr`。
+2. 把模型加载、Trainer 参数和推理合同改为 FP16/eager attention，移除对 FlashAttention-2 和
+   BF16 的硬依赖。
+3. 运行 metadata probe、128-row smoke 和 base smoke；schema、音频或泄漏失败时停止。
+4. 跑 10+2 checkpoint/resume；确认 optimizer、scheduler、RNG、world size 和配置可恢复。
+5. 对 `sft_train` 子集运行 SFT pilot，完成 degraded/clean gate。
+6. 从独立 `dpo_pool` 生成 preference pairs，运行 DPO pilot，完成 preference 和 ASR gate。
+7. 从独立 `rl_pool` 运行 DPO→RL rollout pilot，完成 reward、KL、degraded/clean gate。
+8. 三个 pilot 全部通过后，才按 full 配额依次运行 SFT、DPO、RL 和 release test。
 
 ## 测试
 
@@ -41,23 +41,22 @@ revision、精度、device、batch 或语言，防止正式比较漂移。
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m py_compile scripts/prepare_public_robust_manifests.py \
-  train/train_qwen3_asr_a2s.py inference/qwen3_asr_infer.py evaluation/eval_wer.py
+python3 -m py_compile evaluation/eval_wer.py
 ```
 
-数据或训练合同变化还要运行 `--help`、config validation 和 128-row smoke。正式执行必须记录命令、
-revision、manifest hash、随机种子和输出路径。
+数据或训练合同变化还要运行 schema fixture、config validation 和 smoke。正式执行必须记录命令、method、
+revision、manifest hash、随机种子、dtype、attention、world size 和 gate.json。
 
 ## 完成条件
 
-- 干净 Colab 可从配置生成固定 manifest。
-- clean/degraded 推理均能逐条写 prediction。
-- 10+2 resume 成功且 resolved config 随 checkpoint 保存。
-- base/adapter 均产出 English WER、Chinese CER、scenario 与 32-cell 指标。
-- release adapter 和 processor 可重新加载。
+- V100 独立环境可从配置生成固定 manifest。
+- FP16/eager attention 的 clean/degraded 推理均能逐条写 prediction。
+- 10+2 resume 成功且 resolved config、world size、manifest hash 随 checkpoint 保存。
+- SFT、DPO、RL 前后均产出 English WER、Chinese CER、scenario、reward/preference 和失败统计。
+- release adapter 和 processor 可在新进程重新加载。
 
 ## 影响
 
-新功能必须直接延伸上述四个入口。训练器不提供跳阶段或命令行注入旧 adapter 的入口；恢复只读取
-当前 output directory 的 pipeline state 和 checkpoint。需要第二套入口时，先证明现有接口无法
-表达需求并更新本文件。
+新功能必须直接延伸上述四个入口。训练器不提供跳过 pilot gate 或命令行注入旧 adapter 的入口；
+恢复只读取当前 output directory 的 pipeline state 和 checkpoint。需要第二套入口时，先证明现有
+接口无法表达需求并更新本文件。

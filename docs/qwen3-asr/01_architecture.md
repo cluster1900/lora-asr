@@ -2,57 +2,59 @@
 
 ## 背景与范围
 
-目标是在 `Qwen/Qwen3-ASR-1.7B` 官方 API 上快速得到可评测的鲁棒 ASR adapter。Mega-ASR
-仅作为方法和外部 baseline；不导入其 wrapper、训练入口或 target 规则。本轮不做 router、RL、
-teacher、自建增强或多 adapter 编排。
+目标是在 4 张 V100 上，用 `Qwen/Qwen3-ASR-1.7B` 官方 API 建立可复现的鲁棒 ASR 后训练闭环。
+Mega-ASR 只作为方法参考和外部 baseline；不导入其 wrapper、训练入口或 target 规则。
 
-本轮的合理目标是验证“Mega-ASR-Base 方法可迁移到 Qwen3-ASR”的假设，不承诺用 200k 数据和
-单 adapter 等价复现完整 Mega-ASR 的数据规模与 RL 收益。是否达到外部 baseline 只由固定 Bench
-同 evaluator 结果决定。
+完整后训练链路固定为 SFT → DPO → RL。SFT 先建立可加载的 adapter，DPO 用可审计 preference pairs，
+RL 用固定 reward/rollout；三阶段都必须通过独立 gate。Router、Teacher、量化训练和 A2S 不在正式链路。
 
 ## 模块
 
 ```text
-公开数据 -> scripts/prepare_public_robust_manifests.py -> JSONL manifests
-                                                    |
-                                                    v
-BF16 base/adapter -> inference/qwen3_asr_infer.py -> predictions.jsonl
-          |                                         |
-          |                                         v
-          +-> train/train_qwen3_asr_a2s.py      evaluation/eval_wer.py
-                     |                               |
-                     v                               v
-             adapter/checkpoint                 WER/CER/report
+V100 独立环境 -> data builder（待实现） -> JSONL manifests
+                                                           |
+                                                           v
+FP16 base -> inference runner（待实现） -> base predictions
+                                      |
+                                      v
+                              single LoRA adapter（待实现）
+                                      |
+                                      v
+                         adapter predictions -> evaluation/eval_wer.py
+                                                        |
+                                                        v
+                                                WER/CER/gates/report
 ```
 
-- 数据层只负责 pinned Hub streaming、音频物化、选择、校验和 curriculum，不加载训练模型。
-- 训练层只消费固定 manifest/config，不负责下载数据。
-- 推理层固定模型 revision、BF16、`cuda:0`、batch 1 和 manifest 语言，只允许切换 base/adapter；
-  单条失败写入结果而不中断批次。
+- 数据层未来负责 pinned source staging、音频物化、选择、校验和 manifest 输出，不加载训练模型。
+- 训练层只消费固定 manifest/config，不负责下载数据；正式路径使用 `/data/mega-asr`，不读取
+  `/data/mini-k3`。
+- 运行时使用 FP16，不使用 BF16 或 FlashAttention-2；第一版 attention 为 eager，验证稳定后才
+  评估 PyTorch SDPA。
+- 训练使用单机 4 卡 DDP，global batch 必须显式包含 world size；推理固定单卡、batch 1 和
+  解码上限，单条失败写入结果而不中断批次。
 - 评测层只消费 prediction JSONL，英文和中文指标分开报告。
+
+## 训练策略
+
+SFT、DPO、RL 各使用一个独立 stage adapter 和独立输出目录。SFT 从 base 开始，DPO 从 SFT release 开始，
+RL 从 DPO release 开始；任何阶段都不能跳过前一阶段。SFT pilot 使用 5k robust + 1k English clean +
+1k Chinese clean；DPO 和 RL 使用各自不重叠的 pool，具体 schema、配额和 reward 见 08 号合同。
 
 ## 接口
 
-manifest 每行至少包含 `sample_id`、`audio`、`answer`、`language`、`scenario`、来源信息和
-`audio_sha256`。prediction 继承 `sample_id` 并增加 `prediction` 或 `error`。训练输出必须保存
-resolved config、target map hash、pipeline state、checkpoint 和 adapter。
-
-## A2S
-
-单个 LoRA adapter 预注入 343 个 Linear target：audio attention 96、audio MLP 48、projection
-3、decoder attention 112、decoder MLP 84。阶段仅切换可训练参数：
-
-1. 30k curriculum x2：upper-4 audio + projection，共 27 target。
-2. 200k x1：decoder，共 196 target。
-3. 200k x1：全部 343 target 联合训练。
+SFT manifest 每行包含 `sample_id`、`audio`、`text`、语言/场景和完整 source/hash 信息；DPO manifest 额外
+包含 `chosen`/`rejected`；RL rollout 额外包含 sampled prediction、reward components 和 KL。prediction
+继承 `sample_id` 并增加 `prediction` 或 `error`。每个阶段保存 resolved config、manifest hash、world
+size、checkpoint、adapter、metrics、rollouts（DPO/RL）和 gate。
 
 ## 测试与验收
 
-本地合同测试必须验证 target 数量/分组、确定性选择、resume、错误输出和 WER/CER 聚合。GPU
-验收还必须覆盖 10+2 resume、clean/degraded 推理、三阶段 canary 与最终固定测试集。
+本地合同测试必须验证 schema、确定性分区、resume、错误输出、DPO pair 审计、RL reward 和 WER/CER 聚合。
+V100 验收必须覆盖 FP16 单 batch、4 卡 DDP、10+2 resume、SFT/DPO/RL pilot、clean/degraded 推理和最终固定 test。
 
 ## 影响
 
-本次精简删除历史复现资产和可造成评测漂移的推理参数。历史指标只存在于 Git 历史，不能继续
-作为正式产品证据。远端数据只经 `stage` 进入本地 SSD；Notebook 只编排四个正式入口，不保存
-第二份业务逻辑。
+本次规划删除了 Colab/BF16/A2S 旧实现，不把历史代码或指标当作 V100 运行证据。历史指标只存在于
+Git 历史，不能继续作为正式产品证据。远端数据未来只经 data builder 进入 `/data/mega-asr/data`；服务器 CLI
+不保存第二份业务逻辑。
