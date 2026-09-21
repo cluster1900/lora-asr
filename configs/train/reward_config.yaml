@@ -1,0 +1,38 @@
+schema_version: 1
+
+components:
+  asr:
+    formula: "1.0 - min(language_error_rate, 1.0)"
+    description: "Word error rate for English, character error rate for Chinese"
+  empty:
+    penalty: -0.25
+    description: "Penalty for empty transcription hypothesis"
+  repeat:
+    penalty: -0.25
+    description: "Penalty for repetition loops (3-token run or adjacent 2-token pair repeat)"
+  too_long:
+    length_ratio_threshold: 1.5
+    penalty: -0.15
+    description: "Penalty when hypothesis token length exceeds 1.5x reference length"
+  hallucination:
+    error_rate_threshold: 0.8
+    penalty: -0.25
+    description: "Penalty for severe hallucination (error rate >= 0.8 combined with repeat or too_long or major edits)"
+
+clip:
+  min: -1.0
+  max: 1.0
+
+grpo:
+  group_size: 4
+  sampling:
+    temperature: 0.7
+    temperature_min: 0.6
+    temperature_max: 0.8
+    top_p: 0.9
+  advantage:
+    epsilon: 1.0e-6
+    zero_variance_action: "zero_advantage"
+    batch_zero_variance_threshold: 0.30
+  kl_regularization:
+    beta: 0.04

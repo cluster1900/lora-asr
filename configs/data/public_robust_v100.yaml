@@ -1,0 +1,151 @@
+schema_version: 1
+seed: 20260722
+
+storage:
+  data_root: /data/mega-asr/data
+  manifest_root: /data/mega-asr/manifests
+  cache_root: /data/mega-asr/cache
+  complete_gate_file: DATASET_COMPLETE.json
+
+audio_normalization:
+  format: wav
+  sample_rate: 16000
+  channels: 1
+  codec: pcm_s16le
+  min_duration_s: 0.5
+  max_duration_s: 30.0
+
+sources:
+  voices_in_the_wild:
+    dataset_id: zhifeixie/Voices-in-the-Wild-2M
+    revision: a8a35d3319737190d6fd3d39157b258eaab35980
+    condition_group: degraded
+    split_policy: source_identity_hash_90_10
+    scenarios:
+      - distortion
+      - dropout
+      - echo
+      - far_field
+      - mixed
+      - noise
+      - obstructed
+      - recording
+    origins:
+      - real
+      - synthetic
+
+  librispeech_asr:
+    dataset_id: openslr/librispeech_asr
+    revision: 71cacbfb7e2354c4226d01e70d77d5fca3d04ba1
+    language: en
+    condition_group: clean
+    train_split: train.100
+    validation_split: validation
+    license: CC-BY-4.0
+
+  aishell1:
+    dataset_id: knoveleng/aishell1-mandarin
+    revision: c6dde006238091dc7c81cf5888208140bba33cba
+    language: zh
+    condition_group: clean
+    train_split: train
+    validation_split: validation
+    license: Apache-2.0
+
+  bench_test:
+    dataset_id: zhifeixie/Voices-in-the-Wild-Bench
+    revision: 788f5d72c6b0e9091b5c2e432370923b6f9f0660
+    evaluation_only: true
+    condition_group: degraded
+
+roles:
+  sft_train:
+    purpose: sft_training
+    quotas:
+      robust_degraded: 120000
+      english_clean: 16000
+      chinese_clean: 16000
+    sources:
+      english_clean: librispeech_asr:train.100
+      chinese_clean: aishell1:train
+
+  dpo_train_pool:
+    purpose: dpo_pair_generation_train
+    source_candidates:
+      robust_degraded: 32000
+      english_clean: 10000
+      chinese_clean: 10000
+    target_pairs:
+      robust_degraded: 16000
+      english_clean: 2000
+      chinese_clean: 2000
+    sources:
+      english_clean: librispeech_asr:train.100
+      chinese_clean: aishell1:train
+
+  dpo_val_pool:
+    purpose: dpo_pair_generation_validation
+    source_candidates:
+      robust_degraded: 3200
+      english_clean: 1000
+      chinese_clean: 1000
+    target_pairs:
+      robust_degraded: 1600
+      english_clean: 200
+      chinese_clean: 200
+    sources:
+      english_clean: librispeech_asr:validation
+      chinese_clean: aishell1:validation
+
+  rl_train_pool:
+    purpose: rl_rollout_train
+    quotas:
+      robust_degraded: 16000
+      english_clean: 1000
+      chinese_clean: 1000
+    sources:
+      english_clean: librispeech_asr:train.100
+      chinese_clean: aishell1:train
+
+  rl_val_pool:
+    purpose: rl_rollout_validation
+    quotas:
+      robust_degraded: 1600
+      english_clean: 200
+      chinese_clean: 200
+    sources:
+      english_clean: librispeech_asr:validation
+      chinese_clean: aishell1:validation
+
+  validation:
+    purpose: fixed_asr_evaluation
+    quotas:
+      robust_degraded: 8000
+      english_clean: 1000
+      chinese_clean: 1000
+    sources:
+      english_clean: librispeech_asr:validation
+      chinese_clean: aishell1:validation
+
+  bench_test:
+    purpose: final_bench_evaluation
+    quotas:
+      robust_degraded: 5000
+    sources:
+      robust_degraded: bench_test
+
+pilot_subsets:
+  sft_pilot:
+    robust_degraded: 5000
+    english_clean: 1000
+    chinese_clean: 1000
+  dpo_pilot:
+    robust_degraded_pairs: 2000
+    english_clean_pairs: 500
+    chinese_clean_pairs: 500
+    val_pairs: 500
+  rl_pilot:
+    robust_degraded_audios: 2000
+    english_clean_audios: 500
+    chinese_clean_audios: 500
+    val_audios: 500

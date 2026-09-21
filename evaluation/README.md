@@ -12,7 +12,9 @@ WER/CER，而是通过 `by_language` 和 language macro 汇总。
 
 | 文件 | 作用 |
 | --- | --- |
-| `eval_wer.py` | 唯一评测入口。执行文本归一化、WER/CER、失败输出检测、scenario 聚合和固定 32-cell Bench 聚合。 |
+| `eval_wer.py` | 评测入口。执行文本归一化、WER/CER、失败输出检测、scenario 聚合和固定 32-cell Bench 聚合。 |
+| `verify_gate.py` | 门禁判定与机器可读 gate.json 生成入口。对比 Base 与当前阶段模型评估指标，校验退化场景改善数、Clean 回退、有效输出率和失败率变化，记录输入 manifest 与预测文件 SHA-256 哈希。 |
+| `eval_checkpoint_series.py` | 检查点序列自动化横向评测工具。遍历指定 step 检查点（如 step 100/150/200/250/300），批量运行推理与 WER/CER 评估，输出横向对比矩阵与 Pareto 最优检查点推荐。 |
 | `README.md` | 说明本目录边界、文件职责、输入输出和维护要求。 |
 
 `__pycache__/` 是 Python 自动生成的本地缓存，已被 Git 忽略，不是项目产物，可随时删除。
@@ -48,12 +50,51 @@ WER/CER，而是通过 `by_language` 和 language macro 汇总。
 ## 使用方式
 
 ```bash
+# 1. 运行 WER/CER 评测
 python evaluation/eval_wer.py \
   --predictions-jsonl /path/to/predictions.jsonl \
   --output-dir /path/to/evaluation
+
+# 2. 运行门禁判定并生成机器可读 gate.json（含退化场景改善、Clean 回退、鲁棒宏平均回退上限与空输出率硬拦截）
+# SFT Pilot 门禁判定
+python evaluation/verify_gate.py \
+  --base-metrics /path/to/base/metrics.json \
+  --pilot-metrics /path/to/pilot/metrics.json \
+  --base-predictions /path/to/base/predictions.jsonl \
+  --pilot-predictions /path/to/pilot/predictions.jsonl \
+  --manifest /path/to/validation.jsonl \
+  --stage sft_pilot \
+  --max-robust-regression 0.005 \
+  --max-empty-rate 0.002 \
+  --output /path/to/gate.json
+
+# DPO Pilot 门禁判定（强校验 held-out preference accuracy >= 0.55，支持 --preference-accuracy 或 --dpo-loss-log 结合可选 --dpo-step 自动提取；未提供时门禁必须判为 FAILED；包含 SFT 预测与评测 Provenance、--dpo-val-manifest 验证集 Provenance、累积 Clean 回退检查，且 Robust Macro 相对 SFT 零恶化 <= 0.0）
+python evaluation/verify_gate.py \
+  --base-metrics /data/mega-asr/runs/eval_validation_base/predictions_eval/metrics.json \
+  --base-predictions /data/mega-asr/runs/eval_validation_base/predictions.jsonl \
+  --sft-metrics /data/mega-asr/runs/sft_pilot_controlled/eval_series/step_50/eval/metrics.json \
+  --sft-predictions /data/mega-asr/runs/sft_pilot_controlled/eval_series/step_50/predictions.jsonl \
+  --pilot-metrics /data/mega-asr/runs/dpo_pilot_v2/predictions_eval/metrics.json \
+  --pilot-predictions /data/mega-asr/runs/dpo_pilot_v2/predictions.jsonl \
+  --manifest /data/mega-asr/manifests/validation.jsonl \
+  --dpo-val-manifest /data/mega-asr/manifests/val_dpo_pairs.jsonl \
+  --dpo-loss-log /data/mega-asr/runs/dpo_pilot_v2/loss_log.jsonl \
+  --dpo-step 80 \
+  --stage dpo_pilot \
+  --max-robust-regression 0.0 \
+  --max-empty-rate 0.002 \
+  --output /data/mega-asr/runs/dpo_pilot_v2/gate.json
+
+# 3. 运行多 Checkpoint 序列自动化横向评测与 Pareto 优选
+python evaluation/eval_checkpoint_series.py \
+  --run-dir /data/mega-asr/runs/sft_pilot_controlled \
+  --steps 50,100,150,200,250,300 \
+  --manifest /data/mega-asr/manifests/validation.jsonl \
+  --base-metrics /data/mega-asr/runs/eval_validation_base/predictions_eval/metrics.json \
+  --output-dir /data/mega-asr/runs/sft_pilot_controlled/eval_series
 ```
 
-对应测试：`tests/test_eval_wer.py`。
+对应测试：`tests/test_eval_wer.py`、`tests/test_verify_gate.py`、`tests/test_eval_checkpoint_series.py`。
 
 ## 维护要求
 

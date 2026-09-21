@@ -1,0 +1,71 @@
+schema_version: 1
+
+model:
+  model_id: Qwen/Qwen3-ASR-1.7B
+  model_revision: 7278e1e70fe206f11671096ffdd38061171dd6e5
+  dtype: float16
+  bf16: false
+  tf32: false
+  attention_implementation: eager
+  flash_attention_2: false
+
+runtime:
+  device: cuda
+  world_size: 4
+  micro_batch_size: 1
+  gradient_accumulation_steps: 16
+  global_batch_size: 64 # 1 * 16 * 4
+  gradient_checkpointing: true
+  enable_input_require_grads: true
+  root_dir: /data/mega-asr
+  seed: 20260722
+  dataloader_workers: 2
+
+train:
+  max_steps: 300
+  save_steps: 50
+  learning_rate: 1.0e-5
+  warmup_steps: 50
+  lr_scheduler: linear
+  sample_strategy: balanced # 50% degraded, 25% en clean, 25% zh clean
+  eval_steps: 50
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  target_groups:
+    projection: 3
+    decoder_attention: 112
+    decoder_mlp: 84
+  expected_total_targets: 199
+  projection_targets:
+    - thinker.audio_tower.conv_out
+    - thinker.audio_tower.proj1
+    - thinker.audio_tower.proj2
+  decoder_layers_count: 28
+  decoder_attention_names:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+  decoder_mlp_names:
+    - gate_proj
+    - up_proj
+    - down_proj
+
+lifecycle:
+  strategy: merge_and_unload
+  stages:
+    sft:
+      starting_model: base
+      output_adapter: sft_release
+      output_merged: sft_merged_base
+
+gates:
+  sft_pilot:
+    min_degraded_scenario_improvements: 1
+    clean_error_rate_increase_max: 0.02
+    valid_output_rate_min: 0.95
+    failure_rate_increase_max: 0.05

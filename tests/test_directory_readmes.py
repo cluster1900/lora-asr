@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCUMENTED_DIRECTORIES = ("evaluation", "inference", "notebooks", "scripts")
+DOCUMENTED_DIRECTORIES = ("evaluation", "inference", "notebooks", "scripts", "train")
 
 
 class DirectoryReadmeTest(unittest.TestCase):

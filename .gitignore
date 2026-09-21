@@ -14,11 +14,14 @@ conda/
 # Generated data and artifacts
 audio/
 checkpoints/
-data/
+/data/
+!configs/data/
+!configs/data/**
 logs/
 outputs/
 *.log
 runs/
+results/
 wandb/
 tensorboard/
 
@@ -33,6 +36,7 @@ ckpt/
 
 # Private files
 .env
+.git_commit
 private/
 secrets/
 references/

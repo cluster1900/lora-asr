@@ -1,0 +1,75 @@
+schema_version: 1
+
+model:
+  model_id: /data/mega-asr/runs/sft_pilot_controlled/merged_base
+  model_revision: 7278e1e70fe206f11671096ffdd38061171dd6e5
+  dtype: float16
+  bf16: false
+  tf32: false
+  attention_implementation: eager
+  flash_attention_2: false
+
+runtime:
+  device: cuda
+  world_size: 4
+  micro_batch_size: 1
+  gradient_accumulation_steps: 16
+  global_batch_size: 64 # 1 * 16 * 4
+  gradient_checkpointing: true
+  enable_input_require_grads: true
+  root_dir: /data/mega-asr
+  seed: 20260722
+  dataloader_workers: 2
+
+train:
+  max_steps: 80
+  save_steps: 10
+  eval_steps: 10
+  learning_rate: 2.0e-6
+  warmup_steps: 10
+  lr_scheduler: linear
+  beta: 0.15 # DPO implicit reward scaling factor
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  target_groups:
+    projection: 3
+    decoder_attention: 112
+    decoder_mlp: 84
+  expected_total_targets: 199
+  projection_targets:
+    - thinker.audio_tower.conv_out
+    - thinker.audio_tower.proj1
+    - thinker.audio_tower.proj2
+  decoder_layers_count: 28
+  decoder_attention_names:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+  decoder_mlp_names:
+    - gate_proj
+    - up_proj
+    - down_proj
+
+lifecycle:
+  strategy: merge_and_unload
+  stages:
+    dpo:
+      starting_model: /data/mega-asr/runs/sft_pilot_controlled/merged_base
+      output_adapter: dpo_release
+      output_merged: dpo_merged_base
+
+gates:
+  dpo_pilot:
+    preference_val_accuracy_min: 0.55
+    min_degraded_scenario_improvements: 1
+    clean_error_rate_increase_max: 0.02
+    clean_cumulative_error_rate_increase_max: 0.025
+    max_robust_macro_regression: 0.0
+    valid_output_rate_min: 0.95
+    max_empty_output_rate: 0.002
+    failure_rate_increase_max: 0.05

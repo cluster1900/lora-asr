@@ -1,0 +1,87 @@
+schema_version: 1
+
+model:
+  model_id: Qwen/Qwen3-ASR-1.7B
+  model_revision: 7278e1e70fe206f11671096ffdd38061171dd6e5
+  dtype: float16
+  bf16: false
+  tf32: false
+  attention_implementation: eager
+  flash_attention_2: false
+
+runtime:
+  device: cuda
+  world_size: 4
+  micro_batch_size: 1
+  gradient_accumulation_steps: 16
+  global_batch_size: 64 # 1 * 16 * 4
+  gradient_checkpointing: true
+  enable_input_require_grads: true
+  root_dir: /data/mega-asr
+  seed: 20260722
+  dataloader_workers: 2
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  target_groups:
+    projection: 3
+    decoder_attention: 112
+    decoder_mlp: 84
+  expected_total_targets: 199
+  projection_targets:
+    - thinker.audio_tower.conv_out
+    - thinker.audio_tower.proj1
+    - thinker.audio_tower.proj2
+  decoder_layers_count: 28
+  decoder_attention_names:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+  decoder_mlp_names:
+    - gate_proj
+    - up_proj
+    - down_proj
+
+lifecycle:
+  strategy: merge_and_unload
+  stages:
+    sft:
+      starting_model: base
+      output_adapter: sft_release
+      output_merged: sft_merged_base
+    dpo:
+      starting_model: sft_merged_base
+      precompute_ref_logp: true
+      output_adapter: dpo_release
+      output_merged: dpo_merged_base
+    rl:
+      starting_model: dpo_merged_base
+      algorithm: grpo
+      group_size: 4
+      output_adapter: rl_release
+      output_merged: rl_release_model
+
+gates:
+  sft_pilot:
+    min_degraded_scenario_improvements: 1
+    clean_error_rate_increase_max: 0.02
+    valid_output_rate_min: 0.95
+    failure_rate_increase_max: 0.05
+  dpo_pilot:
+    preference_accuracy_min: 0.55
+    min_degraded_scenario_improvements: 1
+    clean_error_rate_increase_vs_sft_max: 0.02
+    clean_error_rate_increase_vs_base_max: 0.025
+    valid_output_rate_min: 0.95
+  rl_pilot:
+    held_out_reward_gain_min: 0.05
+    min_degraded_scenario_improvements: 1
+    clean_error_rate_increase_vs_dpo_max: 0.02
+    clean_error_rate_increase_vs_base_max: 0.025
+    valid_output_rate_min: 0.95
+  release:
+    global_clean_error_increase_vs_base_max: 0.025

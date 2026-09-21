@@ -90,8 +90,16 @@ adapter、global step、world size、`adapter.save_pretrained()` 和副本 `merg
 
 ### S4：SFT pilot
 
-使用 `sft_train` 的 5k robust + 1k English clean + 1k Chinese clean。通过 SFT gate 后保存 adapter 和
-merged DPO 起始底座。
+使用 `sft_train` 的 5k robust + 1k English clean + 1k Chinese clean（`pilot_sft.jsonl`，共 7,000 条）。
+
+针对首轮实验发现的 Clean 回退（英文 Clean WER 从 1.98% 回退至 3.41%）及模型拟合现象，S4 阶段设立严格受控对照实验：
+- **基线配置（Run 1）**：`lr=2e-5`, `warmup_steps=0`, 恒定学习率, 均匀无重放随机打乱（退化样本占比 71.4%），训练 500 steps（累计 32,000 样本次，~4.57 epochs）。
+- **受控优化配置（Run 2）**：
+  - 学习率下调至 `1e-5`，配合 `warmup_steps=50` 与 300 步全程 `linear decay`；
+  - 采用平衡采样策略 `--sample-strategy balanced`（固定 50% degraded + 25% English clean + 25% Chinese clean，或 `--sample-strategy clean_2x` 进行 Clean 2 倍重放），纠正数据偏向；
+  - 步数缩减至 300 steps（累计 19,200 样本次，~2.7 epochs），每 50 步保存检查点；
+  - 采用 `evaluation/eval_checkpoint_series.py` 自动化批量评测 step 50/100/150/200/250/300，收紧门禁规则（要求 Robust Macro 不得恶化且空输出率 $\le 0.002$）；综合退化场景改善数与 Clean 保真度遴选 Pareto 最优检查点；
+  - 经 2,867 条独立验证集全量实测，选定 **Step 50**（EN Clean 1.94%、ZH Clean 1.40%、Clean Macro 1.67%、Robust Macro 10.40% 全面优于 Base，0 空输出）执行 `merge_and_unload()`，产出正式进入 E5 DPO 的 SFT 合并底座并归档 `gate.json`。
 
 ### S5：DPO pair 与 DPO pilot
 

@@ -16,10 +16,10 @@ validation 和 test。任何阶段都不得读取 test；DPO/RL 的训练输入�
 
 Robust 使用固定 90/10 source identity 分区；clean 使用官方 train/validation split 严格隔离供给：
 官方 train split（LibriSpeech `train.100`、AISHELL-1 `train`）专供训练角色（`sft_train` 16k + `dpo_train_pool` 10k + `rl_train_pool` 1k = 27,000 条，LibriSpeech `train.100` 留 1,539 条清洗缓冲）；
-官方 validation split（LibriSpeech `validation`、AISHELL-1 `validation`）专供验证角色（`validation` 1,000 + `dpo_val_pool` 1,000 + `rl_val_pool` 200 = 2,200 条），二者物理隔离、严禁串用。
-数据 builder 尚未实现，编码时必须先完成 pinned revision、source identity、hash 和恢复合同，再开始训练代码。
+数据流水线通过 `scripts/download_sources.py`（负责 4 个 pinned 源的拉取与缓存）、`scripts/stage_parquet_sources.py`（负责 parquet 分片流式解码与 ffmpeg 并发转码标准化）与 `scripts/build_robust_manifests.py`（负责 7 角色哈希隔离分配、128 条 Smoke 子集抽取与门禁校验）协同实现，确保在模型下载前完成全部数据物化。
 
 ## 下载后的处理链
+
 
 原始下载完成后必须经过以下顺序，原始文件不可覆盖：
 
@@ -61,9 +61,11 @@ Clean source pool 扩大到目标 pair 数的 5 倍，Robust source pool 至少�
 过滤后有效 pair 不足表中目标时，数据阶段失败，不得从 validation/test 补行。
 
 Pilot 子集固定为：SFT `5,000+1,000+1,000`，DPO `2,000+500+500`（验证集 500 对），RL `2,000+500+500`（验证音频 500 条）。
+Smoke 子集固定为 128 条平衡样本（`manifests/smoke.jsonl`：32 条 English clean、32 条 Chinese clean、64 条 Robust degraded，均匀覆盖各类场景），专门用于 E2 Base 推理 Smoke 与 E3 SFT Checkpoint Smoke（10+2步续训）。
 角色之间 source identity 不重叠；不足配额时阶段失败，不允许从 validation/test 补行。
 
 ## SFT 输入
+
 
 每行至少包含：
 

@@ -24,33 +24,44 @@ V100 服务器 -> 固定数据 manifest -> SFT -> DPO -> RL -> release adapter
 configs/      数据与训练的唯一配置
 docs/         架构、开发、数据、训练、测试、进度和风险
 notebooks/    预留 Notebook 目录，当前为空，详见 notebooks/README.md
-scripts/      预留 V100 数据 builder，详见 scripts/README.md
-train/        预留 V100 训练 runner，待重新实现
+scripts/      V100 数据 builder 与数据集物化脚本，详见 scripts/README.md
+train/        V100 模型训练 runner（SFT/DPO/RL），详见 train/README.md
 inference/    预留 V100 推理 runner，详见 inference/README.md
 evaluation/   WER/CER 与聚合评测，详见 evaluation/README.md
 tests/        不依赖模型下载的合同测试
 ```
 
 目录说明：[notebooks](notebooks/README.md) · [scripts](scripts/README.md) ·
-[inference](inference/README.md) · [evaluation](evaluation/README.md)。这些目录的文件或职责变化时，
+[train](train/README.md) · [inference](inference/README.md) · [evaluation](evaluation/README.md)。这些目录的文件或职责变化时，
 必须在同一提交维护对应 README。
 
 ## 本地验证
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m py_compile evaluation/eval_wer.py
+python3 -m py_compile evaluation/eval_wer.py scripts/download_sources.py scripts/stage_parquet_sources.py scripts/build_robust_manifests.py
 ```
 
 ## 入口
 
-当前保留的评测 CLI：
+当前保留的 CLI 入口：
 
+- 数据源拉取与门禁验证：
 ```bash
-python evaluation/eval_wer.py --help
+python3 scripts/download_sources.py --help
+python3 scripts/stage_parquet_sources.py --help
+python3 scripts/build_robust_manifests.py --help
+python3 scripts/build_robust_manifests.py --config configs/data/public_robust_v100.yaml --mode verify-only
 ```
 
-训练和推理 runner 已删除，待按 V100 方案重新实现。
+
+
+- 评测工具：
+```bash
+python3 evaluation/eval_wer.py --help
+```
+
+训练和推理 runner 待按 V100 方案重新实现。
 
 执行合同见 [docs/qwen3-asr/README.md](docs/qwen3-asr/README.md)。未完成 SFT、DPO、RL 三阶段 pilot、固定评测、
 release adapter 和 Mega-ASR 同 evaluator baseline 前，不声称达到或超过 Mega-ASR。
