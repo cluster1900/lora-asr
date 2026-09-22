@@ -13,8 +13,9 @@ Teacher 或独立评测器。
 3. 新建 train runner (`train/train_sft.py`)：实现 SFT smoke/pilot 训练，支持单机 4 卡 DDP 与 `--single-gpu` 模式，操作底层 `model.model.thinker` 并开启 `gradient_checkpointing` 与 `enable_input_require_grads`；精确注入 199 个 Linear LoRA targets（Projection 3 + Decoder 196）；实现标签掩码 Cross Entropy 损失计算；具备规范 10+2 检查点保存与恢复机制（保存 adapter、optimizer、scheduler、RNG、training_state 与 resolved config）；提供 `--export-merged` 支持 `merge_and_unload()` 权重合并导出。后续以此为基础延伸 DPO 与 RL 训练。
 4. 新建 DPO 偏好对构建器 (`scripts/build_dpo_pairs.py`)：从候选音频池基于真实的 Base 与 Step 50 SFT 独立预测生成真实的 `(chosen, rejected)` 偏好对；正式模式强制传入 `--base-predictions` 和 `--sft-predictions`，严禁使用 gold 答案兜底或合成负例（杜绝 gold 泄漏）；经 WER/CER 判定过滤平局（`cand_sft == cand_base` 或 `err_sft == err_base` 一律剔除）；离线预计算冻结参考模型的序列对数概率 `ref_chosen_logp` 与 `ref_rejected_logp`，记录完整 Provenance 哈希并生成 `dpo_pair_audit.json`。
 5. 新建 DPO train runner (`train/train_dpo.py`)：实现 4 卡 DDP DPO 训练，基于冻结参考模型 logp 计算隐式奖励差与 Bradley-Terry 偏好损失，实时监控 `preference_accuracy` 与 `margin`；支持全量 held-out 验证集评估；遵循 10+2 检查点契约、保存 4 卡独立 RNG 并支持 `--export-merged`。
-6. `evaluation/eval_wer.py`：接收 prediction 和 output directory，固定生成 scored JSONL、metrics JSON 及 scenario/cell/language CSV。
-7. `evaluation/verify_gate.py`：支持 SFT 与 DPO 阶段机器可读门禁计算与归档，强校验 held-out preference accuracy、退化改善数、Clean 回退与累积回退红线；DPO 阶段门禁严格要求 Robust Macro 相对 SFT 零恶化（`max_robust_macro_regression <= 0.0`），并完整记录 SFT metrics 与 predictions 的路径与 SHA-256 哈希。
+6. 新建 RL (GRPO) train runner (`train/train_rl.py`)：实现 4 卡 DDP GRPO 训练，从 `dpo_release` 合并底座起训；生成组大小 $G=4$ 的采样 rollout（`temperature=0.7, top_p=0.9`）；按 `reward_config.yaml` 严格计算 ASR 奖励与 empty、repeat、too_long、hallucination 惩罚；组内优势按均值与标准差标准化并具备零方差置零保护；计算策略梯度与针对冻结参考模型的 token 级 KL 正则惩罚（$\beta=0.04$）；保存 `rollouts.jsonl`、`loss_log.jsonl`、10+2 检查点并提供 `--export-merged` 导出合并权重。
+7. `evaluation/eval_wer.py`：接收 prediction 和 output directory，固定生成 scored JSONL、metrics JSON 及 scenario/cell/language CSV。
+8. `evaluation/verify_gate.py`：支持 SFT、DPO 与 RL 阶段机器可读门禁计算与归档，强校验 held-out preference/reward、退化改善数、Clean 回退与累积回退红线；DPO 与 RL 阶段门禁严格要求 Robust Macro 相对前一阶段零恶化（`max_robust_macro_regression <= 0.0`），并完整记录前序基线 metrics 与 predictions 的路径与 SHA-256 哈希。
 
 核心配置必须覆盖：
 

@@ -508,6 +508,288 @@ class VerifyGateTest(unittest.TestCase):
             gate_data = json.loads(out_p.read_text(encoding="utf-8"))
             self.assertEqual(gate_data["metrics"]["preference_accuracy"], 0.60)
 
+    def test_evaluate_gate_rl_pilot_passed(self) -> None:
+        dpo_metrics = {
+            "overall": {
+                "samples": 100,
+                "inference_errors": 0,
+                "empty_outputs": 0,
+                "clean_language_macro_error_rate": 0.021,
+                "robust_language_macro_error_rate": 0.090,
+            },
+            "by_scenario": [
+                {"group": "en|clean", "error_rate": 0.021},
+                {"group": "zh|clean", "error_rate": 0.021},
+                {"group": "en|noise", "error_rate": 0.110},
+                {"group": "zh|echo", "error_rate": 0.070},
+            ],
+        }
+        rl_metrics = {
+            "overall": {
+                "samples": 100,
+                "inference_errors": 0,
+                "empty_outputs": 0,
+                "clean_language_macro_error_rate": 0.021,
+                "robust_language_macro_error_rate": 0.088,
+            },
+            "by_scenario": [
+                {"group": "en|clean", "error_rate": 0.021},
+                {"group": "zh|clean", "error_rate": 0.021},
+                {"group": "en|noise", "error_rate": 0.105},
+                {"group": "zh|echo", "error_rate": 0.070},
+            ],
+        }
+
+        gate = verify_gate.evaluate_gate(
+            base_metrics=self.mock_base_metrics,
+            pilot_metrics=rl_metrics,
+            dpo_metrics=dpo_metrics,
+            stage="rl_pilot",
+            reward_improvement=0.06,
+        )
+
+        self.assertEqual(gate["gate_status"], "PASSED")
+        self.assertEqual(gate["checks"]["degraded_improvement"], "PASSED")
+        self.assertEqual(gate["checks"]["clean_retention"], "PASSED")
+        self.assertEqual(gate["checks"]["clean_cumulative_retention"], "PASSED")
+        self.assertEqual(gate["checks"]["robust_retention"], "PASSED")
+        self.assertEqual(gate["checks"]["held_out_reward"], "PASSED")
+        self.assertEqual(gate["metrics"]["degraded_scenario_improvements_count"], 1)
+        self.assertEqual(gate["metrics"]["improved_scenarios"], ["en|noise"])
+
+    def test_evaluate_gate_rl_fails_on_low_reward(self) -> None:
+        dpo_metrics = {
+            "overall": {
+                "samples": 100,
+                "inference_errors": 0,
+                "empty_outputs": 0,
+                "clean_language_macro_error_rate": 0.020,
+                "robust_language_macro_error_rate": 0.090,
+            },
+            "by_scenario": [
+                {"group": "en|noise", "error_rate": 0.110},
+            ],
+        }
+        rl_metrics = {
+            "overall": {
+                "samples": 100,
+                "inference_errors": 0,
+                "empty_outputs": 0,
+                "clean_language_macro_error_rate": 0.020,
+                "robust_language_macro_error_rate": 0.085,
+            },
+            "by_scenario": [
+                {"group": "en|noise", "error_rate": 0.105},
+            ],
+        }
+
+        gate = verify_gate.evaluate_gate(
+            base_metrics=self.mock_base_metrics,
+            pilot_metrics=rl_metrics,
+            dpo_metrics=dpo_metrics,
+            stage="rl_pilot",
+            reward_improvement=0.02,  # < 0.05
+        )
+
+        self.assertEqual(gate["gate_status"], "FAILED")
+        self.assertEqual(gate["checks"]["held_out_reward"], "FAILED")
+
+    def test_cli_rl_loss_log_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_p = Path(tmpdir)
+            base_p = tmp_p / "base_metrics.json"
+            pilot_p = tmp_p / "pilot_metrics.json"
+            dpo_p = tmp_p / "dpo_metrics.json"
+            loss_log_p = tmp_p / "rl_loss_log.jsonl"
+            out_p = tmp_p / "gate.json"
+
+            base_p.write_text(json.dumps(self.mock_base_metrics), encoding="utf-8")
+            dpo_metrics = {
+                "overall": {
+                    "samples": 100,
+                    "inference_errors": 0,
+                    "empty_outputs": 0,
+                    "clean_language_macro_error_rate": 0.020,
+                    "robust_language_macro_error_rate": 0.090,
+                },
+                "by_scenario": [
+                    {"group": "en|clean", "error_rate": 0.020},
+                    {"group": "zh|clean", "error_rate": 0.020},
+                    {"group": "en|noise", "error_rate": 0.110},
+                ],
+            }
+            dpo_p.write_text(json.dumps(dpo_metrics), encoding="utf-8")
+
+            pilot_metrics = {
+                "overall": {
+                    "samples": 100,
+                    "inference_errors": 0,
+                    "empty_outputs": 0,
+                    "clean_language_macro_error_rate": 0.020,
+                    "robust_language_macro_error_rate": 0.085,
+                },
+                "by_scenario": [
+                    {"group": "en|clean", "error_rate": 0.020},
+                    {"group": "zh|clean", "error_rate": 0.020},
+                    {"group": "en|noise", "error_rate": 0.100},
+                ],
+            }
+            pilot_p.write_text(json.dumps(pilot_metrics), encoding="utf-8")
+
+            loss_log_p.write_text(
+                json.dumps({"global_step": 0, "val_mean_reward": 0.7802, "val_eval_scope": "Full Held-out"}) + "\n" +
+                json.dumps({"global_step": 1, "zero_variance_ratio": 0.15}) + "\n" +
+                json.dumps({"global_step": 60, "val_mean_reward": 0.8410, "val_eval_scope": "Full Held-out"}) + "\n",
+                encoding="utf-8"
+            )
+
+            exit_code = verify_gate.main([
+                "--stage", "rl_pilot",
+                "--base-metrics", str(base_p),
+                "--pilot-metrics", str(pilot_p),
+                "--dpo-metrics", str(dpo_p),
+                "--rl-loss-log", str(loss_log_p),
+                "--output", str(out_p),
+            ])
+            self.assertEqual(exit_code, 0)
+            gate_data = json.loads(out_p.read_text(encoding="utf-8"))
+            self.assertEqual(gate_data["gate_status"], "PASSED")
+            self.assertEqual(gate_data["checks"]["held_out_reward"], "PASSED")
+            self.assertEqual(gate_data["checks"]["zero_variance"], "PASSED")
+            self.assertAlmostEqual(gate_data["metrics"]["held_out_reward_improvement"], 0.0608)
+            self.assertAlmostEqual(gate_data["metrics"]["zero_variance_ratio"], 0.15)
+
+    def test_cli_rl_loss_log_fails_when_scope_is_sub_or_step_0_missing(self) -> None:
+        """Verify RL gate fails when Step 0 is missing or evaluation uses Sub-25 scope."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_p = Path(tmp_dir)
+            base_p = tmp_p / "base_metrics.json"
+            pilot_p = tmp_p / "pilot_metrics.json"
+            dpo_p = tmp_p / "dpo_metrics.json"
+            loss_log_missing_step0 = tmp_p / "loss_log_no_step0.jsonl"
+            loss_log_sub25 = tmp_p / "loss_log_sub25.jsonl"
+            out_p = tmp_p / "gate.json"
+
+            base_metrics = {
+                "overall": {
+                    "clean_language_macro_error_rate": 0.020,
+                    "robust_language_macro_error_rate": 0.150,
+                    "samples": 100,
+                    "inference_errors": 0,
+                    "empty_outputs": 0,
+                },
+                "by_scenario": [{"group": "en|clean", "error_rate": 0.020}, {"group": "zh|clean", "error_rate": 0.020}, {"group": "en|noise", "error_rate": 0.150}],
+            }
+            base_p.write_text(json.dumps(base_metrics), encoding="utf-8")
+            dpo_p.write_text(json.dumps(base_metrics), encoding="utf-8")
+
+            pilot_metrics = {
+                "overall": {
+                    "clean_language_macro_error_rate": 0.020,
+                    "robust_language_macro_error_rate": 0.100,
+                    "samples": 100,
+                    "inference_errors": 0,
+                    "empty_outputs": 0,
+                },
+                "by_scenario": [{"group": "en|clean", "error_rate": 0.020}, {"group": "zh|clean", "error_rate": 0.020}, {"group": "en|noise", "error_rate": 0.100}],
+            }
+            pilot_p.write_text(json.dumps(pilot_metrics), encoding="utf-8")
+
+            # Missing Step 0
+            loss_log_missing_step0.write_text(
+                json.dumps({"global_step": 10, "val_mean_reward": 0.7000, "val_eval_scope": "Full Held-out"}) + "\n" +
+                json.dumps({"global_step": 60, "val_mean_reward": 0.8500, "val_eval_scope": "Full Held-out"}) + "\n",
+                encoding="utf-8"
+            )
+            exit_code = verify_gate.main([
+                "--stage", "rl_pilot",
+                "--base-metrics", str(base_p),
+                "--pilot-metrics", str(pilot_p),
+                "--dpo-metrics", str(dpo_p),
+                "--rl-loss-log", str(loss_log_missing_step0),
+                "--output", str(out_p),
+            ])
+            self.assertEqual(exit_code, 1)
+            gate_data = json.loads(out_p.read_text(encoding="utf-8"))
+            self.assertEqual(gate_data["gate_status"], "FAILED")
+            self.assertEqual(gate_data["checks"]["held_out_reward"], "FAILED")
+
+            # Using Sub-25 scope instead of Full Held-out
+            loss_log_sub25.write_text(
+                json.dumps({"global_step": 0, "val_mean_reward": 0.7000, "val_eval_scope": "Sub-25"}) + "\n" +
+                json.dumps({"global_step": 60, "val_mean_reward": 0.8500, "val_eval_scope": "Sub-25"}) + "\n",
+                encoding="utf-8"
+            )
+            exit_code2 = verify_gate.main([
+                "--stage", "rl_pilot",
+                "--base-metrics", str(base_p),
+                "--pilot-metrics", str(pilot_p),
+                "--dpo-metrics", str(dpo_p),
+                "--rl-loss-log", str(loss_log_sub25),
+                "--output", str(out_p),
+            ])
+            self.assertEqual(exit_code2, 1)
+            gate_data2 = json.loads(out_p.read_text(encoding="utf-8"))
+            self.assertEqual(gate_data2["gate_status"], "FAILED")
+            self.assertEqual(gate_data2["checks"]["held_out_reward"], "FAILED")
+
+    def test_cli_rl_loss_log_fails_when_zero_variance_exceeds_threshold(self) -> None:
+        """Verify RL gate fails when zero_variance_ratio exceeds 30% contract threshold."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_p = Path(tmp_dir)
+            base_p = tmp_p / "base_metrics.json"
+            pilot_p = tmp_p / "pilot_metrics.json"
+            dpo_p = tmp_p / "dpo_metrics.json"
+            loss_log_p = tmp_p / "loss_log_high_zero_var.jsonl"
+            out_p = tmp_p / "gate.json"
+
+            base_metrics = {
+                "overall": {
+                    "clean_language_macro_error_rate": 0.020,
+                    "robust_language_macro_error_rate": 0.150,
+                    "samples": 100,
+                    "inference_errors": 0,
+                    "empty_outputs": 0,
+                },
+                "by_scenario": [{"group": "en|clean", "error_rate": 0.020}, {"group": "zh|clean", "error_rate": 0.020}, {"group": "en|noise", "error_rate": 0.150}],
+            }
+            base_p.write_text(json.dumps(base_metrics), encoding="utf-8")
+            dpo_p.write_text(json.dumps(base_metrics), encoding="utf-8")
+
+            pilot_metrics = {
+                "overall": {
+                    "clean_language_macro_error_rate": 0.020,
+                    "robust_language_macro_error_rate": 0.100,
+                    "samples": 100,
+                    "inference_errors": 0,
+                    "empty_outputs": 0,
+                },
+                "by_scenario": [{"group": "en|clean", "error_rate": 0.020}, {"group": "zh|clean", "error_rate": 0.020}, {"group": "en|noise", "error_rate": 0.100}],
+            }
+            pilot_p.write_text(json.dumps(pilot_metrics), encoding="utf-8")
+
+            loss_log_p.write_text(
+                json.dumps({"global_step": 0, "val_mean_reward": 0.7000, "val_eval_scope": "Full Held-out"}) + "\n" +
+                json.dumps({"global_step": 1, "zero_variance_ratio": 0.80}) + "\n" +
+                json.dumps({"global_step": 2, "zero_variance_ratio": 0.90}) + "\n" +
+                json.dumps({"global_step": 60, "val_mean_reward": 0.8500, "val_eval_scope": "Full Held-out"}) + "\n",
+                encoding="utf-8"
+            )
+            exit_code = verify_gate.main([
+                "--stage", "rl_pilot",
+                "--base-metrics", str(base_p),
+                "--pilot-metrics", str(pilot_p),
+                "--dpo-metrics", str(dpo_p),
+                "--rl-loss-log", str(loss_log_p),
+                "--output", str(out_p),
+            ])
+            self.assertEqual(exit_code, 1)
+            gate_data = json.loads(out_p.read_text(encoding="utf-8"))
+            self.assertEqual(gate_data["gate_status"], "FAILED")
+            self.assertEqual(gate_data["checks"]["held_out_reward"], "PASSED")
+            self.assertEqual(gate_data["checks"]["zero_variance"], "FAILED")
+            self.assertAlmostEqual(gate_data["metrics"]["zero_variance_ratio"], 0.85)
+
 
 if __name__ == "__main__":
     unittest.main()

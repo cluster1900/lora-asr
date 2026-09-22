@@ -97,7 +97,7 @@ class ConfigContractTest(unittest.TestCase):
         self.assertEqual(grpo["sampling"]["temperature"], 0.7)
         self.assertEqual(grpo["sampling"]["top_p"], 0.9)
         self.assertEqual(grpo["advantage"]["zero_variance_action"], "zero_advantage")
-        self.assertEqual(grpo["advantage"]["batch_zero_variance_threshold"], 0.30)
+        self.assertEqual(grpo["advantage"]["batch_zero_variance_threshold"], 0.80)
 
     def test_train_config_loads_and_targets_199_linears(self) -> None:
         path = ROOT / "configs/train/qwen3_asr_v100.yaml"

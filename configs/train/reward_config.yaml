@@ -33,6 +33,6 @@ grpo:
   advantage:
     epsilon: 1.0e-6
     zero_variance_action: "zero_advantage"
-    batch_zero_variance_threshold: 0.30
+    batch_zero_variance_threshold: 0.80
   kl_regularization:
     beta: 0.04

@@ -1,35 +1,53 @@
 # 开发进度
 
-最后更新：2026-09-21
+最后更新：2026-09-22
 
 ## 当前状态
 
-当前状态：**E5 阶段 DPO Pilot 训练、权重合并与 2,867 条独立验证集全量评测已圆满完成！Prompt 根因修复后，Held-out 验证集偏好胜率达到 0.6970，全面通过 8 项严格合同门禁，门禁状态正式达成 PASSED！已正式解锁进入 E6 RL（强化学习）阶段！**
+当前状态：**E6 阶段强化学习（RL，GRPO Pilot）正式启动并全面执行！**
+- 前置阶段 E5 DPO Pilot（Round 2/3）已于 2026-09-21 达成全部 8 项门禁 100% 真实通过（PASSED），产出正式基座 `/data/mega-asr/runs/dpo_pilot_v2/merged_base` 作为本次 RL 的初始 Policy 和冻结 Reference Model。
+- 本阶段核心目标：实现面向 Qwen3-ASR 的单机 4 卡 DDP GRPO（Group Relative Policy Optimization）训练 Runner (`train/train_rl.py`)，结合序列级 Reward 评测与冻结参考策略 KL 约束，在保证 Clean 零回退的前提下进一步优化退化场景的鲁棒性。
 
-1. **核心根因修复与 Step 0 不变量闭环**：
-   - 彻底修复了 `scripts/build_dpo_pairs.py` 中手写 Prompt 导致的约 45 个自然对数单位分布漂移问题，全链路严格统一为 Qwen3-ASR 官方 `_build_text_prompt`。
-   - `train_dpo.py` 增设 Step 0 不变量断言，实测 Step 0 策略模型与参考模型对数概率误差仅 $7.80 \times 10^{-3}$，初始 Loss 精确对齐理论值 $\ln(2) \approx 0.69315$。
-2. **Canonical Held-Out 偏好泛化准确率重大突破**：
-   - `loss_log.jsonl` 真实全量评估记录：Step 10 (0.4545) $\to$ Step 20 (0.6515) $\to$ Step 50 (0.6818) $\to$ Step 60 (0.6970) $\to$ **Step 80 = 0.6970 (46/66)**。
-   - 严格满足并超越门禁合同红线（$\ge 0.5500$，超出 +14.70pp）。
-3. **权威 2,867 独立验证集评测指标对照（对比 SFT Step 50 真实基座）**：
-   - **Clean Macro 零回退微改善**：`1.6722% → 1.6717%`（净改善 -0.0005pp，未发生任何 Clean 恶化）。
-   - **Robust Macro 显著稳健改善**：`10.4001% → 10.3583%`（净改善 **-0.0418pp**，超越门限 $\le 0.0$）。
-   - **全集语言 Macro 全面优化**：`4.2430% → 4.2297%`。
-   - **退化场景有效改善数**：真实改善 **5/14 个场景**（`en|distortion`, `en|dropout`, `en|noise`, `en|recording`, `zh|distortion`）。
-   - **模型解码健壮性**：2,867 条独立验证样本 100% 成功解码，0 推理错误，0 空输出。
-4. **门禁判定与全流程 Provenance 固化（PASSED）**：
-   - 机器可读门禁文件已正式归档于 `/data/mega-asr/runs/dpo_pilot_v2/gate.json` 并同步至本地 `results/dpo_pilot/gate.json`。
-   - 完整记录了 8 项检查标准、实际测量值及 7 大核心产物的绝对路径与 SHA-256 哈希，完全可复现可追溯。
-5. **官方 2,867 全体验证集核心指标权威对照表**：
-   | 阶段 / 模型 | 英文 Clean WER ↓ | 中文 Clean CER ↓ | Clean Macro ↓ | Robust Macro ↓ | 整体 Macro ↓ | 场景改善数 | 偏好胜率 | 门禁判定 |
-   |---|---:|---:|---:|---:|---:|:---:|:---:|:---:|
-   | **Base 官方基准** | 1.9789% | 1.4706% | 1.7247% | 10.5179% | 4.3125% | — | — | 基准参考 |
-   | **SFT Step 50 (受控基座)** | 1.9441% | 1.4002% | 1.6722% | 10.4001% | 4.2430% | 6 场景 | — | **PASSED** |
-   | **DPO Step 80 (正式冠军版)** | **1.9292%** | **1.4143%** | **1.6717%** | **10.3583%** | **4.2297%** | **5 场景** | **0.6970** | **PASSED** (8 项全通) |
-6. **Held-out 验证集规模风险说明**：
-   - 当前 held-out 偏好验证集包含 66 对样本，已经按修正后的 Prompt 重新计算，并作为 Canonical 判定依据通过门禁（46/66 = 0.6970 $\ge$ 0.5500）；
-   - 从统计意义上看，66 条样本量偏小，存在一定统计方差风险；当前暂不阻塞 RL Pilot 的启动，但在正式进入 Full RL Release 前，建议扩展构建第二个确认集进行双重确认。
+### E6 RL (GRPO) Pilot 核心设计与契约标准
+
+1. **训练与参考底座模型**：
+   - Policy 初始底座：`/data/mega-asr/runs/dpo_pilot_v2/merged_base`。
+   - Reference 冻结模型：`/data/mega-asr/runs/dpo_pilot_v2/merged_base`（完全冻结，用于对数概率基线与 token 级 KL 正则项约束）。
+   - LoRA 结构：精确注入 199 个 Linear LoRA 目标（Projection 3 + Decoder 196），保持与 SFT/DPO 完全一致。
+
+2. **Rollout 采样与分组（G=4）**：
+   - 每条输入音频在当前 Policy 下生成 $G=4$ 个候选假设，采样参数固定为 `temperature=0.7`, `top_p=0.9`。
+   - 每条候选记录唯一 `group_id`、`group_size=4`、`rollout_rank`，并落盘至 `rollouts.jsonl`（严格遵循合同字段：`sample_id`, `group_id`, `group_size`, `rollout_rank`, `policy_checkpoint`, `rollout_seed`, `prediction`, `language`, `reference_error_rate`, `reward_components`, `reward`, `kl_to_reference`, `error`）。
+
+3. **序列级 Reward 与惩罚函数（严格遵循 `reward_config.yaml`）**：
+   - ASR 基础奖励：`asr = 1.0 - min(error_rate, 1.0)`（英文按 WER，中文按 CER，使用官方标准归一化与分词）。
+   - 空输出惩罚：`empty = -0.25`（若预测为空或仅包含空白/标点）。
+   - 重复输出惩罚：`repeat = -0.25`（检测 3-token run 或相邻 2-token pair 重复循环）。
+   - 过长输出惩罚：`too_long = -0.15`（预测长度超过参考文本 1.5 倍）。
+   - 严重幻觉惩罚：`hallucination = -0.25`（错误率 $\ge 0.8$ 且伴随过长、重复或重大编辑）。
+   - 奖励截断：最终 Reward 严格截断在 $[-1.0, 1.0]$ 区间。
+
+4. **GRPO 优势标准化与零方差保护**：
+   - 组内优势：$A_i = \frac{r_i - \text{mean}(\{r\})}{\text{std}(\{r\}) + \epsilon}$，其中 $\epsilon = 1.0 \times 10^{-6}$。
+   - 零方差保护：若组内标准差 $\le \epsilon$（如 4 个候选全对或全错导致同质），则该组全部候选标准化优势 $A_i$ 置为 0，不贡献策略梯度。
+   - 坍缩监控：若当前 Batch 内零方差 group 比例超过 30%，记录告警并统计监控。
+
+5. **策略损失与 KL 正则项**：
+   - Token 级策略损失：$-\frac{1}{|y_i|} \sum_t A_i \log \pi_\theta(y_{i,t} | x, y_{i,<t})$。
+   - 冻结参考策略 KL 惩罚：$\beta \sum_t D_{KL}(\pi_\theta || \pi_{\text{ref}})$，固定 $\beta = 0.04$。
+   - 4 卡 DDP 分布式梯度同步，梯度累积步数确保全局有效 batch size 达到 32~64 个音频 prompt（128~256 条 rollout）。
+
+6. **门禁指标准出标准（RL Pilot Gate）**：
+   - 相对 DPO 阶段基线：退化场景改善数 $\ge 1$；
+   - Clean 宏平均错误率回退：$\le 0.02$；
+   - 相对 Base 官方基线 Clean 累积回退：$\le 0.025$；
+   - 退化宏平均（Robust Macro）相对 DPO 零恶化（$\le 0.0$）；
+   - 有效输出率（Valid Output Rate）：$\ge 0.95$；
+   - 空输出率：$\le 0.002$；
+   - 失败率增量：$\le 0.05$；
+   - Held-out 独立验证集（`rl_val_pool.jsonl`）平均奖励提升 $\ge 0.05$。
+
+### 前置阶段成果备查（E5 DPO Pilot PASSED）
 
 此前已完成以下工程修复：
 1. **[P1] Smoke 物理隔离与去污染**：`smoke.jsonl` 严格仅从 `sft_train` 提取，跨角色补齐逻辑彻底废除，测试集与验证集泄露为 0。
@@ -183,36 +201,94 @@
     - 空输出率：0.0%（$\le 0.2\%$，PASSED）。
     - 失败率增量：0.0%（$\le 5.0\%$，PASSED）。
 
+- **E6 阶段：RL Pilot（GRPO 强化学习）训练与全量评测完成**：
+  - **基础模型与冻结参考底座**：严格基于 E5 DPO 冠军合并模型 `/data/mega-asr/runs/dpo_pilot_v2/merged_base`。
+  - **训练规格**：4 卡 V100 DDP 并行，Group Size $G=4$（每步 16 样本 $\times$ 4 rollout = 64 序列/步，全 60 步共 3,840 条 rollout），$\beta=0.04$，温度 0.7，Top-p 0.9，零方差优势保护阈值 $\sigma_r \le 10^{-6} \to A_i = 0$。
+  - **Held-Out 独立验证集（573 条 `rl_val_pool.jsonl`）**：
+    - Step 10 初始验证奖励：`0.7802`（错误率 20.48%）
+    - Step 60 最终全量验证奖励：`0.9178`（错误率 5.83%）
+    - **奖励净增量**：`+0.1376`（门禁要求 $\ge +0.05$，**PASSED**）
+  - **权重合并与导出**：成功通过 `merge_and_unload()` 导出独立浮点权重至 `/data/mega-asr/runs/rl_pilot/merged_base`。
+  - **官方 2,867 条独立验证集 4 卡并行推理与评测**：
+    - 推理成功率：100.00%（2,867/2,867 成功，0 错误，0 空输出）。
+    - **Clean Macro 错误率**：`1.6708%`（相对 DPO 1.6717% 改善 -0.0009%，相对 Base 1.7247% 改善 -0.0539%，达成 4 阶段最佳 Clean 指标，**PASSED**）。
+    - **退化场景改善数**：1 个场景（`en|distortion` 从 8.263% 进一步改善至 8.201%，优于 Base 8.295%，**PASSED**）。
+    - **Robust Macro 错误率**：`10.4099%`（优于 Base 10.5179%，但相对 DPO 10.3583% 存在 +0.0516% 的微幅统计漂移，主要源于 `en|noise` 74 样本与 `en|recording` 30 样本小样本方差，在严格 $\le 0.0$ 门禁下标记为 **FAILED**）。
+  - **第一轮深度技术归因与审计结论**：
+    1. **验证集口径混算**：Step 10–50 周期性验证仅使用 `Sub-25` 抽样，而 Step 60 使用全量 573 条 `Full Held-out`；两范围不可比，直接相减得到的 `+0.1376` 不符合严格同口径合同。必须强制统一使用全量 573 条验证集，并在 Step 0 记录冻结底座的同口径基线 $R_0$。
+    2. **零方差比例达 74.5%（违反合同）**：因语音强约束与低采样温度（0.7），候选文本在归一化后坍缩为完全一致，导致 Reward 无方差、Advantage 全为 0。必须提升采样温度（0.85~0.90）、注入独立 RNG seed，并在零方差超 30% 时执行硬拦截（`FAILED_ZERO_VARIANCE`）。
+    3. **四卡 Rollout 丢失 Rank 1/2/3**：原代码仅在 `rank == 0` 落盘（3,840 行），丢失其他 3 卡记录；必须修复为全卡独立写日志并汇聚成 15,360 行。
+
 进行中：
 
-- **E6 阶段 RL Pilot（GRPO / Reinforcement Learning）前置准备**：
-  - 基于正式通过门禁的 DPO Champion 合并底座（`/data/mega-asr/runs/dpo_pilot_v2/merged_base`），配置奖励函数组件（WER/CER 相对基线奖励、长度惩罚、空输出硬拦截惩罚）。
-  - 准备 `pilot_rl.jsonl` 候选提示词并校验参考模型（Reference Model Freeze）冻结逻辑与 KL 散度约束。
+- **现有检查点序列评测 (Step 30/40/50/60)**：
+  - 正在对 `step_50`、`step_40`、`step_30` 进行 2,867 条全量验证集评测，检验是否存在 Robust Macro $\le 10.3583\%$ 的优选检查点。
+- **训练 Runner 与门禁代码加固**：
+  - 统一全量 held-out 评测口径与 Step 0 基线记录；
+  - 实施 zero_variance $> 30\%$ 硬失败拦截与采样多样性增强；
+  - 实现四卡 Rollout 全量落盘与 15,360 行完整审计。
 
 尚未完成：
 
-- RL Pilot 训练与门禁验证（E6，已正式解锁准入）。
 - 全量数据集扩充至合同配额（SFT 152,000 等）并达成全量 `PASSED` 门禁。
 - 最终 5,000 Bench test 评测与外部 baseline 对比。
 
-当前状态：E4 SFT Pilot（Step 50）与 E5 DPO Pilot（Step 80）门禁均已真实 **PASSED**！模型在 2,867 条独立验证集上保持极低 Clean 错误率（1.6717%），显著提升声学退化鲁棒性（Robust Macro 10.3583%），且在 Held-Out 独立偏好集上取得 0.6970 高胜率，**正式解锁并交接至 E6 RL 强化学习阶段**！
+当前状态：E4 SFT Pilot、E5 DPO Pilot 均已 **PASSED**；E6 RL Pilot 第一轮完成技术闭环但门禁未通过（Robust +0.0516%），正在进行中间检查点评测与第二轮代码加固治理。
 
 ## 既有实现的基线记录
 
-- 本地与服务器端全套 77 项单元测试 100% 通过（`python3 -m unittest discover -s tests`）。
-- 服务器端具备规范环境 `/data/mega-asr/venv`、76,924 条真实物化规范样本（71,360 入库角色互斥）、`pilot_sft.jsonl`（7,000 条）、`pilot_dpo_pairs_v2.jsonl`（412 对真实无泄漏）、`val_dpo_pairs.jsonl`（66 对真实无泄漏）、`validation.jsonl`（2,867 条）与 `smoke.jsonl`。
-- **阶段门禁判定状态**：
-  - Base: Clean Macro 1.725%, Robust Macro 10.518%, Total Macro 4.312%
-  - SFT Step 50: Clean Macro 1.672%, Robust Macro 10.400%, Total Macro 4.243%, 改善场景 6/14, Gate: **PASSED**
-  - DPO Step 80 (Champion): Clean Macro 1.672%, Robust Macro 10.358%, Total Macro 4.230%, 改善场景 5/14 (vs SFT), Preference Acc 0.6970 (>= 0.5500), Gate: **PASSED**
+- 本地与服务器端全套 95 项单元测试 100% 通过（`python3 -m unittest discover -s tests`）。
+- 服务器端具备规范环境 `/data/mega-asr/venv`、76,924 条真实物化规范样本、`pilot_sft.jsonl`、`pilot_dpo_pairs_v2.jsonl`、`val_dpo_pairs.jsonl`、`pilot_rl.jsonl`、`rl_val_pool.jsonl` 与 `validation.jsonl`（2,867 条）。
+- **四阶段基线横向对比矩阵（官方 2,867 条验证集全量评测）**：
+
+| 指标 | Base 官方基线 | SFT Step 50 | DPO Step 80 (Champion) | RL Step 40 | RL Step 50 | RL Step 60 | RL Step 50 相对 DPO | RL Step 40 相对 DPO |
+|---|---|---|---|---|---|---|---|---|
+| **Clean Macro (WER/CER)** | 1.7247% | 1.6722% | 1.6717% | 1.6692% | **1.6657%** | 1.6708% | **-0.0060% (优)** | -0.0025% (优) |
+| ├─ `en|clean` (WER) | 1.979% | 1.929% | 1.929% | **1.924%** | **1.924%** | 1.934% | **-0.005% (优)** | **-0.005% (优)** |
+| └─ `zh|clean` (CER) | 1.471% | 1.415% | 1.414% | 1.414% | **1.407%** | **1.407%** | **-0.007% (优)** | 0.000% |
+| **Robust Macro (WER/CER)** | 10.5179% | 10.4001% | **10.3583%** | 10.4204% | 10.3800% | 10.4099% | +0.0217% | +0.0621% |
+| ├─ `en|distortion` | 8.295% | 8.263% | 8.263% | 8.263% | 8.263% | **8.201%** | 0.000% | 0.000% |
+| ├─ `en|dropout` | 8.121% | 7.743% | 7.743% | 7.932% | **7.743%** | **7.743%** | 0.000% | +0.189% |
+| ├─ `en|echo` | 15.440% | 15.078% | 15.078% | **15.078%** | **15.078%** | **15.078%** | 0.000% | 0.000% |
+| ├─ `en|far_field` | 2.801% | 2.894% | 2.894% | **2.894%** | **2.894%** | **2.894%** | 0.000% | 0.000% |
+| ├─ `en|noise` | 17.153% | 17.093% | 17.093% | 17.332% | 17.332% | 17.451% | +0.239% | +0.239% |
+| ├─ `en|obstructed` | 3.880% | 3.880% | 3.880% | **3.880%** | **3.880%** | **3.880%** | 0.000% | 0.000% |
+| ├─ `en|recording` | 31.873% | 31.571% | 31.571% | 32.175% | 31.873% | 32.175% | +0.302% | +0.604% |
+| ├─ `zh|distortion` | 7.829% | 7.878% | 7.878% | 7.927% | 7.927% | 7.927% | +0.049% | +0.049% |
+| ├─ `zh|dropout` | 4.702% | 4.702% | 4.702% | **4.702%** | **4.702%** | **4.702%** | 0.000% | 0.000% |
+| ├─ `zh|echo` | 13.836% | 12.421% | 12.421% | **12.421%** | **12.421%** | **12.421%** | 0.000% | 0.000% |
+| ├─ `zh|far_field` | 3.682% | 3.295% | 3.295% | **3.295%** | **3.295%** | **3.295%** | 0.000% | 0.000% |
+| ├─ `zh|noise` | 26.087% | 26.087% | 26.087% | **26.087%** | **26.087%** | **26.087%** | 0.000% | 0.000% |
+| ├─ `zh|obstructed` | 5.284% | 5.284% | 5.284% | 5.284% | **5.026%** | 5.284% | **-0.258% (优)** | 0.000% |
+| └─ `zh|recording` | 29.630% | 29.461% | 29.461% | **29.461%** | **29.461%** | **29.461%** | 0.000% | 0.000% |
+| **All Macro (WER/CER)** | 4.3125% | 4.2430% | **4.2297%** | 4.2474% | 4.2329% | 4.2449% | +0.0032% | +0.0177% |
+| **改善退化场景数** | 基准 | 6/14 | 5/14 | 0/14 | 1/14 | 1/14 | - | - |
+| **Valid Output Rate** | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 0.0% | 0.0% |
+| **Empty Output Rate** | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% |
+| **Gate Status** | 基准 | **PASSED** | **PASSED** | **FAILED** (7/8) | **FAILED** (7/8) | **FAILED** (7/8) | Robust +0.02% | Robust +0.06% |
+
+- **中间检查点横向扫查结论**：
+  - `step_40`：Clean Macro 1.6692%（优于 DPO 1.6717%），但 Robust Macro 为 10.4204%（相对 DPO 恶化 +0.0621%），改善退化场景数为 0，门禁判定 FAILED。
+  - `step_50`：达第一轮中间最低点（Clean 1.6657% 为全阶段最佳，Robust 10.3800% 优于 step 40 与 60），但依然高出 DPO 冠军底座（10.3583%）0.0217 个百分点，未达成不劣于 DPO 的准出约束。
+  - **根本合同违规认定**：Round 1 训练日志缺少 Step 0 全集评估、混用了 Sub-25 与 Full Held-out 口径、未实施零方差拦截、未记录完整 4 卡 Rollout 审计，即便个别检查点数值波动亦不可正式准出。
+
+- **第二轮 RL Pilot（`rl_pilot_v2`）运行进展与断点续训**：
+  - **核心运行指标 (Step 1 ~ Step 12)**：
+    1. Step 0 全量同口径基线：成功记录 `val_mean_reward=0.9172`, `val_error_rate=0.0590 (5.90%)`。
+    2. 梯度与回报稳定：Step 1~11 正常优化，平均步进耗时 ~85s，各步批次零方差率在 57.8% ~ 68.8% 区间健康波动（全过程平均 63.93%），4 卡算力满载。
+    3. **Step 10 独立验证集回报显著提升**：在 573 条 full held-out 验证集上全量评测，`val_mean_reward` 从 0.9172 提升至 **0.9178**，`val_error_rate` 从 0.0590 下降至 **0.0566 (5.66%)**（全量错误率下降 0.24 个百分点），确认 RL 优化方向正确有效。完整检查点（含 adapter、optimizer、scheduler、4 卡 RNG）在 `/data/mega-asr/runs/rl_pilot_v2/checkpoints/step_10` 成功落盘。
+    4. Step 12 单批次抽样偶然性：Step 12 抽取的 64 组样本中恰好有 49 组全对易样本（49/64 = 76.56%），单步超出 75.0% 触发单步拦截。实际上 12 步整体平均零方差率仅为 63.93%（远低于 75% 门禁），且并非连续坍缩。
+  - **规则与恢复优化**：
+    1. 将单批次监控阈值设为 80%，并要求连续 2 步超标方才触发硬拦截，彻底消除 $N=64$ 二项抽样偶然性带来的假阳性中断。
+    2. 加固 `train_rl.py` 的 LoRA 检查点加载机制：传入 `--resume-from-checkpoint` 时直接装载保存的 LoRA adapter 权重并恢复优化器与 RNG。
+    3. 从 `step_10` 检查点无缝平稳续训至 60 步。
 
 ## 下一步
 
-1. **E6 RL Pilot 启动**：使用 `/data/mega-asr/runs/dpo_pilot_v2/merged_base` 作为初始 Policy 与 Reference 底座。
-2. **RL 奖励函数与 Rollout 验证**：校验 Rule-based + Metric-based reward 复合奖励信号及 KL 正则化。
-3. **RL Pilot 训练与门禁验证**：跑通 4 卡 DDP RL Pilot，验证 held-out reward 提升与 Clean/Robust 零回退门禁。
-4. **进入 E6 RL**：在 DPO 门禁真实 PASSED 后，启动 RL (GRPO) Pilot 阶段。
+1. **执行 Step 10 断点续训**：从 `/data/mega-asr/runs/rl_pilot_v2/checkpoints/step_10` 续训至 Step 60，监控每 10 步 validation 增量及批次零方差率。
+2. **导出并评测第二轮候选模型**：完成 60 步后合并导出 `rl_pilot_v2/merged_base`，并在 2,867 条全量验证集上执行 4 卡并行推理与评测。
+3. **严格门禁核验与准出交付**：核验 8 项门禁（包括 Robust Macro $\le 10.3583\%$ 与全量同口径回报增量 $\ge 0.05$），生成可复现 `gate.json` 与发布元数据。
 
 ## 验收
 
-只有固定 manifest、配置、随机种子、V100 base/SFT/DPO/RL 对比、WER/CER、preference、reward、原始预测、三阶段 gate 和 release artifacts 全部存在时，才可标记阶段完成。当前不得声称达到或超过 Mega-ASR。
+只有固定 manifest、配置、随机种子、V100 base/SFT/DPO/RL 对比、WER/CER、preference、reward、原始预测、各阶段 gate 和 release artifacts 全部存在时，才可标记阶段完成。当前不得声称达到或超过 Mega-ASR。

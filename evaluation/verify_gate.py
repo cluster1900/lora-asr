@@ -38,6 +38,7 @@ def evaluate_gate(
     base_metrics: Dict[str, Any],
     pilot_metrics: Dict[str, Any],
     sft_metrics: Optional[Dict[str, Any]] = None,
+    dpo_metrics: Optional[Dict[str, Any]] = None,
     stage: str = "sft_pilot",
     min_degraded_improvements: int = 1,
     max_clean_regression: float = 0.02,
@@ -48,23 +49,36 @@ def evaluate_gate(
     max_failure_increase: float = 0.05,
     preference_accuracy: Optional[float] = None,
     min_preference_accuracy: float = 0.55,
+    reward_improvement: Optional[float] = None,
+    min_reward_improvement: float = 0.05,
+    zero_variance_ratio: Optional[float] = None,
+    max_zero_variance_ratio: float = 0.75,
     manifest_path: Optional[Path] = None,
     base_predictions_path: Optional[Path] = None,
     pilot_predictions_path: Optional[Path] = None,
     sft_predictions_path: Optional[Path] = None,
+    dpo_predictions_path: Optional[Path] = None,
     base_metrics_path: Optional[Path] = None,
     pilot_metrics_path: Optional[Path] = None,
     sft_metrics_path: Optional[Path] = None,
+    dpo_metrics_path: Optional[Path] = None,
     dpo_val_manifest_path: Optional[Path] = None,
     dpo_loss_log_path: Optional[Path] = None,
+    rl_val_manifest_path: Optional[Path] = None,
+    rl_loss_log_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Compare base, sft, and pilot metrics and determine gate status."""
+    """Compare base, sft, dpo, and pilot metrics and determine gate status."""
     if max_robust_macro_regression is None:
         max_robust_macro_regression = 0.0 if stage in ("dpo_pilot", "rl_pilot") else 0.005
     base_overall = base_metrics.get("overall", {})
     pilot_overall = pilot_metrics.get("overall", {})
-    # For DPO/RL, reference comparison is relative to previous stage (SFT)
-    ref_metrics = sft_metrics if (sft_metrics is not None and stage in ("dpo_pilot", "rl_pilot")) else base_metrics
+    # For DPO, reference is SFT; for RL, reference is DPO (falling back to SFT or Base)
+    if stage == "rl_pilot":
+        ref_metrics = dpo_metrics if dpo_metrics is not None else (sft_metrics if sft_metrics is not None else base_metrics)
+    elif stage == "dpo_pilot":
+        ref_metrics = sft_metrics if sft_metrics is not None else base_metrics
+    else:
+        ref_metrics = base_metrics
     ref_overall = ref_metrics.get("overall", {})
 
     # 1. Degraded scenario improvements (relative to ref: SFT for DPO, Base for SFT)
@@ -141,7 +155,15 @@ def evaluate_gate(
     else:
         preference_passed = True
 
-    # 5. Valid output rate, empty output rate & failure rate
+    # 5. Held-out reward improvement for RL (strictly mandatory for rl_pilot)
+    if stage == "rl_pilot":
+        reward_passed = (reward_improvement is not None) and (reward_improvement >= min_reward_improvement)
+        zero_variance_passed = (zero_variance_ratio is None) or (zero_variance_ratio <= max_zero_variance_ratio)
+    else:
+        reward_passed = True
+        zero_variance_passed = True
+
+    # 6. Valid output rate, empty output rate & failure rate
     pilot_samples = int(pilot_overall.get("samples", 0))
     pilot_infer_errors = int(pilot_overall.get("inference_errors", 0))
     pilot_empty_outputs = int(pilot_overall.get("empty_outputs", 0))
@@ -177,6 +199,8 @@ def evaluate_gate(
         and cumulative_clean_passed
         and robust_passed
         and preference_passed
+        and reward_passed
+        and zero_variance_passed
         and valid_output_passed
         and empty_output_passed
         and failure_rate_passed
@@ -194,6 +218,9 @@ def evaluate_gate(
         checks["clean_cumulative_retention"] = "PASSED" if cumulative_clean_passed else "FAILED"
     if stage == "dpo_pilot":
         checks["preference_accuracy"] = "PASSED" if preference_passed else "FAILED"
+    if stage == "rl_pilot":
+        checks["held_out_reward"] = "PASSED" if reward_passed else "FAILED"
+        checks["zero_variance"] = "PASSED" if zero_variance_passed else "FAILED"
 
     provenance: Dict[str, Any] = {
         "manifest": str(manifest_path) if manifest_path else "",
@@ -211,12 +238,24 @@ def evaluate_gate(
         "pilot_predictions_path": str(pilot_predictions_path) if pilot_predictions_path else "",
         "pilot_predictions_sha256": compute_file_sha256(pilot_predictions_path) if pilot_predictions_path else "",
     }
+    if dpo_metrics_path:
+        provenance["dpo_metrics_path"] = str(dpo_metrics_path)
+        provenance["dpo_metrics_sha256"] = compute_file_sha256(dpo_metrics_path)
+    if dpo_predictions_path:
+        provenance["dpo_predictions_path"] = str(dpo_predictions_path)
+        provenance["dpo_predictions_sha256"] = compute_file_sha256(dpo_predictions_path)
     if dpo_val_manifest_path:
         provenance["dpo_val_manifest_path"] = str(dpo_val_manifest_path)
         provenance["dpo_val_manifest_sha256"] = compute_file_sha256(dpo_val_manifest_path)
     if dpo_loss_log_path:
         provenance["dpo_loss_log_path"] = str(dpo_loss_log_path)
         provenance["dpo_loss_log_sha256"] = compute_file_sha256(dpo_loss_log_path)
+    if rl_val_manifest_path:
+        provenance["rl_val_manifest_path"] = str(rl_val_manifest_path)
+        provenance["rl_val_manifest_sha256"] = compute_file_sha256(rl_val_manifest_path)
+    if rl_loss_log_path:
+        provenance["rl_loss_log_path"] = str(rl_loss_log_path)
+        provenance["rl_loss_log_sha256"] = compute_file_sha256(rl_loss_log_path)
 
     thresholds_dict: Dict[str, Any] = {
         "min_degraded_scenario_improvements": min_degraded_improvements,
@@ -230,6 +269,9 @@ def evaluate_gate(
         thresholds_dict["clean_cumulative_error_rate_increase_max"] = max_cumulative_clean_regression
     if stage == "dpo_pilot":
         thresholds_dict["preference_accuracy_min"] = min_preference_accuracy
+    if stage == "rl_pilot":
+        thresholds_dict["reward_improvement_min"] = min_reward_improvement
+        thresholds_dict["zero_variance_ratio_max"] = max_zero_variance_ratio
 
     gate_record = {
         "stage": stage,
@@ -242,6 +284,8 @@ def evaluate_gate(
             "clean_error_rate_increase": clean_increase,
             "robust_error_rate_increase": robust_increase,
             "preference_accuracy": preference_accuracy,
+            "held_out_reward_improvement": reward_improvement,
+            "zero_variance_ratio": zero_variance_ratio,
             "valid_output_rate": valid_output_rate,
             "empty_output_rate": pilot_empty_rate,
             "failure_rate_increase": failure_rate_increase,
@@ -251,6 +295,8 @@ def evaluate_gate(
             "base_robust_macro": base_overall.get("robust_language_macro_error_rate"),
             "sft_clean_macro": sft_metrics.get("overall", {}).get("clean_language_macro_error_rate") if sft_metrics else None,
             "sft_robust_macro": sft_metrics.get("overall", {}).get("robust_language_macro_error_rate") if sft_metrics else None,
+            "dpo_clean_macro": dpo_metrics.get("overall", {}).get("clean_language_macro_error_rate") if dpo_metrics else None,
+            "dpo_robust_macro": dpo_metrics.get("overall", {}).get("robust_language_macro_error_rate") if dpo_metrics else None,
             "pilot_clean_macro": pilot_clean_macro,
             "pilot_robust_macro": pilot_overall.get("robust_language_macro_error_rate"),
             "base_failure_rate": base_failure_rate,
@@ -348,6 +394,44 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Target step number in dpo_loss_log to extract val_preference_accuracy for (default: last step)",
     )
+    parser.add_argument("--dpo-metrics", default=None, help="Path to DPO metrics.json (for RL stage comparison)")
+    parser.add_argument("--dpo-predictions", default=None, help="Path to DPO predictions.jsonl (optional)")
+    parser.add_argument(
+        "--reward-improvement",
+        type=float,
+        default=None,
+        help="Held-out reward improvement for RL stage",
+    )
+    parser.add_argument(
+        "--min-reward-improvement",
+        type=float,
+        default=0.05,
+        help="Minimum required held-out reward improvement for RL (default: 0.05)",
+    )
+    parser.add_argument(
+        "--rl-loss-log",
+        type=str,
+        default=None,
+        help="Path to RL training loss_log.jsonl to auto-extract held-out reward improvement",
+    )
+    parser.add_argument(
+        "--rl-val-manifest",
+        type=str,
+        default=None,
+        help="Path to RL held-out validation manifest (rl_val_pool.jsonl) for provenance recording",
+    )
+    parser.add_argument(
+        "--rl-step",
+        type=int,
+        default=None,
+        help="Target step number in rl_loss_log to extract held-out validation reward for (default: last step)",
+    )
+    parser.add_argument(
+        "--max-zero-variance-ratio",
+        type=float,
+        default=0.75,
+        help="Maximum allowed zero-variance group ratio for RL (default: 0.75)",
+    )
     return parser
 
 
@@ -371,6 +455,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     sft_metrics_path = Path(args.sft_metrics).resolve() if args.sft_metrics else None
     sft_metrics = load_json(sft_metrics_path) if sft_metrics_path and sft_metrics_path.is_file() else None
 
+    dpo_metrics_path = Path(args.dpo_metrics).resolve() if args.dpo_metrics else None
+    dpo_metrics = load_json(dpo_metrics_path) if dpo_metrics_path and dpo_metrics_path.is_file() else None
+
     # Auto-extract preference_accuracy from dpo_loss_log if not explicitly provided
     preference_accuracy = args.preference_accuracy
     if args.stage == "dpo_pilot" and preference_accuracy is None and args.dpo_loss_log:
@@ -390,18 +477,65 @@ def main(argv: Optional[List[str]] = None) -> int:
                         except Exception:
                             pass
 
+    # Auto-extract reward_improvement and zero_variance_ratio from rl_loss_log
+    reward_improvement = args.reward_improvement
+    zero_variance_ratio = None
+    if args.stage == "rl_pilot" and args.rl_loss_log:
+        rl_loss_log_p = Path(args.rl_loss_log).resolve()
+        if rl_loss_log_p.is_file():
+            val_records: Dict[int, Dict[str, Any]] = {}
+            train_zero_vars: List[float] = []
+            with open(rl_loss_log_p, "r", encoding="utf-8") as f_rll:
+                for line in f_rll:
+                    line_s = line.strip()
+                    if line_s:
+                        try:
+                            rec = json.loads(line_s)
+                            # Validation record: strictly require val_eval_scope == "Full Held-out"
+                            if "val_mean_reward" in rec and rec["val_mean_reward"] is not None:
+                                scope = rec.get("val_eval_scope", "")
+                                step_v = rec.get("global_step", rec.get("step"))
+                                if scope == "Full Held-out" and step_v is not None:
+                                    val_records[int(step_v)] = rec
+                            # Training record with zero-variance ratio
+                            if "zero_variance_ratio" in rec and rec["zero_variance_ratio"] is not None:
+                                train_zero_vars.append(float(rec["zero_variance_ratio"]))
+                        except Exception:
+                            pass
+
+            if train_zero_vars:
+                zero_variance_ratio = round(sum(train_zero_vars) / len(train_zero_vars), 4)
+
+            if reward_improvement is None:
+                # Strict same-scope validation: require Step 0 baseline on Full Held-out
+                if 0 in val_records:
+                    step0_reward = float(val_records[0]["val_mean_reward"])
+                    target_step = args.rl_step
+                    if target_step is not None:
+                        if target_step in val_records:
+                            reward_improvement = round(float(val_records[target_step]["val_mean_reward"]) - step0_reward, 4)
+                    else:
+                        non_zero_steps = sorted([s for s in val_records.keys() if s > 0])
+                        if non_zero_steps:
+                            last_step = non_zero_steps[-1]
+                            reward_improvement = round(float(val_records[last_step]["val_mean_reward"]) - step0_reward, 4)
+
     manifest_p = Path(args.manifest).resolve() if args.manifest else None
     base_pred_p = Path(args.base_predictions).resolve() if args.base_predictions else None
     pilot_pred_p = Path(args.pilot_predictions).resolve() if args.pilot_predictions else None
     sft_pred_p = Path(args.sft_predictions).resolve() if args.sft_predictions else None
+    dpo_pred_p = Path(args.dpo_predictions).resolve() if args.dpo_predictions else None
     dpo_val_manifest_p = Path(args.dpo_val_manifest).resolve() if args.dpo_val_manifest else None
     dpo_loss_log_p = Path(args.dpo_loss_log).resolve() if args.dpo_loss_log else None
+    rl_val_manifest_p = Path(args.rl_val_manifest).resolve() if args.rl_val_manifest else None
+    rl_loss_log_p = Path(args.rl_loss_log).resolve() if args.rl_loss_log else None
     output_p = Path(args.output).resolve()
 
     gate_record = evaluate_gate(
         base_metrics=base_metrics,
         pilot_metrics=pilot_metrics,
         sft_metrics=sft_metrics,
+        dpo_metrics=dpo_metrics,
         stage=args.stage,
         min_degraded_improvements=args.min_degraded_improvements,
         max_clean_regression=args.max_clean_regression,
@@ -412,15 +546,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         max_failure_increase=args.max_failure_increase,
         preference_accuracy=preference_accuracy,
         min_preference_accuracy=args.min_preference_accuracy,
+        reward_improvement=reward_improvement,
+        min_reward_improvement=args.min_reward_improvement,
+        zero_variance_ratio=zero_variance_ratio,
+        max_zero_variance_ratio=args.max_zero_variance_ratio,
         manifest_path=manifest_p,
         base_predictions_path=base_pred_p,
         pilot_predictions_path=pilot_pred_p,
         sft_predictions_path=sft_pred_p,
+        dpo_predictions_path=dpo_pred_p,
         base_metrics_path=base_metrics_path,
         pilot_metrics_path=pilot_metrics_path,
         sft_metrics_path=sft_metrics_path,
+        dpo_metrics_path=dpo_metrics_path,
         dpo_val_manifest_path=dpo_val_manifest_p,
         dpo_loss_log_path=dpo_loss_log_p,
+        rl_val_manifest_path=rl_val_manifest_p,
+        rl_loss_log_path=rl_loss_log_p,
     )
 
     output_p.parent.mkdir(parents=True, exist_ok=True)

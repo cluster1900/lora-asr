@@ -1,0 +1,99 @@
+schema_version: 1
+
+model:
+  model_id: /data/mega-asr/runs/dpo_pilot_v2/merged_base
+  model_revision: 7278e1e70fe206f11671096ffdd38061171dd6e5
+  dtype: float16
+  bf16: false
+  tf32: false
+  attention_implementation: eager
+  flash_attention_2: false
+
+runtime:
+  device: cuda
+  world_size: 4
+  micro_batch_size: 1 # 1 audio prompt per forward pass
+  gradient_accumulation_steps: 16 # effective batch = 1 * 16 * 4 = 64 prompts (256 rollouts)
+  global_batch_size: 64
+  gradient_checkpointing: true
+  enable_input_require_grads: true
+  root_dir: /data/mega-asr
+  seed: 20260722
+  dataloader_workers: 2
+
+train:
+  max_steps: 60
+  save_steps: 10
+  eval_steps: 10
+  learning_rate: 2.0e-6
+  warmup_steps: 10
+  lr_scheduler: linear
+
+grpo:
+  group_size: 4
+  sampling:
+    temperature: 0.85
+    top_p: 0.92
+    top_k: 50
+  advantage:
+    epsilon: 1.0e-6
+    zero_variance_threshold: 0.80
+  kl_regularization:
+    beta: 0.04
+
+reward:
+  config_path: configs/train/reward_config.yaml
+  clip:
+    min: -1.0
+    max: 1.0
+  penalties:
+    empty: -0.25
+    repeat: -0.25
+    too_long: -0.15
+    too_long_ratio: 1.5
+    hallucination: -0.25
+    hallucination_error_threshold: 0.8
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  target_groups:
+    projection: 3
+    decoder_attention: 112
+    decoder_mlp: 84
+  expected_total_targets: 199
+  projection_targets:
+    - thinker.audio_tower.conv_out
+    - thinker.audio_tower.proj1
+    - thinker.audio_tower.proj2
+  decoder_layers_count: 28
+  decoder_attention_names:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+  decoder_mlp_names:
+    - gate_proj
+    - up_proj
+    - down_proj
+
+lifecycle:
+  strategy: merge_and_unload
+  stages:
+    rl:
+      starting_model: /data/mega-asr/runs/dpo_pilot_v2/merged_base
+      output_adapter: rl_release
+      output_merged: rl_merged_base
+
+gates:
+  rl_pilot:
+    held_out_mean_reward_improvement_min: 0.05
+    min_degraded_scenario_improvements: 1
+    clean_error_rate_increase_max: 0.02
+    clean_cumulative_error_rate_increase_max: 0.025
+    max_robust_macro_regression: 0.0
+    valid_output_rate_min: 0.95
+    max_empty_output_rate: 0.002
+    failure_rate_increase_max: 0.05

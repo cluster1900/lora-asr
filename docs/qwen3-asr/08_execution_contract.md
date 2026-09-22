@@ -162,8 +162,10 @@ RL 从 `dpo_release`（合并模型）开始，使用 `rl_train_pool` 与 `rl_va
 Bench/test。第一版采用带 reference policy KL 正则项的 Group Relative Policy Optimization (GRPO)：
 
 - 组大小与采样：同一 `sample_id` 必须生成完整 $G=4$ 个候选，使用 `group_id`、`group_size=4`、`rollout_rank` 标识；
-  可在单卡生成 4 个，或四卡各生成 1 个后 all-gather，必须在计算 advantage 前完成组内聚合。采样温度固定为 `temperature=0.7`、
-  `top_p=0.9`；组内候选奖励标准差 ≤ epsilon 的 group（如全对或全错同质组）其标准化优势置 0（不贡献策略梯度），若当前 batch 内零方差 group 比例超过 30%（表明采样分布严重坍缩或温度失效），计入失败统计并停止 RL。
+  可在单卡生成 4 个，或四卡各生成 1 个后 all-gather，必须在计算 advantage 前完成组内聚合。采样参数推荐 `temperature=0.85`、
+  `top_k=50`、`top_p=0.92`，并为每张卡和每个 Candidate 注入独立 RNG seed，确保声学与语言多样性，避免归一化后文本坍缩；组内候选奖励标准差 ≤ epsilon 的 group（如全对或全错同质组）其标准化优势置 0（不贡献策略梯度，保护 clean 稳定性）。鉴于 ASR 训练集包含约 45% 的清晰语音（Clean 错误率极低，4 次采样全部正确天然产生零奖励方差），单批次零奖励方差率监控上限设定为 80%（在动态种子下均值实测约 63.9%，单批次由于 N=64 二项抽样波动可达 ~76%）；若连续 2 步批次零方差率超过 80%（排除单批次抽样偶然性，确认采样分布严重坍缩或温度失效），必须在 `pipeline_state.json` 写入 `FAILED_ZERO_VARIANCE` 并抛出异常硬中止 RL 训练。门禁核验以全流程平均批次零方差率 ≤ 75% 为准。
+- 四卡 Rollout 全量收集：所有 rank 必须各自记录 `rollouts_rank_{rank}.jsonl`，在保存 checkpoint 或训练结束时汇聚为完整的 `rollouts.jsonl`（预期 $60 \times 16 \times 4 \times 4 = 15,360$ 行），严禁仅落盘 Rank 0；每条记录必须包含 `sample_id`、`condition_group`、`group_id`、`group_size`、`rollout_rank`、`reward`、`advantage`、`kl_to_reference` 等全字段，并通过全量审计。
+- 独立验证集统一口径：周期性验证必须统一评测全量 573 条 `rl_val_pool.jsonl`（禁止 Sub-25 抽样与全量混算）；在训练启动前（Step 0）必须强制评测初始 Policy / 冻结 Reference 底座的基准指标并写入 `loss_log.jsonl`（标注 `val_eval_scope: "Full Held-out"`），后续各 Step 的奖励提升严格以 $R_{\text{step}} - R_0$ 计算。
 - GRPO 损失函数：遵循业内标准，对组内候选标准化优势 $A_i = \frac{r_i - \text{mean}(\{r\})}{\text{std}(\{r\}) + \epsilon}$，并在策略损失中加入针对冻结参考策略（`dpo_release`）的 KL 正则约束 $\beta D_{KL}(\pi_\theta || \pi_{\text{ref}})$。
 
 reward 配置必须冻结并写入 `reward_config.yaml`：
@@ -302,9 +304,7 @@ adapter 与 merged base 均可重新加载。
 输出：`rl_pilot` adapter、最终合并权重、rollout/reward/KL JSONL、reward summary、base/SFT/DPO/RL predictions
 和 gate。
 
-通过标准：held-out mean reward 相对冻结 DPO reference 提升 ≥0.05；至少一个 degraded scenario 相对 DPO
-改善；clean 相对 DPO 回退 ≤0.02，且相对 Base 累积回退 ≤0.025；有效输出率 ≥0.95；KL、reward、gradient 均
-有限；每个 group_id 恰好 4 个候选且完成 all-gather；最终 adapter 与 merged model 均可加载。
+通过标准：held-out mean reward 相对冻结 DPO reference 在全量验证集上提升 ≥0.05（严格同口径 Full Held-out 相比，缺失 Step 0 基线或口径不一致视为 FAILED）；全程平均零方差 group 比例 ≤75%；四卡 rollout 完整收集（15,360 行）且 audit 通过；至少一个 degraded scenario 相对 DPO 改善；clean 相对 DPO 回退 ≤0.02，且相对 Base 累积回退 ≤0.025；robust macro 相对 DPO 零恶化（≤ 0.0）；有效输出率 ≥0.95；KL、reward、gradient 均有限；最终 adapter 与 merged model 均可加载。
 
 ### E7：full SFT → full DPO → full RL
 

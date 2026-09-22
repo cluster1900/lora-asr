@@ -85,6 +85,22 @@ python evaluation/verify_gate.py \
   --max-empty-rate 0.002 \
   --output /data/mega-asr/runs/dpo_pilot_v2/gate.json
 
+# RL Pilot 门禁判定（强校验 held-out reward 提升 >= 0.05，严格基于 Step 0 基线与目标 Step 的统一 val_eval_scope == "Full Held-out" 同口径差值计算；缺失 Step 0 或口径不一致判为 FAILED；强校验 zero-variance group 比例 <= 75%；包含 DPO 预测与评测 Provenance、--rl-val-manifest 验证集 Provenance、Base 累积 Clean 回退 <= 0.025、DPO Clean 回退 <= 0.02，且 Robust Macro 相对 DPO 零恶化 <= 0.0）
+python evaluation/verify_gate.py \
+  --base-metrics /data/mega-asr/runs/sft_pilot_controlled/merged_base_eval/metrics.json \
+  --base-predictions /data/mega-asr/runs/sft_pilot_controlled/merged_base_eval/predictions.jsonl \
+  --dpo-metrics /data/mega-asr/runs/dpo_pilot_v2/metrics.json \
+  --dpo-predictions /data/mega-asr/runs/dpo_pilot_v2/predictions.jsonl \
+  --pilot-metrics /data/mega-asr/runs/rl_pilot/evaluation/metrics.json \
+  --pilot-predictions /data/mega-asr/runs/rl_pilot/predictions.jsonl \
+  --manifest /data/mega-asr/manifests/validation.jsonl \
+  --rl-val-manifest /data/mega-asr/manifests/rl_val_pool.jsonl \
+  --rl-loss-log /data/mega-asr/runs/rl_pilot/loss_log.jsonl \
+  --stage rl_pilot \
+  --max-robust-regression 0.0 \
+  --max-empty-rate 0.002 \
+  --output /data/mega-asr/runs/rl_pilot/gate.json
+
 # 3. 运行多 Checkpoint 序列自动化横向评测与 Pareto 优选
 python evaluation/eval_checkpoint_series.py \
   --run-dir /data/mega-asr/runs/sft_pilot_controlled \

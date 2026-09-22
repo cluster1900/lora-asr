@@ -11,6 +11,7 @@
 | `__init__.py` | 包声明与初始化文件。 |
 | `train_sft.py` | SFT 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu` 调试模式；注入 199 个 Linear LoRA 目标（Projection 3 + Decoder 196）；实现标签掩码 Cross-Entropy 损失与分层均衡 validation loss 评估；支持 10+2 检查点保存与断点恢复（optimizer、scheduler、RNG、training_state）；提供 `--export-merged` 执行 `merge_and_unload()` 权重导出。 |
 | `train_dpo.py` | DPO 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu` 调试模式；继承 199 个 Linear LoRA 目标；基于预计算的参考对数概率（或在线计算）实现 Bradley-Terry 偏好损失函数，记录隐式奖励差与 preference accuracy；提供全状态断点保存/恢复与 `--export-merged` 权重导出。 |
+| `train_rl.py` | RL (GRPO) 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu` 调试模式；以 DPO 合并模型为初始 Policy 与冻结 Reference Model，注入 199 个 Linear LoRA 目标；每条样本生成 $G=4$ 个在线 Rollout 采样，支持温度调节（默认 0.85）与 rank/candidate 独立 RNG 种子偏移；结合 ASR 准确率（WER/CER）与 empty/repeat/too_long/hallucination 惩罚计算序列 Reward 并标准化 Group Advantage；组内方差为零优势置 0，若连续 2 步批次内零方差组比例超过阈值（默认 0.80）硬中止并标记 `FAILED_ZERO_VARIANCE`；四卡独立落盘并汇聚全量 `rollouts.jsonl`（15,360 行）与审计；强制在 Step 0 记录冻结底座全量 held-out 基准并全程采用统一验证口径；提供 10+2 全状态断点恢复与 `--export-merged` 权重导出。 |
 | `README.md` | 说明当前目录职责、文件清单、主要输入输出、CLI 参数与维护要求。 |
 
 ## 使用入口与 CLI 参数
@@ -46,7 +47,7 @@ torchrun --standalone --nproc_per_node=4 train/train_sft.py \
     --max-steps 10000 \
     --save-steps 500
 
-# 3. 单机 4 卡 DDP Smoke 训练 10 步并保存检查点
+# 4. 单机 4 卡 DDP Smoke 训练 10 步并保存检查点
 torchrun --standalone --nproc_per_node=4 train/train_sft.py \
     --manifest /data/mega-asr/manifests/smoke.jsonl \
     --config configs/train/qwen3_asr_v100.yaml \
@@ -54,7 +55,7 @@ torchrun --standalone --nproc_per_node=4 train/train_sft.py \
     --max-steps 10 \
     --save-steps 10
 
-# 4. 单机 4 卡 DDP 从 step 10 恢复并继续训练 2 步至 step 12
+# 5. 单机 4 卡 DDP 从 step 10 恢复并继续训练 2 步至 step 12
 torchrun --standalone --nproc_per_node=4 train/train_sft.py \
     --manifest /data/mega-asr/manifests/smoke.jsonl \
     --config configs/train/qwen3_asr_v100.yaml \
@@ -63,13 +64,13 @@ torchrun --standalone --nproc_per_node=4 train/train_sft.py \
     --max-steps 12 \
     --save-steps 2
 
-# 5. 导出合并权重（执行 merge_and_unload）
+# 6. 导出合并权重（执行 merge_and_unload）
 python3 train/train_sft.py \
     --export-merged \
     --checkpoint-dir /data/mega-asr/runs/sft_smoke/checkpoints/step_12 \
     --output-dir /data/mega-asr/runs/sft_smoke/merged_base
 
-# 6. 运行单机 4 卡 DDP DPO Pilot 训练（使用纯真实偏好对与预计算参考对数概率，支持全额 held-out 验证）
+# 7. 运行单机 4 卡 DDP DPO Pilot 训练（使用纯真实偏好对与预计算参考对数概率，支持全额 held-out 验证）
 torchrun --standalone --nproc_per_node=4 train/train_dpo.py \
     --manifest /data/mega-asr/manifests/pilot_dpo_pairs.jsonl \
     --val-manifest /data/mega-asr/manifests/val_dpo_pairs.jsonl \
@@ -79,12 +80,29 @@ torchrun --standalone --nproc_per_node=4 train/train_dpo.py \
     --save-steps 25 \
     --eval-steps 25
 
-# 7. 导出 DPO 合并权重作为 RL 阶段底座
+# 8. 导出 DPO 合并权重作为 RL 阶段底座
 python3 train/train_dpo.py \
     --export-merged \
     --checkpoint-dir /data/mega-asr/runs/dpo_pilot/checkpoints/step_150 \
     --output-dir /data/mega-asr/runs/dpo_pilot/merged_base
+
+# 9. 运行单机 4 卡 DDP RL (GRPO) Pilot 训练（Group Size G=4, temp=0.7, top_p=0.9, kl_beta=0.04）
+torchrun --standalone --nproc_per_node=4 train/train_rl.py \
+    --manifest /data/mega-asr/manifests/pilot_rl.jsonl \
+    --val-manifest /data/mega-asr/manifests/rl_val_pool.jsonl \
+    --config configs/train/qwen3_asr_rl.yaml \
+    --output-dir /data/mega-asr/runs/rl_pilot \
+    --max-steps 60 \
+    --save-steps 10 \
+    --eval-steps 10
+
+# 10. 导出 RL 合并发布权重（执行 merge_and_unload）
+python3 train/train_rl.py \
+    --export-merged \
+    --checkpoint-dir /data/mega-asr/runs/rl_pilot/checkpoints/step_60 \
+    --output-dir /data/mega-asr/runs/rl_pilot/merged_base
 ```
+
 
 ### 主要输入与输出
 
