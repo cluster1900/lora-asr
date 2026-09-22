@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+from collections import Counter, defaultdict
 import datetime
 import hashlib
 import json
@@ -210,6 +211,51 @@ def compute_sample_error_rate(reference: str, prediction: str, language: str) ->
     return error_rate, edits, len(ref_tokens)
 
 
+def max_token_run(tokens: Sequence[str]) -> int:
+    """Return the maximum length of consecutive identical tokens."""
+    if not tokens:
+        return 0
+    max_run = 1
+    current_run = 1
+    for i in range(1, len(tokens)):
+        if tokens[i] == tokens[i - 1]:
+            current_run += 1
+            if current_run > max_run:
+                max_run = current_run
+        else:
+            current_run = 1
+    return max_run
+
+
+def max_token_pair_count(tokens: Sequence[str]) -> int:
+    """Return the maximum count of any adjacent 2-token pair in tokens."""
+    if len(tokens) < 2:
+        return 0
+    pairs = list(zip(tokens, tokens[1:]))
+    counts = Counter(pairs)
+    return max(counts.values()) if counts else 0
+
+
+def detect_excess_repetition(pred_tokens: Sequence[str], ref_tokens: Sequence[str]) -> bool:
+    """Flag repetition loops in hypothesis that exceed natural repetition in reference.
+
+    A hypothesis is flagged as an abnormal repetition loop only if:
+    1) It has a 3+ token identical run AND that run exceeds reference run length; OR
+    2) It has an adjacent token pair repeating 2+ times AND that count exceeds reference pair count.
+    """
+    pred_run = max_token_run(pred_tokens)
+    ref_run = max_token_run(ref_tokens)
+    if pred_run >= 3 and pred_run > ref_run:
+        return True
+
+    pred_pairs = max_token_pair_count(pred_tokens)
+    ref_pairs = max_token_pair_count(ref_tokens)
+    if pred_pairs >= 2 and pred_pairs > ref_pairs:
+        return True
+
+    return False
+
+
 def compute_sequence_reward(
     prediction: str,
     reference: str,
@@ -221,10 +267,10 @@ def compute_sequence_reward(
     Follows configs/train/reward_config.yaml:
       asr reward = 1.0 - min(error_rate, 1.0)
       empty penalty = -0.25 (if empty transcription)
-      repeat penalty = -0.25 (if repetition loop)
+      repeat penalty = -0.25 (if excess repetition loop not in reference)
       too_long penalty = -0.15 (if hypothesis length > 1.5x reference length)
       hallucination penalty = -0.25 (if error_rate >= 0.8 and [too_long or repeated or major edits])
-      final reward = clip(sum, -1.0, 1.0)
+      final reward = clip(sum, clip_min, clip_max)
 
     Returns:
         (final_reward, reward_components, error_rate)
@@ -232,31 +278,51 @@ def compute_sequence_reward(
     error_rate, edits, ref_len = compute_sample_error_rate(reference, prediction, language)
     asr_reward = 1.0 - min(error_rate, 1.0)
 
+    cfg = reward_config or {}
+    components_cfg = cfg.get("components", {})
+
+    empty_pen_val = float(components_cfg.get("empty", {}).get("penalty", -0.25))
+    repeat_pen_val = float(components_cfg.get("repeat", {}).get("penalty", -0.25))
+
+    too_long_cfg = components_cfg.get("too_long", {})
+    too_long_pen_val = float(too_long_cfg.get("penalty", -0.15))
+    too_long_thresh = float(too_long_cfg.get("length_ratio_threshold", 1.5))
+
+    hallucination_cfg = components_cfg.get("hallucination", {})
+    hallucination_pen_val = float(hallucination_cfg.get("penalty", -0.25))
+    hallucination_thresh = float(hallucination_cfg.get("error_rate_threshold", 0.8))
+
+    clip_cfg = cfg.get("clip", {})
+    clip_min = float(clip_cfg.get("min", -1.0))
+    clip_max = float(clip_cfg.get("max", 1.0))
+
     norm_pred = normalize_text(prediction)
+    norm_ref = normalize_text(reference)
     empty_output = not norm_pred
 
     lang_norm = str(language or "en").strip().lower()
     metric = "cer" if lang_norm in ("zh", "chinese") else "wer"
     pred_tokens = tokenize(norm_pred, metric=metric)
+    ref_tokens = tokenize(norm_ref, metric=metric)
     ref_tokens_count = max(1, ref_len)
 
-    repeated = has_repetition(pred_tokens)
+    repeated = detect_excess_repetition(pred_tokens, ref_tokens)
     length_ratio = len(pred_tokens) / ref_tokens_count
-    too_long = length_ratio > 1.5
+    too_long = length_ratio > too_long_thresh
 
     hallucination_like = (
         not empty_output
-        and error_rate >= 0.8
+        and error_rate >= hallucination_thresh
         and (too_long or repeated or edits >= max(3, ref_tokens_count // 2))
     )
 
-    empty_pen = -0.25 if empty_output else 0.0
-    repeat_pen = -0.25 if repeated else 0.0
-    too_long_pen = -0.15 if too_long else 0.0
-    hallucination_pen = -0.25 if hallucination_like else 0.0
+    empty_pen = empty_pen_val if empty_output else 0.0
+    repeat_pen = repeat_pen_val if repeated else 0.0
+    too_long_pen = too_long_pen_val if too_long else 0.0
+    hallucination_pen = hallucination_pen_val if hallucination_like else 0.0
 
     raw_sum = asr_reward + empty_pen + repeat_pen + too_long_pen + hallucination_pen
-    final_reward = max(-1.0, min(1.0, raw_sum))
+    final_reward = max(clip_min, min(clip_max, raw_sum))
 
     components = {
         "asr": round(asr_reward, 4),
@@ -503,8 +569,10 @@ def evaluate_rl_validation(
     top_p: float = 0.92,
     top_k: int = 50,
     max_eval_samples: Optional[int] = None,
+    reward_config: Optional[Dict[str, Any]] = None,
+    eval_seed: int = 42,
 ) -> Tuple[float, float]:
-    """Evaluate mean reward on held-out validation set."""
+    """Evaluate mean reward on held-out validation set with deterministic seed."""
     if not HAVE_TORCH or len(val_dataset) == 0:
         return 0.0, 0.0
 
@@ -517,55 +585,68 @@ def evaluate_rl_validation(
 
     indices = list(range(min(len(val_dataset), max_eval_samples or len(val_dataset))))
 
-    with torch.no_grad():
-        for idx in indices:
-            sample = val_dataset[idx]
-            audio_path = sample.get("audio", "")
-            if not os.path.isfile(audio_path):
-                continue
+    # Save RNG state to preserve training sequence determinism
+    cpu_rng_state = torch.get_rng_state()
+    cuda_rng_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
 
-            try:
-                wav, sr = sf.read(audio_path)
-            except Exception:
-                continue
+    try:
+        torch.manual_seed(eval_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(eval_seed)
 
-            if len(wav.shape) > 1:
-                wav = wav[:, 0]
+        with torch.no_grad():
+            for idx in indices:
+                sample = val_dataset[idx]
+                audio_path = sample.get("audio", "")
+                if not os.path.isfile(audio_path):
+                    continue
 
-            lang_raw = str(sample.get("language", "en")).strip().lower()
-            lang_full = LANGUAGE_MAP.get(lang_raw, "English")
-            gold_text = str(sample.get("text") or sample.get("answer") or "")
+                try:
+                    wav, sr = sf.read(audio_path)
+                except Exception:
+                    continue
 
-            prompt = asr_model._build_text_prompt(context="", force_language=lang_full)
-            inputs = asr_model.processor(text=prompt, audio=wav, return_tensors="pt")
-            inputs = inputs.to(device)
-            if device.startswith("cuda"):
-                inputs["input_features"] = inputs["input_features"].to(torch.float16)
+                if len(wav.shape) > 1:
+                    wav = wav[:, 0]
 
-            prompt_len = inputs["input_ids"].shape[1]
+                lang_raw = str(sample.get("language", "en")).strip().lower()
+                lang_full = LANGUAGE_MAP.get(lang_raw, "English")
+                gold_text = str(sample.get("text") or sample.get("answer") or "")
 
-            try:
-                # Use model generate to sample G candidates with diversity
-                gen_out = asr_model.model.generate(
-                    **inputs,
-                    do_sample=True,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    num_return_sequences=group_size,
-                    max_new_tokens=128,
-                )
-                seqs = gen_out.sequences if hasattr(gen_out, "sequences") else gen_out
-            except Exception:
-                continue
+                prompt = asr_model._build_text_prompt(context="", force_language=lang_full)
+                inputs = asr_model.processor(text=prompt, audio=wav, return_tensors="pt")
+                inputs = inputs.to(device)
+                if device.startswith("cuda"):
+                    inputs["input_features"] = inputs["input_features"].to(torch.float16)
 
-            for g_idx in range(min(group_size, seqs.shape[0])):
-                cand_ids = seqs[g_idx, prompt_len:]
-                pred_text = asr_model.processor.tokenizer.decode(cand_ids, skip_special_tokens=True).strip()
-                rew, _, err = compute_sequence_reward(pred_text, gold_text, lang_raw)
-                total_reward += rew
-                total_error_rate += err
-                total_rollouts += 1
+                prompt_len = inputs["input_ids"].shape[1]
+
+                try:
+                    # Use model generate to sample G candidates with diversity
+                    gen_out = asr_model.model.generate(
+                        **inputs,
+                        do_sample=True,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        num_return_sequences=group_size,
+                        max_new_tokens=128,
+                    )
+                    seqs = gen_out.sequences if hasattr(gen_out, "sequences") else gen_out
+                except Exception:
+                    continue
+
+                for g_idx in range(min(group_size, seqs.shape[0])):
+                    cand_ids = seqs[g_idx, prompt_len:]
+                    pred_text = asr_model.processor.tokenizer.decode(cand_ids, skip_special_tokens=True).strip()
+                    rew, _, err = compute_sequence_reward(pred_text, gold_text, lang_raw, reward_config=reward_config)
+                    total_reward += rew
+                    total_error_rate += err
+                    total_rollouts += 1
+    finally:
+        torch.set_rng_state(cpu_rng_state)
+        if cuda_rng_state is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(cuda_rng_state)
 
     mean_reward = total_reward / max(1, total_rollouts)
     mean_err = total_error_rate / max(1, total_rollouts)
@@ -588,6 +669,8 @@ def train_rl(
     single_gpu: bool = False,
     allow_subset: bool = False,
     val_eval_samples: Optional[int] = None,
+    reward_config_path: Optional[Path] = None,
+    eval_seed: int = 42,
 ) -> None:
     """Main entrypoint for single-GPU or 4-card DDP GRPO training."""
     rank = 0
@@ -613,6 +696,22 @@ def train_rl(
     train_cfg = config.get("train", {})
     model_cfg = config.get("model", {})
     grpo_cfg = config.get("grpo", {})
+
+    reward_cfg = config.get("reward", {})
+    if reward_config_path and Path(reward_config_path).is_file():
+        with open(reward_config_path, "r", encoding="utf-8") as f_rew:
+            reward_cfg = yaml.safe_load(f_rew) or {}
+    elif "components" not in reward_cfg:
+        cfg_path_str = reward_cfg.get("config_path")
+        candidate_path = (REPO_ROOT / cfg_path_str) if cfg_path_str else (REPO_ROOT / "configs" / "train" / "reward_config.yaml")
+        if candidate_path.is_file():
+            try:
+                with open(candidate_path, "r", encoding="utf-8") as f_rew:
+                    loaded_cfg = yaml.safe_load(f_rew) or {}
+                    if isinstance(loaded_cfg, dict):
+                        reward_cfg = loaded_cfg
+            except Exception:
+                pass
 
     seed = int(runtime_cfg.get("seed", 20260722))
     random.seed(seed + rank)
@@ -853,6 +952,8 @@ def train_rl(
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            reward_config=reward_cfg,
+            eval_seed=eval_seed,
         )
         if rank == 0:
             print(f"--- [Step 0 Reference Baseline (Full Held-out)] val_mean_reward={val_rew0:.4f}, val_error_rate={val_err0:.4f} ---")
@@ -937,7 +1038,9 @@ def train_rl(
         reward_comps_list: List[Dict[str, float]] = []
         err_rates: List[float] = []
         for cand_t in cand_texts:
-            rew, comps, err = compute_sequence_reward(cand_t, gold_text, lang_raw)
+            rew, comps, err = compute_sequence_reward(
+                cand_t, gold_text, lang_raw, reward_config=reward_cfg
+            )
             rewards.append(rew)
             reward_comps_list.append(comps)
             err_rates.append(err)
@@ -1020,16 +1123,18 @@ def train_rl(
         )
         policy_token_logps, _ = compute_token_logps(policy_outputs.logits, batch_labels)
 
-        # 6. Policy Gradient Loss + Reference KL Regularization
-        # token_kl = policy_logp - ref_logp
-        token_kl = (policy_token_logps - ref_token_logps) * token_mask
+        # 6. Policy Gradient Loss + Reference KL Regularization (Schulman K3 estimator)
+        # K3(pi_\theta, pi_ref) = exp(log pi_ref - log pi_\theta) - (log pi_ref - log pi_\theta) - 1
+        log_ratio = (ref_token_logps - policy_token_logps) * token_mask
+        log_ratio_clamped = log_ratio.clamp(min=-10.0, max=10.0)
+        token_kl = (torch.exp(log_ratio_clamped) - log_ratio_clamped - 1.0) * token_mask
         seq_kls = token_kl.sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
 
         adv_tensor = torch.tensor(advantages, device=device, dtype=policy_token_logps.dtype)
 
         # Policy gradient: - A_i * log pi_\theta(t)
-        # KL term: + beta * (log pi_\theta(t) - log pi_ref(t))
-        token_loss = - (adv_tensor.unsqueeze(-1) * policy_token_logps - beta * token_kl) * token_mask
+        # KL term: + beta * K3_kl(t)
+        token_loss = (- (adv_tensor.unsqueeze(-1) * policy_token_logps) + beta * token_kl) * token_mask
         seq_losses = token_loss.sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
 
         policy_term_loss = - (adv_tensor.unsqueeze(-1) * policy_token_logps * token_mask).sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
@@ -1128,17 +1233,20 @@ def train_rl(
                 with open(loss_log_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(log_entry) + "\n")
 
-                if zero_var_ratio > zero_var_thresh:
+                is_distribution_collapsed = (zero_var_ratio > zero_var_thresh) and (mean_rew < 0.85)
+                if is_distribution_collapsed:
                     consecutive_high_zero_var += 1
                     msg = (
                         f"WARNING: batch zero-variance group ratio {zero_var_ratio:.2%} exceeded "
-                        f"contract threshold {zero_var_thresh:.2%} ({consecutive_high_zero_var}/2 consecutive steps)."
+                        f"contract threshold {zero_var_thresh:.2%} with low mean reward {mean_rew:.3f} "
+                        f"({consecutive_high_zero_var}/2 consecutive steps)."
                     )
                     print(msg, file=sys.stderr)
                     if consecutive_high_zero_var >= 2:
                         fatal_msg = (
                             f"FATAL: zero-variance group ratio {zero_var_ratio:.2%} exceeded "
-                            f"contract threshold {zero_var_thresh:.2%} for {consecutive_high_zero_var} consecutive steps at step {global_step}."
+                            f"contract threshold {zero_var_thresh:.2%} with low reward {mean_rew:.3f} "
+                            f"for {consecutive_high_zero_var} consecutive steps at step {global_step}."
                         )
                         print(fatal_msg, file=sys.stderr)
                         pipeline_state = {
@@ -1147,6 +1255,7 @@ def train_rl(
                             "world_size": world_size,
                             "status": "FAILED_ZERO_VARIANCE",
                             "zero_variance_ratio": round(zero_var_ratio, 4),
+                            "mean_reward": round(mean_rew, 4),
                             "threshold": zero_var_thresh,
                             "consecutive_steps": consecutive_high_zero_var,
                             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1155,7 +1264,7 @@ def train_rl(
                             json.dump(pipeline_state, pf, indent=2)
                         raise RuntimeError(
                             f"Batch zero-variance group ratio {zero_var_ratio:.2%} exceeded "
-                            f"contract threshold {zero_var_thresh:.2%} for 2 consecutive steps. "
+                            f"contract threshold {zero_var_thresh:.2%} for 2 consecutive steps with low reward {mean_rew:.3f}. "
                             "Sampling distribution collapsed. Halting RL training."
                         )
                 else:
@@ -1172,6 +1281,8 @@ def train_rl(
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
+                    reward_config=reward_cfg,
+                    eval_seed=eval_seed,
                 )
                 if rank == 0:
                     print(f"--- [Validation @ Step {global_step} (Full Held-out)] val_mean_reward={val_rew:.4f}, val_error_rate={val_err:.4f} ---")
@@ -1285,6 +1396,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--single-gpu", action="store_true", help="Run on single GPU without DDP.")
     parser.add_argument("--allow-subset", action="store_true", help="Allow NON_STRICT_SUBSET dataset gate status.")
     parser.add_argument("--val-eval-samples", type=int, default=None, help="Number of validation samples to evaluate.")
+    parser.add_argument("--reward-config", default=None, help="Path to reward_config.yaml.")
+    parser.add_argument("--eval-seed", type=int, default=42, help="Deterministic seed for validation evaluation (default: 42).")
     parser.add_argument("--export-merged", action="store_true", help="Export standalone merged model.")
     parser.add_argument("--checkpoint-dir", default=None, help="Checkpoint directory for --export-merged.")
     return parser
@@ -1335,6 +1448,8 @@ def main() -> None:
         single_gpu=args.single_gpu,
         allow_subset=args.allow_subset,
         val_eval_samples=args.val_eval_samples,
+        reward_config_path=Path(args.reward_config).resolve() if args.reward_config else None,
+        eval_seed=args.eval_seed,
     )
 
 

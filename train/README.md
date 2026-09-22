@@ -11,7 +11,7 @@
 | `__init__.py` | 包声明与初始化文件。 |
 | `train_sft.py` | SFT 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu` 调试模式；注入 199 个 Linear LoRA 目标（Projection 3 + Decoder 196）；实现标签掩码 Cross-Entropy 损失与分层均衡 validation loss 评估；支持 10+2 检查点保存与断点恢复（optimizer、scheduler、RNG、training_state）；提供 `--export-merged` 执行 `merge_and_unload()` 权重导出。 |
 | `train_dpo.py` | DPO 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu` 调试模式；继承 199 个 Linear LoRA 目标；基于预计算的参考对数概率（或在线计算）实现 Bradley-Terry 偏好损失函数，记录隐式奖励差与 preference accuracy；提供全状态断点保存/恢复与 `--export-merged` 权重导出。 |
-| `train_rl.py` | RL (GRPO) 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu` 调试模式；以 DPO 合并模型为初始 Policy 与冻结 Reference Model，注入 199 个 Linear LoRA 目标；每条样本生成 $G=4$ 个在线 Rollout 采样，支持温度调节（默认 0.85）与 rank/candidate 独立 RNG 种子偏移；结合 ASR 准确率（WER/CER）与 empty/repeat/too_long/hallucination 惩罚计算序列 Reward 并标准化 Group Advantage；组内方差为零优势置 0，若连续 2 步批次内零方差组比例超过阈值（默认 0.80）硬中止并标记 `FAILED_ZERO_VARIANCE`；四卡独立落盘并汇聚全量 `rollouts.jsonl`（15,360 行）与审计；强制在 Step 0 记录冻结底座全量 held-out 基准并全程采用统一验证口径；提供 10+2 全状态断点恢复与 `--export-merged` 权重导出。 |
+| `train_rl.py` | RL (GRPO) 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu` 调试模式；以 DPO 合并模型为初始 Policy 与冻结 Reference Model，注入 199 个 Linear LoRA 目标；每条样本生成 $G=4$ 个在线 Rollout 采样，支持温度调节（默认 0.85）与 rank/candidate 独立 RNG 种子偏移；采用 TRL / Schulman K3 估计器计算对数比无偏低方差 KL 正则化损失（确保对冻结 reference 的强约束梯度）；结合 ASR 准确率（WER/CER）与动态配置的 empty/repeat/too_long/hallucination 惩罚计算序列 Reward 并标准化 Group Advantage（精确区分参考文本自然重复与模型异常重复，避免误罚正常语音）；组内方差为零优势置 0，若连续 2 步确认异常分布坍缩（零方差比例 > 阈值 0.80 且平均回报 < 0.85）硬中止并标记 `FAILED_ZERO_VARIANCE`；四卡独立落盘并汇聚全量 `rollouts.jsonl`（15,360 行）与审计；强制在 Step 0 记录冻结底座全量 held-out 基准并全程采用统一验证口径与固定独立评测随机种子；提供 10+2 全状态断点恢复与 `--export-merged` 权重导出。 |
 | `README.md` | 说明当前目录职责、文件清单、主要输入输出、CLI 参数与维护要求。 |
 
 ## 使用入口与 CLI 参数
