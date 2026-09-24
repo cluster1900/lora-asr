@@ -86,20 +86,20 @@ python3 train/train_dpo.py \
     --checkpoint-dir /data/mega-asr/runs/dpo_pilot/checkpoints/step_150 \
     --output-dir /data/mega-asr/runs/dpo_pilot/merged_base
 
-# 9. 运行单机 4 卡 DDP RL (GRPO) Pilot 训练（Group Size G=4, temp=0.7, top_p=0.9, kl_beta=0.04）
+# 9. 运行单机 4 卡 DDP RL (GRPO) Pilot 训练（Group Size G=4, temp=0.85, top_p=0.92, top_k=50, kl_beta=0.04）
 torchrun --standalone --nproc_per_node=4 train/train_rl.py \
     --manifest /data/mega-asr/manifests/pilot_rl.jsonl \
     --val-manifest /data/mega-asr/manifests/rl_val_pool.jsonl \
     --config configs/train/qwen3_asr_rl.yaml \
     --output-dir /data/mega-asr/runs/rl_pilot \
-    --max-steps 60 \
+    --max-steps 30 \
     --save-steps 10 \
     --eval-steps 10
 
 # 10. 导出 RL 合并发布权重（执行 merge_and_unload）
 python3 train/train_rl.py \
     --export-merged \
-    --checkpoint-dir /data/mega-asr/runs/rl_pilot/checkpoints/step_60 \
+    --checkpoint-dir /data/mega-asr/runs/rl_pilot/checkpoints/step_30 \
     --output-dir /data/mega-asr/runs/rl_pilot/merged_base
 ```
 
