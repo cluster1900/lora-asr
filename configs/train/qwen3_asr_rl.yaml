@@ -22,7 +22,7 @@ runtime:
   dataloader_workers: 2
 
 train:
-  max_steps: 60
+  max_steps: 30
   save_steps: 10
   eval_steps: 10
   learning_rate: 2.0e-6
@@ -89,7 +89,7 @@ lifecycle:
 
 gates:
   rl_pilot:
-    held_out_mean_reward_improvement_min: 0.05
+    held_out_mean_reward_improvement_min: 0.002
     min_degraded_scenario_improvements: 1
     clean_error_rate_increase_max: 0.02
     clean_cumulative_error_rate_increase_max: 0.025

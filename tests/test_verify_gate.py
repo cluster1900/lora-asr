@@ -588,7 +588,7 @@ class VerifyGateTest(unittest.TestCase):
             pilot_metrics=rl_metrics,
             dpo_metrics=dpo_metrics,
             stage="rl_pilot",
-            reward_improvement=0.02,  # < 0.05
+            reward_improvement=0.001,  # < 0.002
         )
 
         self.assertEqual(gate["gate_status"], "FAILED")

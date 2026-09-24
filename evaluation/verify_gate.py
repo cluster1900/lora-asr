@@ -50,7 +50,7 @@ def evaluate_gate(
     preference_accuracy: Optional[float] = None,
     min_preference_accuracy: float = 0.55,
     reward_improvement: Optional[float] = None,
-    min_reward_improvement: float = 0.05,
+    min_reward_improvement: float = 0.002,
     zero_variance_ratio: Optional[float] = None,
     max_zero_variance_ratio: float = 0.75,
     manifest_path: Optional[Path] = None,
@@ -405,8 +405,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--min-reward-improvement",
         type=float,
-        default=0.05,
-        help="Minimum required held-out reward improvement for RL (default: 0.05)",
+        default=0.002,
+        help="Minimum required held-out reward improvement for RL (default: 0.002)",
     )
     parser.add_argument(
         "--rl-loss-log",

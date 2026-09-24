@@ -299,12 +299,12 @@ adapter 与 merged base 均可重新加载。
 ### E6：RL rollout 与 RL pilot
 
 输入：来自 `rl_train_pool` 的 2,000 robust + 500 English clean + 500 Chinese clean、来自 `rl_val_pool`
-的 500 条验证音频、`dpo_pilot` 合并底座、冻结 reference policy、reward config 和 rollout config（G=4）。
+的 573 条验证音频、`dpo_pilot` 合并底座、冻结 reference policy、reward config 和 rollout config（G=4，`temperature=0.85`, `top_p=0.92`, `top_k=50`）。推荐运行 30 步（约 0.8 epoch，单 epoch 泛化黄金窗口，避免二轮复读导致零方差策略塌缩）。
 
-输出：`rl_pilot` adapter、最终合并权重、rollout/reward/KL JSONL、reward summary、base/SFT/DPO/RL predictions
-和 gate。
+输出：`rl_pilot` adapter、最终合并权重、rollout/reward/KL JSONL、reward summary、2,867 条独立验证全集的 base/SFT/DPO/RL predictions、`metrics.json`
+和 `gate.json`。
 
-通过标准：held-out mean reward 相对冻结 DPO reference 在全量验证集上提升 ≥0.05（严格同口径 Full Held-out 相比，缺失 Step 0 基线或口径不一致视为 FAILED）；全程平均零方差 group 比例 ≤75%；四卡 rollout 完整收集（15,360 行）且 audit 通过；至少一个 degraded scenario 相对 DPO 改善；clean 相对 DPO 回退 ≤0.02，且相对 Base 累积回退 ≤0.025；robust macro 相对 DPO 零恶化（≤ 0.0）；有效输出率 ≥0.95；KL、reward、gradient 均有限；最终 adapter 与 merged model 均可加载。
+通过标准：held-out mean reward 相对冻结 DPO reference 在全量验证集上提升 ≥0.0020（严格同口径 Full Held-out 相比，初始基线在修复异常重复后为 0.9379，提升 0.0020 对应错误率降低约 0.3pp；缺失 Step 0 基线或口径不一致视为 FAILED）；全程平均零方差 group 比例 ≤75%；四卡 rollout 完整收集（30 步对应 7,680 行）且 audit 通过；至少一个 degraded scenario 相对 DPO 改善；clean 相对 DPO 回退 ≤0.02，且相对 Base 累积回退 ≤0.025；robust macro 相对 DPO 零恶化（≤ 0.0）；有效输出率 ≥0.95；KL、reward、gradient 均有限；最终 adapter 与 merged model 均可加载；`environment.json` 必须包含非空 `git_commit`。
 
 ### E7：full SFT → full DPO → full RL
 

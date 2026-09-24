@@ -9,7 +9,7 @@
 - 完整链路固定为 SFT → DPO → RL；阶段交接采用 `merge_and_unload()` 策略产出下阶段基座，每阶段独立 adapter、manifest、checkpoint 和 gate。
 - LoRA 目标层同时覆盖 LLM Decoder 与音频塔投影层，兼顾语义纠错与声学损伤补偿；A2S 不进入正式链路。
 - DPO 推荐离线预计算参考模型 logprobs，消除训练时参考模型常驻显存开销（显存降 50%）。
-- RL 采用带 KL 正则的 GRPO（组大小 $G=4$、temp 0.7、top_p 0.9），统一 `asr` 键名与序列惩罚。
+- RL 采用带 KL 正则的 GRPO（组大小 $G=4$、temp 0.85、top_p 0.92、top_k 50），统一 `asr` 键名与序列惩罚。
 - Clean 数据候选源扩大 5 倍以应对高平局率（ties），确保足额产出 clean preference pairs。
 - 设置全局 Base 锚定的 clean 错误率累积退化上限（$\le 0.025$），防止级联劣化。
 - English WER 与 Chinese CER 分开报告。
@@ -32,7 +32,7 @@
 | SFT 英文 Clean 回退对 DPO 的压力 | E4 英文 Clean WER 增量 +1.43%（1.98% $\to$ 3.41%），逼近累积 2.5% 红线 | DPO 阶段严格监控 Clean preference 质量与平局过滤，DPO vs SFT 回退超过 2.0% 或累积超 2.5% 即刻回滚 |
 | DPO clean 平局率高导致 pairs 短缺 | 候选源扩大 5 倍、受控负例、严格过滤 ties | 重建 dpo_train_pool 候选池 |
 | DPO pair 质量或 preference 泄漏 | chosen/rejected 审计、ties rejects、held-out accuracy | 停止 DPO，重建 dpo_train_pool |
-| RL GRPO 候选同质化（组方差归零） | $G=4$、采样 temp=0.7/top_p=0.9 审计 | 微调采样温度或增大候选组规模 |
+| RL GRPO 候选同质化（组方差归零） | $G=4$、采样 temp=0.85/top_p=0.92 审计 | 调整采样温度或早停（30 步内），避免二次复读塌缩 |
 | RL reward 投机或 KL 发散 | reward 组件单测、KL/rollout gate、reference freeze | 停止 RL，回退到 DPO adapter |
 | 4 卡 DDP 梯度/数据 shard 不一致 | global batch、sample_id 去重、world size 记录 | 停止当前 run，保留最后有效 checkpoint |
 | 指标不可比 | 同 manifest、同 evaluator、分语言指标 | 废弃该次比较 |
@@ -56,6 +56,33 @@
 2. **全退化场景宏平均同步改善**：Step 50 的 Robust Macro 达到 `10.40%`，优于 Base（`10.52%`），并在 14 个退化单元中改善 6 个（`en|dropout`, `en|echo`, `en|recording`, `zh|echo`, `zh|far_field`, `zh|recording`），其余单元保持平稳。
 3. **消除数值下溢与死循环风险**：Step 50 有效输出率达 100.0%（0 推理错误，0 空输出，0 死循环）。而 Step 100/150 步由于继续训练导致在严重的退化样本上产生自回归死循环（1,599 字符）及 float16 下溢空输出。
 4. **决策裁定**：废除 Step 100 候选，**正式选定 `Step 50` 作为 SFT Pilot 最终准出模型**，通过收紧后的新门禁（限制 `max_robust_macro_regression <= 0.005` 与 `max_empty_output_rate <= 0.002`），导出合并底座至 `/data/mega-asr/runs/sft_pilot_controlled/merged_base`，作为向 E5 DPO 阶段交接的标准模型底座。
+
+### RL Pilot 阶段风险暴露、门禁拦截与受控重跑决策（2026-09-24）
+
+在 2026-09-24 对 `rl_pilot_v3`（60 steps GRPO）及历史轮次（v1/v2）的综合复核中，明确判定 **暂时不能进入正式下一步**，当前阶段标记为 **FAILED / BLOCKED**。
+
+#### 1. 风险与问题事实确认
+1. **Held-out Reward 门禁未达标且错误率反弹**：
+   - Held-out（573 条独立池）平均 Reward 最终由 Step 0 的 `0.9379` 变为 Step 60 的 `0.9375`（净增量为 `-0.0004`，远未达到合同要求的 $\ge +0.05$ 门槛）；
+   - Held-out 错误率由 `5.62%` 微幅上升至 `5.65%`（反弹 +0.03pp）。
+2. **奖励饱和与后期零方差策略塌缩（Zero-Variance Collapse）**：
+   - 训练后期（Step 50~60）训练集 batch reward 接近 1.0（达 0.9802），但 batch zero-variance ratio 频繁突破 `0.875 ~ 0.9375`；
+   - 在高饱和与过拟合状态下，单批次内候选全对或全同，无法贡献有效策略梯度，表现出明显的策略塌缩信号。
+3. **准出产物缺失与规范不完整**：
+   - 历史 v1 与 v2 的 gate 均为 `FAILED`（v2 存在 Robust 回退 +0.0202% 及 reward 不达标）；
+   - v3 缺少在 2,867 条全量验证集上的 `gate.json`、完整 `metrics.json`、全量 predictions 以及 merged release model，按合同不得声称阶段完成。
+4. **采样超参契约不一致与代码 Provenance 缺失**：
+   - 执行合同与方案中规划的采样参数为 temperature `0.7`、top_p `0.9`，但实际配置文件 `qwen3_asr_rl.yaml` 与运行参数使用了 `0.85 / 0.92`；
+   - 运行环境记录中缺失代码的 git commit SHA，全链路溯源证据链不完整。
+
+#### 2. 处置与拦截决策
+1. **绝对阻断原则**：坚决不启动 full RL，坚决不发布当前任何 RL 检查点模型。
+2. **检查点保留**：保留 `step_60` 作为诊断 checkpoint，用于后续分析策略塌缩和饱和 token 分布。
+3. **重跑前置条件**：
+   - 修正采样契约一致性，消除计划与配置漂移；
+   - 补全运行时代码 git commit provenance 记录；
+   - 针对奖励饱和与 zero-variance 塌缩提出针对性优化方案（如探索保持、早停判定、退火重构）；
+   - 重新运行受控 Pilot 并在产出完整 2,867 条评测与全绿 `gate.json` 后，方可解冻下一阶段。
 
 ## 未验证假设
 

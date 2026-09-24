@@ -15,6 +15,8 @@ from train.train_rl import (
     compute_group_advantages,
     compute_sample_error_rate,
     compute_sequence_reward,
+    get_environment_info,
+    get_git_commit,
     merge_and_audit_rollouts,
 )
 
@@ -217,6 +219,63 @@ class TestRolloutAudit(unittest.TestCase):
             self.assertEqual(res["total_rows"], 16)
             self.assertEqual(res["num_groups"], 4)
             self.assertEqual(res["ranks_represented"], [0, 1, 2, 3])
+
+
+class TestGitCommitAndEnvironment(unittest.TestCase):
+    """Test git commit resolution and environment metadata."""
+
+    def test_get_git_commit_env(self) -> None:
+        import os
+        old = os.environ.get("GIT_COMMIT")
+        try:
+            os.environ["GIT_COMMIT"] = "test_sha_12345"
+            self.assertEqual(get_git_commit(), "test_sha_12345")
+        finally:
+            if old is None:
+                os.environ.pop("GIT_COMMIT", None)
+            else:
+                os.environ["GIT_COMMIT"] = old
+
+    def test_get_git_commit_file(self) -> None:
+        import os
+        old = os.environ.pop("GIT_COMMIT", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_p = Path(tmp_dir)
+                commit_file = tmp_p / ".git_commit"
+                commit_file.write_text("file_sha_abcdef\n", encoding="utf-8")
+                self.assertEqual(get_git_commit(repo_dir=tmp_p), "file_sha_abcdef")
+        finally:
+            if old is not None:
+                os.environ["GIT_COMMIT"] = old
+
+    def test_get_environment_info_contains_git_commit(self) -> None:
+        info = get_environment_info()
+        self.assertIn("git_commit", info)
+        self.assertIsInstance(info["git_commit"], str)
+        self.assertTrue(len(info["git_commit"]) > 0)
+
+
+class TestZeroVarianceLossComputation(unittest.TestCase):
+    """Test that zero-variance groups produce zero gradient without breaking backprop."""
+
+    def test_zero_variance_loss_neutralization(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+
+        policy_logps = torch.tensor([[-0.5, -0.2], [-0.5, -0.2]], requires_grad=True)
+        is_zero_var = True
+        if is_zero_var:
+            group_loss = 0.0 * policy_logps.sum()
+        else:
+            group_loss = policy_logps.mean()
+
+        self.assertEqual(group_loss.item(), 0.0)
+        group_loss.backward()
+        self.assertIsNotNone(policy_logps.grad)
+        self.assertTrue(torch.all(policy_logps.grad == 0.0))
 
 
 if __name__ == "__main__":

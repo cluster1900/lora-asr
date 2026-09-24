@@ -34,7 +34,7 @@ Tesla V100-SXM2-32GB 上，用官方 `qwen-asr`/Transformers API 对 `Qwen/Qwen3
   LLM Decoder 的 attention/MLP 196 个；完整 canonical allowlist、禁止模块和 `target_map_hash` 见 08 号合同；$r=16, \alpha=32$。
 - 阶段权重交接：SFT、DPO、RL 各阶段完成并通过门禁后，统一执行 `merge_and_unload()` 产出合并基座作为下阶段起点。
 - DPO 显存优化：支持离线预计算参考模型 logprobs，DPO 训练无需在 GPU 常驻参考模型，显存直降 50%。
-- RL 算法：采用带 KL 正则的 GRPO，候选组大小 $G=4$，采样 `temperature=0.7`、`top_p=0.9`，避免 $G=2$ 时的方差归零。
+- RL 算法：采用带 KL 正则的 GRPO，候选组大小 $G=4$，采样 `temperature=0.85`、`top_p=0.92`、`top_k=50`，基于声学强 conditioning 保证候选多样性，避免方差过早归零。
 - 推理：固定单卡、batch 1、相同模型 revision 和解码上限；支持 4 进程按 manifest shard 分片并行推理后合并去重。
 - gradient checkpointing：开启（PEFT 需配合 `enable_input_require_grads()`）。
 - 初始 micro batch：每卡 1；初始 accumulation：16；global batch 为 `1 × 16 × 4 = 64`。
@@ -108,7 +108,7 @@ DDP 从 merged SFT 底座运行 DPO pilot。通过 preference、ASR、clean 累�
 
 ### S6：RL rollout 与 RL pilot
 
-从已下载的 `rl_train_pool`/`rl_val_pool` 生成 rollout；使用 4 卡 GRPO（G=4、temperature=0.7、top_p=0.9），
+从已下载的 `rl_train_pool`/`rl_val_pool` 生成 rollout；使用 4 卡 GRPO（G=4、temperature=0.85、top_p=0.92、top_k=50，推荐 30 步内防过拟合），
 同一 `group_id` 的候选在 advantage 前完成 all-gather。通过 reward、KL、ASR、clean 累积退化和 merge gate 后保存最终 release。
 
 ### S7：full SFT → full DPO → full RL

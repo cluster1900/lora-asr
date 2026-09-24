@@ -144,6 +144,27 @@ def compute_file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def get_git_commit(repo_dir: Optional[Path] = None) -> str:
+    """Retrieve git commit SHA from env, .git_commit file, or git CLI."""
+    if "GIT_COMMIT" in os.environ and os.environ["GIT_COMMIT"].strip():
+        return os.environ["GIT_COMMIT"].strip()
+    if repo_dir is None:
+        repo_dir = Path(__file__).resolve().parents[1]
+    commit_file = repo_dir / ".git_commit"
+    if commit_file.is_file():
+        commit_str = commit_file.read_text(encoding="utf-8").strip()
+        if commit_str:
+            return commit_str
+    try:
+        import subprocess
+        res = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True, check=False)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return "N/A"
+
+
 def get_environment_info() -> Dict[str, Any]:
     """Capture environment and hardware provenance."""
     info: Dict[str, Any] = {
@@ -169,6 +190,7 @@ def get_environment_info() -> Dict[str, Any]:
     info["model_revision"] = "7278e1e70fe206f11671096ffdd38061171dd6e5"
     info["dtype"] = "float16"
     info["attention"] = "eager"
+    info["git_commit"] = get_git_commit()
     return info
 
 
@@ -1140,13 +1162,20 @@ def train_rl(
         policy_term_loss = - (adv_tensor.unsqueeze(-1) * policy_token_logps * token_mask).sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
         kl_term_loss = (beta * token_kl).sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
 
-        group_loss = seq_losses.mean()
+        if is_zero_var:
+            # On zero-variance groups (no contrastive reward signal), zero out group loss
+            # while maintaining graph connectivity for DDP gradient synchronization.
+            # This prevents unproductive policy pulling towards reference when advantage is 0.
+            group_loss = 0.0 * policy_token_logps.sum()
+        else:
+            group_loss = seq_losses.mean()
+
         scaled_loss = group_loss / grad_accum_steps
         scaled_loss.backward()
 
         accum_total_loss += group_loss.item()
-        accum_policy_loss += policy_term_loss.mean().item()
-        accum_kl_loss += kl_term_loss.mean().item()
+        accum_policy_loss += (0.0 if is_zero_var else policy_term_loss.mean().item())
+        accum_kl_loss += (0.0 if is_zero_var else kl_term_loss.mean().item())
         accum_count += 1
 
         # 7. Record Rollouts to rank-specific rollouts_rank_{rank}.jsonl

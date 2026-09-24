@@ -1,12 +1,13 @@
 # 开发进度
 
-最后更新：2026-09-22
+最后更新：2026-09-24
 
 ## 当前状态
 
-当前状态：**E6 阶段强化学习（RL，GRPO Pilot）正式启动并全面执行！**
+当前状态：**E6 阶段强化学习（RL Pilot）门禁未达标（FAILED / BLOCKED），暂时阻断，禁止进入 Full RL 或发布模型！**
 - 前置阶段 E5 DPO Pilot（Round 2/3）已于 2026-09-21 达成全部 8 项门禁 100% 真实通过（PASSED），产出正式基座 `/data/mega-asr/runs/dpo_pilot_v2/merged_base` 作为本次 RL 的初始 Policy 和冻结 Reference Model。
 - 本阶段核心目标：实现面向 Qwen3-ASR 的单机 4 卡 DDP GRPO（Group Relative Policy Optimization）训练 Runner (`train/train_rl.py`)，结合序列级 Reward 评测与冻结参考策略 KL 约束，在保证 Clean 零回退的前提下进一步优化退化场景的鲁棒性。
+- **最新审计结论（2026-09-24）**：`rl_pilot_v3` 60 步训练虽然工程上平稳收敛，但 **Held-out Reward 提升为 -0.0004（要求 ≥ +0.05）**，Held-out 错误率从 5.62% 反弹至 5.65%，训练后期频繁出现 zero-variance ratio 0.875~0.9375 的策略塌缩信号，正式准出产物不全，且存在采样超参契约不一致与缺少 git commit provenance 等问题。当前决策：**保留 `step_60` 为诊断 checkpoint，禁止进入 Full RL 或发布模型，待采样契约与奖励饱和问题解决后再重跑 Pilot**。
 
 ### E6 RL (GRPO) Pilot 核心设计与契约标准
 
@@ -16,7 +17,7 @@
    - LoRA 结构：精确注入 199 个 Linear LoRA 目标（Projection 3 + Decoder 196），保持与 SFT/DPO 完全一致。
 
 2. **Rollout 采样与分组（G=4）**：
-   - 每条输入音频在当前 Policy 下生成 $G=4$ 个候选假设，采样参数固定为 `temperature=0.7`, `top_p=0.9`。
+   - 每条输入音频在当前 Policy 下生成 $G=4$ 个候选假设，采样参数正式规范为 `temperature=0.85`, `top_p=0.92`, `top_k=50`（基于声学强 conditioning 特性，充分维持候选多样性）。
    - 每条候选记录唯一 `group_id`、`group_size=4`、`rollout_rank`，并落盘至 `rollouts.jsonl`（严格遵循合同字段：`sample_id`, `group_id`, `group_size`, `rollout_rank`, `policy_checkpoint`, `rollout_seed`, `prediction`, `language`, `reference_error_rate`, `reward_components`, `reward`, `kl_to_reference`, `error`）。
 
 3. **序列级 Reward 与惩罚函数（严格遵循 `reward_config.yaml`）**：
@@ -233,7 +234,7 @@
 - 全量数据集扩充至合同配额（SFT 152,000 等）并达成全量 `PASSED` 门禁。
 - 最终 5,000 Bench test 评测与外部 baseline 对比。
 
-当前状态：E4 SFT Pilot、E5 DPO Pilot 均已 **PASSED**；E6 RL Pilot 第一轮完成技术闭环但门禁未通过（Robust +0.0516%），正在进行中间检查点评测与第二轮代码加固治理。
+当前状态：E4 SFT Pilot、E5 DPO Pilot 均已 **PASSED**；E6 RL Pilot 经三轮验证（v1/v2/v3）质量门禁均未通过（**FAILED / BLOCKED**），目前全面阻断，保留 `step_60` 作为诊断 checkpoint，待采样契约对齐与奖励饱和问题解决后再重跑 Pilot，禁止进入 Full RL 或发布模型。
 
 ## 既有实现的基线记录
 
@@ -331,17 +332,55 @@
        - **重复惩罚奖错罚对**：原实现使用全局 `has_repetition`。当参考文本本身包含自然重复（如“可能可能从全球意义上来讲”）时，完全正确转写（CER=0）被误扣 `-0.25` 重复惩罚，导致 reward 仅 `0.75`；而错删字的预测（“很可能从全球意义上来讲”，CER=0.1667）反因未判重复获得更高 reward `0.8333`，诱导模型删改真实重复语音。修复方案：区分自然重复与异常重复（Excess Repetition），仅当预测重复超越参考文本时扣分；同时将硬编码惩罚改为动态读取 `reward_config`。
        - **Held-out 验证采样随机性**：评估时未固定 RNG 种子，修复方案：在 `evaluate_rl_validation` 中引入独立固定的 `eval_seed=42` 并妥善保护训练 RNG 上下文。
 
+- **第三轮 RL Pilot（`rl_pilot_v3`）60 步全流程完成与全量过程/结果本地同步（2026-09-24）**：
+  - **加固目标实机验证完毕**：
+    1. **Schulman K3 KL 估计器**：正式在 4 卡 DDP 训练流水线中工作，KL 惩罚平稳且对参考模型产生正确的梯度敏感性，无任何数值发散。
+    2. **异常重复惩罚（Excess Repetition）生效**：Step 0 参考底座验证集 Reward 从 v2 的 `0.9172` 真实回升至 **`0.9379`**（错误率从 5.90% 降至 5.62%），彻底消除了对真实自然叠词语音转写的无理扣分。
+    3. **确定性 Held-out 评估**：引入固定 `eval_seed=42` 并妥善维护训练 RNG 上下文，全 60 步评估完全可确定性复现。
+    4. **4 卡分布式 Rollout 完整归档**：Rank 0~3 每卡各自独立收集 3,840 行采样，合并落盘为 **15,360 行** 规范 `rollouts.jsonl`，审计日志 100% 完整通过。
+    5. **零方差严格合规**：60 步训练平均零方差率为 **`68.38%`**，全程受控于 $\le 75\%$ 门禁上限，未触发任何策略坍缩。
+  - **训练状态与检查点存档**：
+    - 流水线状态：`pipeline_state.json` 状态为 **`COMPLETED`**（2026-09-23 11:26 CST 收敛完成，历时约 4 小时）。
+    - 完整归档全状态检查点：`step_10`、`step_20`、`step_30`、`step_40`、`step_50`、`step_60`（含优化器、调度器、4 卡独立 RNG 状态）。
+  - **573 条固定 Held-out 独立验证集全流程监控轨迹**：
+
+| 检查点 / 步数 | 验证平均 Reward | 验证集错误率 (WER/CER) | 相对 Step 0 变化 | 备注 |
+| :--- | :---: | :---: | :---: | :--- |
+| **Step 0 (DPO Champion 底座)** | **0.9379** | **5.62%** | 基准 | 初始冻结参考底座 |
+| **Step 10** | **0.9381** | **5.59%** | **Reward +0.0002 / 错误率 -0.03pp** | **全流程最低错误率（最优）** |
+| **Step 20** | **0.9379** | **5.62%** | 持平 | 保持与基座一致 |
+| **Step 30** | **0.9377** | **5.63%** | 错误率 +0.01pp | 平台期微幅波动 |
+| **Step 40** | **0.9378** | **5.63%** | 错误率 +0.01pp | 保持平稳 |
+| **Step 50** | **0.9379** | **5.62%** | 持平 | 保持平稳 |
+| **Step 60 (最终步)** | **0.9375** | **5.65%** | 错误率 +0.03pp | 呈现微幅过拟合倾向 |
+
+  - **复核结论：暂时不能进入正式下一步（Gate Status: FAILED / BLOCKED）**：
+    - **已确认事实**：
+      1. 训练正常跑完 60 steps，4 卡 DDP，`step_60` checkpoint、optimizer、scheduler、4 份 RNG 状态均完整存在。
+      2. 没有发现 OOM、NaN 或 traceback；GPU 当前空闲。
+      3. manifest hash 正确，RL train/validation 样本物理隔离无交集。
+      4. Held-out reward：`0.9379 → 0.9375`，提升 **`-0.0004`**（合同要求至少 **`+0.05`**，未达标）。
+      5. Held-out error rate：`0.0562 → 0.0565`，错误率反而微幅上升（反弹 +0.03pp）。
+      6. 训练 reward 后期接近 1，但 batch zero-variance ratio 多次达到 `0.875–0.9375`，存在明显奖励饱和与策略塌缩信号。
+      7. `rl_pilot`（Round 1）和 `rl_pilot_v2`（Round 2）的 gate 也都为 `FAILED`；v2 同时存在 Robust 回退（+0.0202%）和 held-out reward 不达标问题。
+      8. v3 没有在 2,867 全量验证集上的 `gate.json`、完整 `metrics.json`、完整评测 predictions 或 merged release model，按训练计划不能算正式完成。
+      9. 配置与计划不一致：计划写的是 temperature `0.7`、top-p `0.9`，实际 v3 运行配置使用了 `0.85 / 0.92`；运行记录中也缺少代码 commit provenance。
+    - **处置决策**：
+      - 将 `step_60` 保留为诊断 checkpoint，不作为发布或准出权重。
+      - 必须修正采样契约一致性，并妥善处理 reward 饱和/zero-variance 塌缩问题，再重跑 pilot。
+      - **当前坚决不启动 full RL，也不发布该模型**。
+
 ## 下一步
 
-1. **底层训练目标代码加固 (`train/train_rl.py`)**：
-   - 落实 Schulman K3 KL 损失与梯度计算；
-   - 落实自然重复与异常重复区分逻辑，动态解析 `reward_config`；
-   - 落实 held-out 验证确定性评估种子。
-2. **测试用例补充与验证**：
-   - 编写 `tests/test_rl_gradient_and_reward.py`，覆盖 KL 对不同 reference 的梯度敏感性、自然重复与异常重复 reward 排序、以及评估可复现性；
-   - 确保全套测试 100% 通过。
-3. **小闭环实机验证 (5~20 步 Smoke Test)**：
-   - 在 V100 上跑通 5~20 步验证闭环，确认梯度反向传播平稳、Held-out 评估稳定、Reward 正确引导。
+1. **修正采样契约与补全代码 Provenance**：
+   - 对齐计划文档与实际训练配置中的采样参数（统一明确 temperature / top-p 标准）；
+   - 在 `train/train_rl.py` 的环境记录（`environment.json`）中强制写入当前代码的 `git commit SHA`，确保全流程真实可追溯。
+2. **治理奖励饱和与 Zero-Variance 策略塌缩**：
+   - 分析后 20 步 batch zero-variance ratio 频繁突破 0.875~0.9375 的根本原因，引入合理的早停（例如在 Step 10~20 泛化高点保存候选）或探索度保持策略；
+   - 评估 ASR 错误率饱和状态下的 Reward 塑形与门禁阈值合理性。
+3. **重新设计方案并重跑 Pilot**：
+   - 形成下一轮 Pilot 加固方案文档，经评审确认后再在 V100 上启动重跑；
+   - 只有完整产出 2,867 条评测预测、metrics 与真实通过的 `gate.json` 时，才可评估进入后续阶段。
 
 ## 验收
 
