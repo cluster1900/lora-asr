@@ -11,6 +11,7 @@ from pathlib import Path
 from train.train_rl import (
     RLAudioDataset,
     audit_rollouts,
+    build_epoch_sample_indices,
     build_parser,
     compute_group_advantages,
     compute_sample_error_rate,
@@ -117,6 +118,8 @@ class TestRLDatasetAndParser(unittest.TestCase):
             "--top-k", "50",
             "--zero-variance-thresh", "0.30",
             "--single-gpu",
+            "--sample-strategy", "balanced",
+            "--export-merged-on-finish",
         ])
         self.assertEqual(args.manifest, "data.jsonl")
         self.assertEqual(args.config, "conf.yaml")
@@ -127,6 +130,78 @@ class TestRLDatasetAndParser(unittest.TestCase):
         self.assertEqual(args.top_k, 50)
         self.assertAlmostEqual(args.zero_variance_thresh, 0.30)
         self.assertTrue(args.single_gpu)
+        self.assertEqual(args.sample_strategy, "balanced")
+        self.assertTrue(args.export_merged_on_finish)
+
+
+class TestEpochSampleIndices(unittest.TestCase):
+    """Test deterministic balanced and standard sampling strategies."""
+
+    def setUp(self) -> None:
+        # Create a mock dataset with 10 degraded, 5 clean EN, 5 clean ZH
+        samples = []
+        for i in range(10):
+            samples.append({
+                "sample_id": f"deg_{i}",
+                "condition_group": "degraded",
+                "scenario": "noise",
+                "language": "en" if i % 2 == 0 else "zh",
+            })
+        for i in range(5):
+            samples.append({
+                "sample_id": f"clean_en_{i}",
+                "condition_group": "clean",
+                "scenario": "clean",
+                "language": "en",
+            })
+        for i in range(5):
+            samples.append({
+                "sample_id": f"clean_zh_{i}",
+                "condition_group": "clean",
+                "scenario": "clean",
+                "language": "zh",
+            })
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            for s in samples:
+                f.write(json.dumps(s) + "\n")
+            self.manifest_path = Path(f.name)
+        self.dataset = RLAudioDataset(self.manifest_path)
+
+    def tearDown(self) -> None:
+        self.manifest_path.unlink(missing_ok=True)
+
+    def test_balanced_sampling(self) -> None:
+        # Balanced: 10 degraded + 5 EN clean + 5 ZH clean = 20 samples
+        idx_ep0 = build_epoch_sample_indices(self.dataset, strategy="balanced", epoch=0, seed=42)
+        self.assertEqual(len(idx_ep0), 20)
+
+        # Degraded samples should be 50% of the epoch
+        deg_count = sum(1 for idx in idx_ep0 if self.dataset[idx]["condition_group"] == "degraded")
+        en_clean_count = sum(
+            1 for idx in idx_ep0
+            if self.dataset[idx]["condition_group"] == "clean" and self.dataset[idx]["language"] == "en"
+        )
+        zh_clean_count = sum(
+            1 for idx in idx_ep0
+            if self.dataset[idx]["condition_group"] == "clean" and self.dataset[idx]["language"] == "zh"
+        )
+        self.assertEqual(deg_count, 10)
+        self.assertEqual(en_clean_count, 5)
+        self.assertEqual(zh_clean_count, 5)
+
+        # Deterministic with same seed & epoch
+        idx_ep0_repeat = build_epoch_sample_indices(self.dataset, strategy="balanced", epoch=0, seed=42)
+        self.assertEqual(idx_ep0, idx_ep0_repeat)
+
+        # Different permutation with epoch=1
+        idx_ep1 = build_epoch_sample_indices(self.dataset, strategy="balanced", epoch=1, seed=42)
+        self.assertEqual(len(idx_ep1), 20)
+        self.assertNotEqual(idx_ep0, idx_ep1)
+
+    def test_standard_sampling(self) -> None:
+        idx_ep0 = build_epoch_sample_indices(self.dataset, strategy="standard", epoch=0, seed=42)
+        self.assertEqual(len(idx_ep0), len(self.dataset))
+        self.assertEqual(sorted(idx_ep0), list(range(len(self.dataset))))
 
 
 class TestRolloutAudit(unittest.TestCase):

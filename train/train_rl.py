@@ -213,6 +213,72 @@ class RLAudioDataset(Dataset):
         return self.samples[idx]
 
 
+def build_epoch_sample_indices(
+    dataset: RLAudioDataset,
+    strategy: str = "balanced",
+    epoch: int = 0,
+    seed: int = 20260722,
+) -> List[int]:
+    """Build deterministic sample index list for one epoch under the specified strategy."""
+    total_samples = len(dataset)
+    if total_samples == 0:
+        return []
+
+    strategy = str(strategy or "balanced").strip().lower()
+
+    if strategy == "standard":
+        rng = random.Random(seed + epoch)
+        indices = list(range(total_samples))
+        rng.shuffle(indices)
+        return indices
+
+    degraded_indices = [
+        i for i, s in enumerate(dataset.samples)
+        if s.get("condition_group") == "degraded" or ("clean" not in str(s.get("scenario", "")).lower())
+    ]
+    en_clean_indices = [
+        i for i, s in enumerate(dataset.samples)
+        if (s.get("condition_group") == "clean" or "clean" in str(s.get("scenario", "")).lower())
+        and str(s.get("language", "en")).strip().lower() in ("en", "english")
+    ]
+    zh_clean_indices = [
+        i for i, s in enumerate(dataset.samples)
+        if (s.get("condition_group") == "clean" or "clean" in str(s.get("scenario", "")).lower())
+        and str(s.get("language", "en")).strip().lower() in ("zh", "chinese")
+    ]
+
+    rng = random.Random(seed + epoch)
+
+    if strategy == "balanced":
+        # Target: 50% degraded, 25% English clean, 25% Chinese clean
+        n_deg = len(degraded_indices)
+        if n_deg == 0 or len(en_clean_indices) == 0 or len(zh_clean_indices) == 0:
+            indices = list(range(total_samples))
+            rng.shuffle(indices)
+            return indices
+
+        n_clean_each = n_deg // 2
+        sampled_en = (
+            rng.choices(en_clean_indices, k=n_clean_each)
+            if len(en_clean_indices) < n_clean_each
+            else rng.sample(en_clean_indices, k=n_clean_each)
+        )
+        sampled_zh = (
+            rng.choices(zh_clean_indices, k=n_clean_each)
+            if len(zh_clean_indices) < n_clean_each
+            else rng.sample(zh_clean_indices, k=n_clean_each)
+        )
+
+        indices = list(degraded_indices) + sampled_en + sampled_zh
+        rng.shuffle(indices)
+        return indices
+
+    # Fallback to random shuffle
+    indices = list(range(total_samples))
+    rng.shuffle(indices)
+    return indices
+
+
 def compute_sample_error_rate(reference: str, prediction: str, language: str) -> Tuple[float, int, int]:
     """Compute normalized WER for English or CER for Chinese.
     
@@ -693,6 +759,8 @@ def train_rl(
     val_eval_samples: Optional[int] = None,
     reward_config_path: Optional[Path] = None,
     eval_seed: int = 42,
+    sample_strategy: str = "balanced",
+    export_merged_on_finish: bool = True,
 ) -> None:
     """Main entrypoint for single-GPU or 4-card DDP GRPO training."""
     rank = 0
@@ -801,6 +869,26 @@ def train_rl(
     # Load datasets
     train_dataset = RLAudioDataset(manifest_path)
     val_dataset = RLAudioDataset(val_manifest_path) if val_manifest_path else None
+
+    sample_strategy = str(sample_strategy or train_cfg.get("sample_strategy", "balanced")).strip().lower()
+
+    epoch_cache: Dict[int, List[int]] = {}
+
+    def get_epoch_indices(ep: int) -> List[int]:
+        if ep not in epoch_cache:
+            epoch_cache[ep] = build_epoch_sample_indices(
+                train_dataset,
+                strategy=sample_strategy,
+                epoch=ep,
+                seed=seed,
+            )
+        return epoch_cache[ep]
+
+    epoch_0_indices = get_epoch_indices(0)
+    virtual_epoch_len = max(len(epoch_0_indices), 1)
+
+    if rank == 0:
+        print(f"Loaded {len(train_dataset)} training samples (sample_strategy='{sample_strategy}', virtual_epoch_len={virtual_epoch_len})")
 
     # Load base model
     model_id = str(model_cfg.get("model_id", "/data/mega-asr/runs/dpo_pilot_v2/merged_base"))
@@ -929,18 +1017,17 @@ def train_rl(
     rollouts_log_path = output_dir / "rollouts.jsonl"
     global_step = start_step
 
-    sample_cursor = global_step * grad_accum_steps * world_size
-    n_train = len(train_dataset)
-
     optimizer.zero_grad()
     accum_count = 0
     accum_policy_loss = 0.0
     accum_kl_loss = 0.0
+    accum_raw_kl = 0.0
     accum_total_loss = 0.0
     accum_rewards: List[float] = []
     accum_zero_vars: int = 0
     consecutive_high_zero_var: int = 0
     step_start_time = time.time()
+    skip_offset = 0
 
     if rank == 0:
         print(f"Starting GRPO training: global_step={global_step} -> {max_steps}, accum={grad_accum_steps}, world_size={world_size}, G={group_size}")
@@ -992,18 +1079,24 @@ def train_rl(
             dist.barrier()
 
     while global_step < max_steps:
-        sample_idx = (sample_cursor + rank) % max(1, n_train)
+        total_micro_step = global_step * grad_accum_steps + accum_count + skip_offset
+        cluster_sample_idx = total_micro_step * world_size + rank
+        epoch = cluster_sample_idx // virtual_epoch_len
+        in_epoch_idx = cluster_sample_idx % virtual_epoch_len
+        epoch_indices = get_epoch_indices(epoch)
+        sample_idx = epoch_indices[in_epoch_idx]
         sample = train_dataset[sample_idx]
-        sample_cursor += world_size
 
         audio_path = sample.get("audio", "")
         if not os.path.isfile(audio_path):
+            skip_offset += 1
             continue
 
         try:
             wav, sr = sf.read(audio_path)
         except Exception as err:
             print(f"Warning: Failed to read {audio_path}: {err}", file=sys.stderr)
+            skip_offset += 1
             continue
 
         if len(wav.shape) > 1:
@@ -1043,6 +1136,7 @@ def train_rl(
                 seqs = gen_out.sequences if hasattr(gen_out, "sequences") else gen_out
             except Exception as gen_err:
                 print(f"Generation error on {sample_id}: {gen_err}", file=sys.stderr)
+                skip_offset += 1
                 continue
 
         cand_texts: List[str] = []
@@ -1161,6 +1255,7 @@ def train_rl(
 
         policy_term_loss = - (adv_tensor.unsqueeze(-1) * policy_token_logps * token_mask).sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
         kl_term_loss = (beta * token_kl).sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
+        raw_kl_term = token_kl.sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
 
         if is_zero_var:
             # On zero-variance groups (no contrastive reward signal), zero out group loss
@@ -1176,6 +1271,7 @@ def train_rl(
         accum_total_loss += group_loss.item()
         accum_policy_loss += (0.0 if is_zero_var else policy_term_loss.mean().item())
         accum_kl_loss += (0.0 if is_zero_var else kl_term_loss.mean().item())
+        accum_raw_kl += (0.0 if is_zero_var else raw_kl_term.mean().item())
         accum_count += 1
 
         # 7. Record Rollouts to rank-specific rollouts_rank_{rank}.jsonl
@@ -1221,25 +1317,28 @@ def train_rl(
             mean_tot_loss = accum_total_loss / grad_accum_steps
             mean_pol_loss = accum_policy_loss / grad_accum_steps
             mean_kl = accum_kl_loss / grad_accum_steps
+            mean_raw_kl = accum_raw_kl / grad_accum_steps
             mean_rew = sum(accum_rewards) / max(1, len(accum_rewards))
             zero_var_ratio = accum_zero_vars / grad_accum_steps
 
             accum_total_loss = 0.0
             accum_policy_loss = 0.0
             accum_kl_loss = 0.0
+            accum_raw_kl = 0.0
             accum_rewards = []
             accum_zero_vars = 0
             accum_count = 0
 
             # Gather metrics across ranks if distributed
             if is_distributed:
-                metrics_t = torch.tensor([mean_tot_loss, mean_pol_loss, mean_kl, mean_rew, zero_var_ratio], device=device)
+                metrics_t = torch.tensor([mean_tot_loss, mean_pol_loss, mean_kl, mean_raw_kl, mean_rew, zero_var_ratio], device=device)
                 dist.all_reduce(metrics_t, op=dist.ReduceOp.SUM)
                 mean_tot_loss = (metrics_t[0] / world_size).item()
                 mean_pol_loss = (metrics_t[1] / world_size).item()
                 mean_kl = (metrics_t[2] / world_size).item()
-                mean_rew = (metrics_t[3] / world_size).item()
-                zero_var_ratio = (metrics_t[4] / world_size).item()
+                mean_raw_kl = (metrics_t[3] / world_size).item()
+                mean_rew = (metrics_t[4] / world_size).item()
+                zero_var_ratio = (metrics_t[5] / world_size).item()
 
             current_lr = scheduler.get_last_lr()[0] if scheduler is not None else lr
 
@@ -1248,7 +1347,8 @@ def train_rl(
                     "global_step": global_step,
                     "loss": round(mean_tot_loss, 5),
                     "policy_loss": round(mean_pol_loss, 5),
-                    "kl_loss": round(mean_kl, 5),
+                    "kl_loss": round(mean_kl, 6),
+                    "raw_kl": round(mean_raw_kl, 6),
                     "mean_reward": round(mean_rew, 4),
                     "zero_variance_ratio": round(zero_var_ratio, 4),
                     "learning_rate": current_lr,
@@ -1257,7 +1357,7 @@ def train_rl(
                 }
                 print(
                     f"[Step {global_step}/{max_steps}] loss={mean_tot_loss:.4f}, pol_loss={mean_pol_loss:.4f}, "
-                    f"kl={mean_kl:.4f}, rew={mean_rew:.3f}, zero_var={zero_var_ratio:.2f}, lr={current_lr:.2e}, time={step_duration:.2f}s"
+                    f"raw_kl={mean_raw_kl:.6f}, kl_loss={mean_kl:.6f}, rew={mean_rew:.3f}, zero_var={zero_var_ratio:.2f}, lr={current_lr:.2e}, time={step_duration:.2f}s"
                 )
                 with open(loss_log_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(log_entry) + "\n")
@@ -1404,6 +1504,16 @@ def train_rl(
         dist.destroy_process_group()
 
     if rank == 0:
+        if export_merged_on_finish and global_step >= max_steps:
+            last_ckpt = output_dir / "checkpoints" / f"step_{global_step}"
+            merged_dir = output_dir / "merged_base"
+            if last_ckpt.is_dir():
+                print(f"Exporting merged model from {last_ckpt} to {merged_dir}...")
+                try:
+                    export_merged_model(last_ckpt, merged_dir, config)
+                    print(f"Exported merged model successfully to {merged_dir}")
+                except Exception as ex_err:
+                    print(f"Warning: Failed to auto-export merged model: {ex_err}", file=sys.stderr)
         print(f"GRPO RL Training successfully finished {global_step} steps!")
 
 
@@ -1427,6 +1537,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--val-eval-samples", type=int, default=None, help="Number of validation samples to evaluate.")
     parser.add_argument("--reward-config", default=None, help="Path to reward_config.yaml.")
     parser.add_argument("--eval-seed", type=int, default=42, help="Deterministic seed for validation evaluation (default: 42).")
+    parser.add_argument("--sample-strategy", default="balanced", choices=["balanced", "standard"], help="Sampling strategy across conditions (default: balanced).")
+    parser.add_argument("--export-merged-on-finish", action="store_true", default=True, help="Auto-export standalone merged model when training finishes (default: True).")
+    parser.add_argument("--no-export-merged-on-finish", dest="export_merged_on_finish", action="store_false", help="Do not auto-export standalone merged model on finish.")
     parser.add_argument("--export-merged", action="store_true", help="Export standalone merged model.")
     parser.add_argument("--checkpoint-dir", default=None, help="Checkpoint directory for --export-merged.")
     return parser
@@ -1479,6 +1592,8 @@ def main() -> None:
         val_eval_samples=args.val_eval_samples,
         reward_config_path=Path(args.reward_config).resolve() if args.reward_config else None,
         eval_seed=args.eval_seed,
+        sample_strategy=args.sample_strategy,
+        export_merged_on_finish=args.export_merged_on_finish,
     )
 
 

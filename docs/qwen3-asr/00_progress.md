@@ -4,16 +4,25 @@
 
 ## 当前状态
 
-当前状态：**E6 阶段强化学习（RL Pilot v4 完训与详细审计）**
-- 前置阶段 E5 DPO Pilot（Round 2/3）已于 2026-09-21 达成全部 8 项门禁 100% 真实通过（PASSED），产出正式基座 `/data/mega-asr/runs/dpo_pilot_v2/merged_base` 作为本次 RL 的初始 Policy 和冻结 Reference Model。
-- 本阶段核心目标：实现面向 Qwen3-ASR 的单机 4 卡 DDP GRPO（Group Relative Policy Optimization）训练 Runner (`train/train_rl.py`)，结合序列级 Reward 评测与冻结参考策略 KL 约束，在保证 Clean 零回退的前提下进一步优化退化场景的鲁棒性。
-- **最新审计结论（2026-09-24，RL Pilot v4）**：
-  - **训练稳定性与零方差中和**：重构并执行了受控版 `rl_pilot_v4`（4 卡 DDP，30 steps，采样 `temp=0.85, top_p=0.92, top_k=50`，零方差梯度中和，Git Commit `f79b27938a43f610bb64a8ca16a62ebc184e641e` 强制落盘）。30 步全程平均零方差比例降至 **0.6807**（大幅消除 v3 后期 0.875~0.9375 的严重策略塌缩），四卡 7,680 条 rollout 审计全部 PASSED。
-  - **Step 10 Pareto 最优峰值确认**：
-    - 在 573 条 held-out 验证池上：Step 0 基线 `reward=0.9379, err=0.0562`；Step 10 达到峰值 `reward=0.9385, err=0.0557`（回报提升 +0.0006，错误率降低 0.05pp）；随后 Step 20（0.9379）与 Step 30（0.9377）逐步趋于饱和震荡。
-    - 在 2,867 条独立验证全集全量评测上：Step 10 相对 DPO 保持 Clean 全面微增（EN Clean 1.929% → 1.924%、ZH Clean 1.414% → 1.407%，Clean Macro 1.6717% → 1.6657%），退化场景 `en|distortion` 显式改善（8.263% → 8.139%），空输出与推理失败均为 0。
-    - 门禁比对：`degraded_improvement`（PASSED）、`clean_retention`（PASSED）、`clean_cumulative_retention`（PASSED）、`zero_variance`（PASSED）、`empty_output_rate`（PASSED）；但由于全集 Robust Macro（0.103785 vs 0.103583，微变 +0.000202）触发严格 0.0 容差拦截，且 Held-out Reward 增幅（+0.0006）低于标称期望，gate 状态判定为 FAILED。
-  - **当前决策**：Step 10 检查点作为 RL Pilot 的 Pareto 最优诊断模型完整归档。鉴于在 2k 小样本 Pilot 下 DPO 基座已有 0.9379 的极高 Reward（错误率仅 5.6%），小步数 RL 的真实泛化收益空间在 0.05pp~0.15pp 级别；后续扩大数据规模至 Full RL（18,000 条训练音频）时方可获得显著增量。当前严禁冒进发布模型，保留 Step 10 为备选接力底座。
+当前状态：**E6 阶段强化学习（RL Pilot v4 完训复核：未达验收，维持阻断）**
+- **核心结论**：**RL v4 的训练循环已经完成，但 RL Pilot 阶段没有通过验收，不能作为正式发布模型或 Full RL 底座。**
+- **当前基座与状态保持**：
+  - 正式底座：维持 **DPO merged model** (`/data/mega-asr/runs/dpo_pilot_v2/merged_base`)；
+  - RL v4 Step 10：仅作为诊断候选（Diagnostic Candidate）；
+  - **暂不启动 Full RL，也不发布 RL v4**。
+- **已确认事实**：
+  1. V100 上 `pipeline_state.json` 为 `COMPLETED`，30/30 steps，4 卡 DDP。
+  2. Step 10/20/30 checkpoint 均完整存在，包含 adapter、optimizer、scheduler 和四卡独立 RNG。
+  3. Rollout 共 7,680 条，四个 rank 各 1,920 条，分组和 schema 正常，四卡审计 100% PASSED。
+  4. 2,867 条独立验证全集推理全部成功，空输出和推理错误均为 0。
+- **主要问题与根因审计**：
+  1. **Step 10 gate FAILED**：Robust Macro 从 DPO 的 `10.3583%` 变为 `10.3785%`，恶化 `+0.0202` 个百分点；held-out reward 只提升 `+0.0006`，低于要求的 `+0.0020`。
+  2. **Step 30 表现更差**：无任何退化场景改善，Robust Macro 恶化 `+0.0262` 个百分点，held-out reward 下降 `-0.0002`。
+  3. **数据规模缺口**：`pilot_rl.jsonl` 只有 **2,236 条**，实际是 1,236 degraded + 500 English clean + 500 Chinese clean，低于合同要求的 3,000 条（2,000 degraded + 1,000 clean）。根因在于数据池 `rl_train_pool.jsonl` 自身仅包含 1,236 条退化音频。
+  4. **顺序取样引发分布突变（Distribution Cliff）**：manifest 按顺序排列（前 1,236 条全为 degraded，后 1,000 条全为 clean），训练代码采用顺序游标取样。造成 Step 0–18 几乎全为 degraded（训练 reward 约 0.80~0.88），Step 20–30 突变为 100% clean（训练 reward 陡增至 0.98，零方差率升至 0.875~0.9062）。模型在后期严重拟合干净语音，冲淡了退化场景的鲁棒优化，直接导致 Step 30 的退化增益彻底消失。
+  5. **发布产物链路未闭合**：V100 上未生成 `merged_base`/`rl_merged_base`，未生成根目录 `gate.json`；目前仅有 adapter checkpoint 与 `gate_step_10.json`、`gate_step_30.json`。
+  6. **Rollout 惩罚项特征**：7,680 条采样中记录了 3 条空输出、86 条重复惩罚、225 条 hallucination 惩罚；最终验证集虽无空输出，但揭示模型在极端噪声探索时的不稳定性，需在后续扩容时持续监控。
+  7. **审计精度截断**：KL 正则项数值有效有限，但 `loss_log.jsonl` 中 `mean_kl` 经历 `round(..., 5)` 截断导致四舍五入为 `0.0`，审计精度不足。
 
 ### E6 RL (GRPO) Pilot 核心设计与契约标准
 
@@ -397,15 +406,21 @@
   - **处置与决策**：
     - **Step 10 被确立为 RL Pilot 的 Pareto 最佳模型**；
     - 所有 27 项产物与日志已完整同步本地 `results/rl_pilot_v4/`；
-    - **严格遵从规范：当前继续维持门禁拦截（BLOCKED），不得启动 Full RL，不得发布为正式模型**。后续需结合数据扩容方案（18k Full Pool）再进一步做突破。
+    - **严格遵从规范：当前继续维持门禁拦截（BLOCKED），不得启动 Full RL，不得发布为正式模型**。
+- **第五轮 RL Pilot（`rl_pilot_v5`）设计方案与加固路线（2026-09-24）**：
+  - **核心整改目标**：
+    1. **引入分层平衡采样（`--sample-strategy balanced`）**：在 `train/train_rl.py` 中引入类似 SFT 的 `build_epoch_sample_indices`，按 50% degraded + 25% clean EN + 25% clean ZH 分层并按 seed 随机打乱，使退化语音与干净语音在每一步、每个 GPU Rank 上均匀交织，彻底消除“前 19 步全退化、后 11 步全干净”的严重分布悬崖与退化特征遗忘；
+    2. **提升 KL 正则项审计精度**：在 `loss_log.jsonl` 中同时保留未缩放的序列级 `raw_kl`（精度 6 位小数）与有效策略正则项 `kl_loss`（精度 6 位小数），杜绝因保留 5 位小数将 `beta * kl` 截断为 `0.0` 的审计精度缺失；
+    3. **贯通闭环发布链路**：训练完成后自动触发 Pareto 检查点评测与合并权重导出，闭环产出 `merged_base` 与规范 `gate.json`。
 
 ## 下一步
 
-1. **评估 Full RL 数据池（18,000 条音频）的扩容准备**：
-   - 当前在 2,236 条子集上的 Pilot 实验已充分证明了 GRPO 算法链路、4 卡 DDP 通信、Schulman K3 KL 约束、零方差梯度中和及全状态检查点续训的工程正确性；
-   - 在 2k 数据量下模型策略在 10 步即达 Pareto 峰值，更大幅度的鲁棒性跃升必须依赖 `rl_train_pool`（18,000 条覆盖完整 32 场景的大规模多样性探索）。
-2. **门禁阈值与容差精细化校准**：
-   - 针对 Full 阶段评测，审视宏平均在 2,867 条全集上的统计置信区间，评估是否将 `max_robust_macro_regression` 调整为合理的置信区间容差（如 $\le 0.0010$），避免数十条样本统计抖动掩盖主要场景的显著提升。
+1. **实现 `train/train_rl.py` 的平衡采样与 KL 精度优化**：
+   - 增加 `build_epoch_sample_indices` 函数，提供 `--sample-strategy balanced`（默认）与 `standard`；
+   - 增加对应单元测试并在本地与 V100 运行通过。
+2. **在 V100 上异步启动 `rl_pilot_v5` 重训**：
+   - 4 卡 DDP，30 steps，采样 `temp=0.85, top_p=0.92, top_k=50`，采用 balanced 采样；
+   - 完训后执行多检查点 2,867 全量验证集评测与门禁判定。
 
 ## 验收
 
