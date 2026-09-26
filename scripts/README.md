@@ -30,14 +30,15 @@ python3 scripts/stage_parquet_sources.py \
     --endpoint https://hf-mirror.com
 
 # 3. 哈希隔离分区并产出全套 7 角色 manifest、smoke.jsonl、pilot 子集与 DATASET_COMPLETE.json
-# （在数据未达全额配额时使用 --no-strict-quotas 标记 NON_STRICT_SUBSET）
+# （在数据未达全额配额时使用 --no-strict-quotas 标记 NON_STRICT_SUBSET，使用 --freeze-validation 保持核心 validation.jsonl 绝对冻结）
 python3 scripts/build_robust_manifests.py \
     --config configs/data/public_robust_v100.yaml \
     --staged-dir /data/mega-asr/manifests \
     --output-dir /data/mega-asr/manifests \
     --data-dir /data/mega-asr/data \
     --mode full \
-    --no-strict-quotas
+    --no-strict-quotas \
+    --freeze-validation
 
 # 4. 深度核验已有 manifest 门禁与音频完整性
 # 非全量模式校验子集门禁（预期 VERIFIED (NON_STRICT_SUBSET)）

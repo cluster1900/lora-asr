@@ -201,11 +201,39 @@ class RobustDatasetBuilder:
         self,
         samples_by_source: Dict[str, List[Dict[str, Any]]],
         verify_audio_file: bool = True,
+        freeze_validation: bool = False,
     ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]]]:
         """Partition validated samples into disjoint roles strictly adhering to split constraints."""
         role_pools: Dict[str, List[Dict[str, Any]]] = {role: [] for role in self.roles_cfg}
         rejects: List[Dict[str, Any]] = []
         seen_sample_ids: Set[str] = set()
+
+        frozen_val_uids: Set[str] = set()
+        frozen_bench_uids: Set[str] = set()
+        if freeze_validation:
+            val_file = self.manifest_root / "validation.jsonl"
+            if val_file.is_file():
+                with open(val_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            rec = json.loads(line)
+                            role_pools["validation"].append(rec)
+                            seen_sample_ids.add(rec["sample_id"])
+                            frozen_val_uids.add(rec["source_utterance_id"])
+                print(f"[build_robust_manifests] Froze {len(role_pools['validation'])} records from existing validation.jsonl.")
+
+            bench_file = self.manifest_root / "bench_test.jsonl"
+            if bench_file.is_file():
+                with open(bench_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            rec = json.loads(line)
+                            role_pools["bench_test"].append(rec)
+                            seen_sample_ids.add(rec["sample_id"])
+                            frozen_bench_uids.add(rec["source_utterance_id"])
+                print(f"[build_robust_manifests] Froze {len(role_pools['bench_test'])} records from existing bench_test.jsonl.")
 
         # Group clean samples by split (train vs validation)
         # LibriSpeech
@@ -221,6 +249,8 @@ class RobustDatasetBuilder:
 
         for src_name, records in samples_by_source.items():
             for rec in records:
+                if rec.get("source_utterance_id") in frozen_val_uids or rec.get("source_utterance_id") in frozen_bench_uids:
+                    continue
                 if rec["sample_id"] in seen_sample_ids:
                     rejects.append({
                         "sample_id": rec.get("sample_id", "unknown"),
@@ -272,8 +302,9 @@ class RobustDatasetBuilder:
                         "record": valid_rec,
                     })
 
-        # Bench test strictly goes to bench_test role
-        role_pools["bench_test"].extend(bench_samples)
+        # Bench test strictly goes to bench_test role (if not already frozen)
+        if not freeze_validation or not role_pools["bench_test"]:
+            role_pools["bench_test"].extend(bench_samples)
 
         # Robust partitioning: 90% train pool, 10% eval pool based on deterministic bucket
         robust_train_candidates: List[Dict[str, Any]] = []
@@ -303,15 +334,25 @@ class RobustDatasetBuilder:
             role_pools[role].extend(allocated)
 
         # Allocate robust eval pool: validation, dpo_val_pool, rl_val_pool
-        robust_eval_alloc = self._slice_candidates(
-            robust_eval_candidates,
-            [
-                ("validation", self.roles_cfg["validation"]["quotas"]["robust_degraded"]),
-                ("dpo_val_pool", self.roles_cfg["dpo_val_pool"]["source_candidates"]["robust_degraded"]),
-                ("rl_val_pool", self.roles_cfg["rl_val_pool"]["quotas"]["robust_degraded"]),
-            ],
-            seed=self.seed,
-        )
+        if freeze_validation and role_pools["validation"]:
+            robust_eval_alloc = self._slice_candidates(
+                robust_eval_candidates,
+                [
+                    ("dpo_val_pool", self.roles_cfg["dpo_val_pool"]["source_candidates"]["robust_degraded"]),
+                    ("rl_val_pool", self.roles_cfg["rl_val_pool"]["quotas"]["robust_degraded"]),
+                ],
+                seed=self.seed,
+            )
+        else:
+            robust_eval_alloc = self._slice_candidates(
+                robust_eval_candidates,
+                [
+                    ("validation", self.roles_cfg["validation"]["quotas"]["robust_degraded"]),
+                    ("dpo_val_pool", self.roles_cfg["dpo_val_pool"]["source_candidates"]["robust_degraded"]),
+                    ("rl_val_pool", self.roles_cfg["rl_val_pool"]["quotas"]["robust_degraded"]),
+                ],
+                seed=self.seed,
+            )
         for role, allocated in robust_eval_alloc.items():
             role_pools[role].extend(allocated)
 
@@ -342,28 +383,48 @@ class RobustDatasetBuilder:
             role_pools[role].extend(allocated)
 
         # Allocate Clean Validation: LibriSpeech validation -> validation, dpo_val_pool, rl_val_pool
-        libri_val_alloc = self._slice_candidates(
-            libri_val,
-            [
-                ("validation", self.roles_cfg["validation"]["quotas"]["english_clean"]),
-                ("dpo_val_pool", self.roles_cfg["dpo_val_pool"]["source_candidates"]["english_clean"]),
-                ("rl_val_pool", self.roles_cfg["rl_val_pool"]["quotas"]["english_clean"]),
-            ],
-            seed=self.seed,
-        )
+        if freeze_validation and role_pools["validation"]:
+            libri_val_alloc = self._slice_candidates(
+                libri_val,
+                [
+                    ("dpo_val_pool", self.roles_cfg["dpo_val_pool"]["source_candidates"]["english_clean"]),
+                    ("rl_val_pool", self.roles_cfg["rl_val_pool"]["quotas"]["english_clean"]),
+                ],
+                seed=self.seed,
+            )
+        else:
+            libri_val_alloc = self._slice_candidates(
+                libri_val,
+                [
+                    ("validation", self.roles_cfg["validation"]["quotas"]["english_clean"]),
+                    ("dpo_val_pool", self.roles_cfg["dpo_val_pool"]["source_candidates"]["english_clean"]),
+                    ("rl_val_pool", self.roles_cfg["rl_val_pool"]["quotas"]["english_clean"]),
+                ],
+                seed=self.seed,
+            )
         for role, allocated in libri_val_alloc.items():
             role_pools[role].extend(allocated)
 
         # Allocate Clean Validation: AISHELL-1 validation -> validation, dpo_val_pool, rl_val_pool
-        aishell_val_alloc = self._slice_candidates(
-            aishell_val,
-            [
-                ("validation", self.roles_cfg["validation"]["quotas"]["chinese_clean"]),
-                ("dpo_val_pool", self.roles_cfg["dpo_val_pool"]["source_candidates"]["chinese_clean"]),
-                ("rl_val_pool", self.roles_cfg["rl_val_pool"]["quotas"]["chinese_clean"]),
-            ],
-            seed=self.seed,
-        )
+        if freeze_validation and role_pools["validation"]:
+            aishell_val_alloc = self._slice_candidates(
+                aishell_val,
+                [
+                    ("dpo_val_pool", self.roles_cfg["dpo_val_pool"]["source_candidates"]["chinese_clean"]),
+                    ("rl_val_pool", self.roles_cfg["rl_val_pool"]["quotas"]["chinese_clean"]),
+                ],
+                seed=self.seed,
+            )
+        else:
+            aishell_val_alloc = self._slice_candidates(
+                aishell_val,
+                [
+                    ("validation", self.roles_cfg["validation"]["quotas"]["chinese_clean"]),
+                    ("dpo_val_pool", self.roles_cfg["dpo_val_pool"]["source_candidates"]["chinese_clean"]),
+                    ("rl_val_pool", self.roles_cfg["rl_val_pool"]["quotas"]["chinese_clean"]),
+                ],
+                seed=self.seed,
+            )
         for role, allocated in aishell_val_alloc.items():
             role_pools[role].extend(allocated)
 
@@ -917,6 +978,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-strict-quotas", action="store_true", help="Do not require full quotas (e.g. for testing/smoke)")
     parser.add_argument("--strict-quotas", action="store_true", help="Require strict full quotas during verification or generation")
     parser.add_argument("--verify-audio", action="store_true", help="Perform audio format & file decoding checks")
+    parser.add_argument("--freeze-validation", action="store_true", default=False, help="Preserve existing validation.jsonl and bench_test.jsonl records without re-sampling")
     return parser.parse_args()
 
 
@@ -976,7 +1038,7 @@ def main() -> int:
     if found_any:
         print(f"Partitioning samples across 7 roles with zero leakage...")
         role_pools, rejects = builder.partition_samples(
-            samples_by_source, verify_audio_file=args.verify_audio
+            samples_by_source, verify_audio_file=args.verify_audio, freeze_validation=args.freeze_validation
         )
         strict = not args.no_strict_quotas and args.mode == "full"
         pilot_subsets = builder.build_pilot_subsets(role_pools, strict=strict)

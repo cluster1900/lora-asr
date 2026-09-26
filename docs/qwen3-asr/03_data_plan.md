@@ -64,6 +64,11 @@ Pilot 子集固定为：SFT `5,000+1,000+1,000`，DPO `2,000+500+500`（验证�
 Smoke 子集固定为 128 条平衡样本（`manifests/smoke.jsonl`：32 条 English clean、32 条 Chinese clean、64 条 Robust degraded，均匀覆盖各类场景），专门用于 E2 Base 推理 Smoke 与 E3 SFT Checkpoint Smoke（10+2步续训）。
 角色之间 source identity 不重叠；不足配额时阶段失败，不允许从 validation/test 补行。
 
+### E1.1 数据扩增阶段与验证集绝对冻结铁律
+当为了打破训练信息熵瓶颈扩充分片数据（从 14k 扩充至 70k–90k）时：
+1. **验证集绝对冻结**：`validation.jsonl`（固定 2,867 条，SHA-256 为 `8950f29f...`）和 `bench_test.jsonl`（固定 4,999 条）必须保持 100% 字节不变，其包含的所有 `source_utterance_id` 永久从训练候选池排除；
+2. **纯粹单向扩增**：所有新转码的退化音频只扩充训练池（`sft_train`, `dpo_train_pool`, `rl_train_pool`）和独立评测池（`dpo_val_pool`, `rl_val_pool`），使 `rl_train_pool` 的退化语音从 1,236 条实质性扩充至 10,000–16,000 条，并使 `pilot_rl.jsonl` 达到完整的 3,000 条配额。
+
 ## SFT 输入
 
 
