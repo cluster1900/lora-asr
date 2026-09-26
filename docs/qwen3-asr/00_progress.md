@@ -407,20 +407,49 @@
     - **Step 10 被确立为 RL Pilot 的 Pareto 最佳模型**；
     - 所有 27 项产物与日志已完整同步本地 `results/rl_pilot_v4/`；
     - **严格遵从规范：当前继续维持门禁拦截（BLOCKED），不得启动 Full RL，不得发布为正式模型**。
-- **第五轮 RL Pilot（`rl_pilot_v5`）设计方案与加固路线（2026-09-24）**：
-  - **核心整改目标**：
-    1. **引入分层平衡采样（`--sample-strategy balanced`）**：在 `train/train_rl.py` 中引入类似 SFT 的 `build_epoch_sample_indices`，按 50% degraded + 25% clean EN + 25% clean ZH 分层并按 seed 随机打乱，使退化语音与干净语音在每一步、每个 GPU Rank 上均匀交织，彻底消除“前 19 步全退化、后 11 步全干净”的严重分布悬崖与退化特征遗忘；
-    2. **提升 KL 正则项审计精度**：在 `loss_log.jsonl` 中同时保留未缩放的序列级 `raw_kl`（精度 6 位小数）与有效策略正则项 `kl_loss`（精度 6 位小数），杜绝因保留 5 位小数将 `beta * kl` 截断为 `0.0` 的审计精度缺失；
-    3. **贯通闭环发布链路**：训练完成后自动触发 Pareto 检查点评测与合并权重导出，闭环产出 `merged_base` 与规范 `gate.json`。
+- **第五轮 RL Pilot（`rl_pilot_v5`）训练执行、全量评测与门禁复核（2026-09-26）**：
+  - **核心整改落地与训练执行（100% 达成）**：
+    1. **分层平衡采样（`--sample-strategy balanced`）**：按 50% degraded (1,236) + 25% clean EN (618) + 25% clean ZH (618) 确定性构建虚拟 Epoch（`virtual_epoch_len=2472`），彻底解决了 v4 的数据分布悬崖与退化特征遗忘问题。
+    2. **KL 精度恢复**：`raw_kl` 与 `kl_loss` 均保留 6 位小数，实测 `raw_kl` 在 `1e-6 ~ 1.7e-4` 平稳微调，无策略坍缩。
+    3. **产物链自动闭环**：训练完成第 30 步后自动在 Rank 0 调用 `export_merged_model`，闭环导出 `/data/mega-asr/runs/rl_pilot_v5/merged_base`。
+    4. **训练监控指标**：
+       - Step 0 (DPO Champion 底座)：`val_mean_reward=0.9379`, `val_error_rate=0.0562`
+       - Step 10：`val_mean_reward=0.9380`, `val_error_rate=0.0560`
+       - Step 20：`val_mean_reward=0.9380`, `val_error_rate=0.0561`
+       - **Step 30（最终步与最优检查点）**：`val_mean_reward=0.9385`（**+0.0006**）, `val_error_rate=0.0556`（**-0.0006**），逆转了 v4 在 Step 30 的过拟合回退（v4 Step 30 reward 曾跌至 0.9377）。
+  - **2,867 条独立验证全集 4 卡并行全量评测与 Gate 复核（Step 30 vs DPO 基线）**：
+
+| 评估维度 / 指标 | Base (Qwen3) | DPO Champion 基线 | RL Pilot v4 Step 10 | RL Pilot v4 Step 30 | **RL Pilot v5 Step 30** | Step 30 vs DPO 变化 |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Clean Macro 错误率** | 1.7247% | 1.6717% | 1.6657% | 1.6657% | **1.6633%** | **-0.0084pp (全项目历史新低)** |
+| ├─ `en\|clean` (WER) | 1.9789% | 1.9292% | 1.9242% | 1.9242% | **1.9193%** | **-0.0099pp (388 → 386 edits)** |
+| └─ `zh\|clean` (CER) | 1.4706% | 1.4143% | 1.4073% | 1.4073% | **1.4073%** | **-0.0070pp (201 → 200 edits)** |
+| **Robust Macro 错误率** | 10.5179% | **10.3583%** | 10.3785% | 10.3845% | **10.3733%** | `+0.0150pp` (恶化幅度收窄至万分之 1.5) |
+| ├─ `en\|recording` (WER) | 31.8731% | 31.5710% | 31.5710% | 31.5710% | **31.2689%** | **-0.3021pp (209 → 207 edits, 显著改善)** |
+| ├─ `en\|noise` (WER) | 17.1531% | **17.0935%** | 17.0935% | 17.0935% | 17.2722% | `+0.1787pp` (287 → 290 edits, +3 edits) |
+| ├─ `zh\|distortion` (CER) | 7.8287% | **7.8779%** | 7.8779% | 7.8779% | 7.9271% | `+0.0492pp` (160 → 161 edits, +1 edit) |
+| └─ 其余 11 个退化场景 | - | - | - | - | **完全持平** | 0 波动 |
+| **退化改善场景数** | 基准 | 5/14 | 1/14 | 0/14 | **1/14 (`en\|recording`)** | 达标（$\ge 1$） |
+| **零方差比例** | - | - | 68.07% | 68.07% | **73.85%** | 达标（$\le 75\%$） |
+| **推理有效率 / 空输出** | 100.0% / 0 | 100.0% / 0 | 100.0% / 0 | 100.0% / 0 | **100.0% / 0** | 满分保持（2,867 条 0 错误） |
+| **Held-out Reward 提升** | - | - | +0.0006 | -0.0002 | **+0.0006** | 未达标（要求 $\ge +0.0020$） |
+| **Gate 状态** | 基准 | **PASSED** | **FAILED** | **FAILED** | **FAILED (未满足严格零回退)** | 2 项未达标（见下文） |
+
+  - **Gate 判定与根因分析（`gate_step_30.json`）**：
+    1. **达标项（7 项通过）**：`degraded_improvement`（PASSED，改善 `en|recording` -0.30pp）、`clean_retention`（PASSED，Clean 错误率创项目历史最低 1.6633%）、`valid_output_rate`（PASSED，100%）、`empty_output_rate`（PASSED，0%）、`failure_rate`（PASSED，0%）、`clean_cumulative_retention`（PASSED）、`zero_variance`（PASSED，73.85% $\le 75\%$）。
+    2. **未达标项（2 项拦截）**：
+       - `robust_retention`（FAILED）：门禁要求 Robust Macro 相对 DPO 严格 $\le 0.0$ 恶化；实测 2,867 条样本中，RL v5 净增加 2 处退化编辑（4 处 noise/distortion 微增，2 处 recording 减少），导致 Robust Macro 出现 `+0.0150pp`（万分之一点五）的微小差值；
+       - `held_out_reward`（FAILED）：门禁要求 `held_out_reward_improvement >= 0.0020`，实测提升为 `+0.0006`。在 DPO 基础已极高（reward 0.9379、错误率 5.6%）的前提下，受限于当前 1,236 条退化训练样本的规模，强化学习增益未能达到 0.0020 的硬性门槛。
+  - **决策与当前基线认定**：
+    - **严格遵从质量门禁契约**：未通过门禁前，**坚决不推进 Full RL，坚决不发布 RL 模型**；
+    - **正式发布与下游后训练基线继续严格锁定为**：`/data/mega-asr/runs/dpo_pilot_v2/merged_base`（DPO Champion，Macro 4.2297%，Robust 10.3583%，Clean 1.6717%）。
 
 ## 下一步
 
-1. **实现 `train/train_rl.py` 的平衡采样与 KL 精度优化**：
-   - 增加 `build_epoch_sample_indices` 函数，提供 `--sample-strategy balanced`（默认）与 `standard`；
-   - 增加对应单元测试并在本地与 V100 运行通过。
-2. **在 V100 上异步启动 `rl_pilot_v5` 重训**：
-   - 4 卡 DDP，30 steps，采样 `temp=0.85, top_p=0.92, top_k=50`，采用 balanced 采样；
-   - 完训后执行多检查点 2,867 全量验证集评测与门禁判定。
+1. **评估 RL Pilot 是否继续迭代或转入数据扩增**：
+   - 当前 RL Pilot 已验证了算法与工程链路（分层采样、GRPO Advantage、K3 散度、权重合并均完全合规），但受制于 1,236 条退化样本的池子上限，强化提升空间被压缩在极小区间内；
+   - 考虑在扩大数据池至 Full 规模（如 30k+ 退化语音）后再重新审视 RL 训练，或评估是否微调 reward shaping（如对 noise/distortion 给予更大边际惩罚权重）。
+2. **保持基线合规**：所有报告与评测继续以 DPO Champion 作为当前正式最优成果。
 
 ## 验收
 

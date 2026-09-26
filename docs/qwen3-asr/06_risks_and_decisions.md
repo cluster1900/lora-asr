@@ -111,6 +111,26 @@
    - **严格遵从红线约束：当前状态维持 BLOCKED，严禁启动 Full RL，严禁发布当前权重**；
    - 后续演进必须首先修复数据采样（打乱/分层平衡）、补齐训练数据池规模，并完善产物链条。
 
+### RL Pilot v5 落地验证与阶段决策（2026-09-26）
+
+在实现分层平衡采样（`--sample-strategy balanced`）、恢复 KL 6位小数精度、自动闭环导出 `merged_base` 后，于 4 × V100 SXM2-32GB 上完成了 `rl_pilot_v5`（30 steps）及 Step 30 的 2,867 全量验证集评测，获得明确结论：
+
+1. **分层平衡采样彻底解决分布悬崖问题**：
+   - Step 30 Held-out Reward 提升至 `0.9385`（+0.0006），Held-out Error Rate 降至 `0.0556`（-0.0006），打破了 v4 在 Step 30 的过拟合回退，成为全流程最优步数。
+2. **Clean 场景与特定退化场景显著优化**：
+   - 英文 Clean WER 达到 `1.9193%`（相对 DPO 下降 -0.0099pp，创项目新高）；
+   - 中文 Clean CER 达到 `1.4073%`（相对 DPO 下降 -0.0070pp）；
+   - Clean Macro 达到 `1.6633%`（相对 DPO 下降 -0.0084pp）；
+   - 退化场景 `en|recording` 取得显式改善（31.5710% → 31.2689%，-0.3021pp）；
+   - 2,867 条独立验证全集保持 100% 有效输出率，0 空输出，0 推理失败。
+3. **门禁拦截事实（Gate Status: FAILED）**：
+   - **`robust_retention` 拦截**：门禁要求 Robust Macro 恶化严格 $\le 0.0$。实测全集 2,867 条样本中，RL v5 仅净增加 2 处退化编辑（4 处 noise/distortion 微增，2 处 recording 减少），使 Robust Macro 从 `10.3583%` 变为 `10.3733%`（+0.0150pp，幅度较 v4 的 +0.0262pp 明显收窄），但仍触发零容差硬拦截；
+   - **`held_out_reward` 拦截**：实测提升 `+0.0006`，未达到合同标称的 `+0.0020`。
+4. **决策与基准认定**：
+   - **严格遵从红线约束**：未通过门禁前，**坚决不推进 Full RL，坚决不发布 RL 模型**，阶段状态维持 **BLOCKED**；
+   - **当前正式最优发布基座继续严格锁定为**：`/data/mega-asr/runs/dpo_pilot_v2/merged_base`（DPO Champion）。
+   - 确认小数据规模（1,236 条退化样本）下强化学习的边际收益受限，后续若需突破，需结合 Full 规模退化数据与精细化的 reward shaping。
+
 ## 未验证假设
 
 FP16 在 eager attention 下的吞吐、显存余量、4 卡 DDP 效率、SFT/DPO/RL 学习率、DPO pair 质量和
