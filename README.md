@@ -38,6 +38,7 @@ tests/        不依赖模型下载的合同测试
 ## 本地验证
 
 ```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install -r requirements.txt  # GPU 服务器改用对应 CUDA 版 torch，并额外安装 qwen-asr
 python3 -m unittest discover -s tests -v
 python3 -m py_compile evaluation/eval_wer.py scripts/download_sources.py scripts/stage_parquet_sources.py scripts/build_robust_manifests.py
 ```
