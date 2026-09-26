@@ -444,16 +444,27 @@
     - **严格遵从质量门禁契约**：未通过门禁前，**坚决不推进 Full RL，坚决不发布 RL 模型**；
     - **正式发布与下游后训练基线继续严格锁定为**：`/data/mega-asr/runs/dpo_pilot_v2/merged_base`（DPO Champion，Macro 4.2297%，Robust 10.3583%，Clean 1.6717%）。
 
-## 下一步（方案 A：数据扩增攻坚与正式全量后训练）
+- **Phase E1.1 数据扩充实施与重分区冻结验证（2026-09-26 已完成）**：
+  - **Voices-in-the-Wild 56 分片物化全量完成**：覆盖 7 大核心退化场景（`distortion`, `dropout`, `echo`, `far_field`, `noise`, `obstructed`, `recording`）各 8 个分片，共转码 48,580 条标准 16kHz PCM WAV 样本入库 `staged_voices_in_the_wild.jsonl`，0 异常被拒。
+  - **核心评测集 100% 冻结保护（`--freeze-validation`）**：
+    - 官方独立评测基准 `validation.jsonl`（2,867 条）SHA-256 依然严格保持为 `8950f29f573fc541b54eb0a5378e811e8b974219d7a873eeb02447a105fdf901`，与历史记录及备份 `validation.jsonl.bak_frozen` 位对齐一致。
+    - `bench_test.jsonl`（4,999 条）亦完成同等冻结保护。
+  - **RL 训练集突破规模瓶颈**：
+    - [pilot_rl.jsonl](file:///data/mega-asr/manifests/pilot_rl.jsonl) **首次达到 3,000 条完整配额**（包含 2,000 degraded + 500 en clean + 500 zh clean）；
+    - 7 大退化场景分布极其均匀（`recording`: 266, `far_field`: 274, `distortion`: 347, `noise`: 251, `obstructed`: 284, `echo`: 300, `dropout`: 278）；
+    - `rl_train_pool.jsonl` 扩充至 5,927 条（4,165 degraded + 1,762 clean）；
+    - 数据门禁 `DATASET_COMPLETE.json`（状态 `NON_STRICT_SUBSET`）已重新生成，无跨集泄漏。
+- **第六轮 RL Pilot（`rl_pilot_v6`）训练启动（2026-09-26 正在执行）**：
+  - 基于完整 3,000 条满额平衡配额数据集 `pilot_rl.jsonl` 启动 4 卡 DDP RL Pilot v6 训练（输出目录 `/data/mega-asr/runs/rl_pilot_v6`）；
+  - 维持 `temperature=0.85`, `top_p=0.92`, `top_k=50`, `kl_beta=0.04`, `--sample-strategy balanced`；
+  - 核心目标：在丰富多样的退化对比下，彻底解决 v4/v5 的小样本信息熵受限问题，消除退化场景微幅回退，冲刺 `held_out_reward >= +0.0020` 与全部 8 项门禁指标。
 
-1. **执行 Phase E1.1 数据扩增（Voices-in-the-Wild 规模扩展）**：
-   - 针对当前 `rl_train_pool` 仅 1,236 条退化语音导致的信息熵瓶颈，使用 `scripts/stage_parquet_sources.py --source voices_in_the_wild --max-shards 56` 扩展物化 56 个 Parquet 分片（覆盖 7 大退化场景，每场景 8 分片），将退化语音物化规模提升至 **~70,000–90,000 条**；
-   - 在 `scripts/build_robust_manifests.py` 中引入 `--freeze-validation` 约束，确保核心评估基准 `validation.jsonl`（2,867 条，SHA-256 `8950f29f...`）**保持 100% 绝对冻结与历史可比性**；
-   - 经 $C_7^2=21$ 组全配对互斥校验零泄漏后，将新扩充的退化样本注入 `rl_train_pool`（扩充至 ~10,000–16,000 条），并使 `pilot_rl.jsonl` 达到完整的 3,000 条配额（2,000 degraded + 500 en clean + 500 zh clean）；
-   - 更新数据门禁产物 `DATASET_COMPLETE.json` 与各 role 完成标记。
-2. **在扩充后的数据池上重新启动 RL Pilot 或直接推进 Full RL**：
-   - 基于更丰富、更具方差的退化对比池，重新验证 GRPO 优势排序与策略优化，突破 +0.0020 的泛化 Reward 门槛并抹平 Robust Macro 回退；
-3. **保持基线合规**：所有报告与评测继续以 DPO Champion（`/data/mega-asr/runs/dpo_pilot_v2/merged_base`）作为当前正式最优成果。
+## 下一步（方案 A：冲刺 RL Pilot 门禁与开启 Full Scale 后训练）
+
+1. **监控 `rl_pilot_v6` 训练完成**：30 steps 预计耗时 ~15 分钟，生成 checkpoint 与自动合并模型；
+2. **执行 2,867 条独立验证全集评测与 Gate 验收**：4 卡并行打分，评估 14 个退化场景指标与 held-out reward；
+3. **门禁通过后正式结项 RL Pilot**：将产物归档并正式切换至全量数据启动规模化后训练（Full SFT → Full DPO → Full RL）；
+4. **保持基线合规**：所有报告与评测继续以 DPO Champion（`/data/mega-asr/runs/dpo_pilot_v2/merged_base`）作为当前正式最优成果，未过门禁不声称超过。
 
 ## 验收
 
