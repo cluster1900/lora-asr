@@ -35,6 +35,7 @@
 | RL GRPO 候选同质化（组方差归零） | $G=4$、采样 temp=0.85/top_p=0.92 审计 | 调整采样温度或早停（30 步内），避免二次复读塌缩 |
 | RL reward 投机或 KL 发散 | reward 组件单测、KL/rollout gate、reference freeze | 停止 RL，回退到 DPO adapter |
 | 4 卡 DDP 梯度/数据 shard 不一致 | global batch、sample_id 去重、world size 记录 | 停止当前 run，保留最后有效 checkpoint |
+| DDP 在线验证耗时方差引发 NCCL 看门狗超时 | Rank 分片评估 + dist.all_reduce 聚合、NCCL timeout 显式设置为 2 小时 | 修复进程间屏障等待，启用样本 rank-sharding |
 | 指标不可比 | 同 manifest、同 evaluator、分语言指标 | 废弃该次比较 |
 | 运行时加载非官方 wrapper | import 和 model revision 记录 | 停止并移除不合规依赖 |
 

@@ -660,27 +660,32 @@ def evaluate_rl_validation(
     reward_config: Optional[Dict[str, Any]] = None,
     eval_seed: int = 42,
 ) -> Tuple[float, float]:
-    """Evaluate mean reward on held-out validation set with deterministic seed."""
+    """Evaluate mean reward on held-out validation set with deterministic seed sharded across ranks."""
     if not HAVE_TORCH or len(val_dataset) == 0:
         return 0.0, 0.0
 
     eval_model = thinker_model.module if hasattr(thinker_model, "module") else thinker_model
     eval_model.eval()
 
+    is_dist = HAVE_TORCH and dist.is_available() and dist.is_initialized()
+    world_size = dist.get_world_size() if is_dist else 1
+    rank = dist.get_rank() if is_dist else 0
+
+    all_indices = list(range(min(len(val_dataset), max_eval_samples or len(val_dataset))))
+    indices = [idx for idx in all_indices if idx % world_size == rank]
+
     total_reward = 0.0
     total_rollouts = 0
     total_error_rate = 0.0
-
-    indices = list(range(min(len(val_dataset), max_eval_samples or len(val_dataset))))
 
     # Save RNG state to preserve training sequence determinism
     cpu_rng_state = torch.get_rng_state()
     cuda_rng_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
 
     try:
-        torch.manual_seed(eval_seed)
+        torch.manual_seed(eval_seed + rank)
         if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(eval_seed)
+            torch.cuda.manual_seed_all(eval_seed + rank)
 
         with torch.no_grad():
             for idx in indices:
@@ -736,8 +741,19 @@ def evaluate_rl_validation(
         if cuda_rng_state is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(cuda_rng_state)
 
-    mean_reward = total_reward / max(1, total_rollouts)
-    mean_err = total_error_rate / max(1, total_rollouts)
+    if is_dist:
+        stat_tensor = torch.tensor(
+            [total_reward, total_error_rate, float(total_rollouts)],
+            device=device,
+            dtype=torch.float64,
+        )
+        dist.all_reduce(stat_tensor, op=dist.ReduceOp.SUM)
+        global_reward, global_error, global_rollouts = stat_tensor.tolist()
+    else:
+        global_reward, global_error, global_rollouts = total_reward, total_error_rate, float(total_rollouts)
+
+    mean_reward = global_reward / max(1, global_rollouts)
+    mean_err = global_error / max(1, global_rollouts)
     return mean_reward, mean_err
 
 
@@ -769,7 +785,7 @@ def train_rl(
     is_distributed = False
 
     if not single_gpu and "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl", timeout=datetime.timedelta(hours=2))
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         local_rank = int(os.environ.get("LOCAL_RANK", 0))

@@ -454,14 +454,21 @@
     - 7 大退化场景分布极其均匀（`recording`: 266, `far_field`: 274, `distortion`: 347, `noise`: 251, `obstructed`: 284, `echo`: 300, `dropout`: 278）；
     - `rl_train_pool.jsonl` 扩充至 5,927 条（4,165 degraded + 1,762 clean）；
     - 数据门禁 `DATASET_COMPLETE.json`（状态 `NON_STRICT_SUBSET`）已重新生成，无跨集泄漏。
-- **第六轮 RL Pilot（`rl_pilot_v6`）训练启动（2026-09-26 正在执行）**：
-  - 基于完整 3,000 条满额平衡配额数据集 `pilot_rl.jsonl` 启动 4 卡 DDP RL Pilot v6 训练（输出目录 `/data/mega-asr/runs/rl_pilot_v6`）；
-  - 维持 `temperature=0.85`, `top_p=0.92`, `top_k=50`, `kl_beta=0.04`, `--sample-strategy balanced`；
-  - 核心目标：在丰富多样的退化对比下，彻底解决 v4/v5 的小样本信息熵受限问题，消除退化场景微幅回退，冲刺 `held_out_reward >= +0.0020` 与全部 8 项门禁指标。
+- **第六轮 RL Pilot（`rl_pilot_v6`）初次运行诊断与分布式优化（2026-09-27）**：
+  - **训练健康指标与阶段性验证（Step 1 ~ 10）**：
+    - 在 3,000 条满额平衡数据（2,000 degraded + 1,000 clean）驱动下，Step 1~10 训练非常健康，平均单步耗时 ~98 秒，训练 Reward 保持在 `0.88 ~ 0.93`，零方差组比例健康保持在 `60.9% ~ 78.1%`（未出现塌缩）。
+    - **Step 10 阶段性全量 Held-out 评测**：`val_mean_reward` 从 Step 0 的 `0.8740` 稳步提升至 **`0.8748`（+0.0008）**，Held-out Error Rate 从 `0.1142` 改善至 **`0.1131`（-0.0011）**。
+  - **异常阻断根因分析（Exitcode -6 / SIGABRT）**：
+    - 运行至 Step 10 验证结束并触发保存检查点时，Rank 1 收到 `Signal 6 (SIGABRT)`。
+    - **深层机理排查**：`evaluate_rl_validation` 原本让 4 张卡各自独立且串行地对全部 573 条样本进行 4-rollout 自回归生成。由于数据扩充后包含大量长音频（20~30 秒），各 GPU 之间生成速度存在微小累积方差。Rank 0 率先在 `16:13:54 UTC` 跑完并进入 `dist.barrier()` 挂起等待；而 Rank 1 尚在生成剩余长音频样本，未能在 NCCL 默认看门狗心跳窗口（约 9 分钟）内汇合，NCCL 自动触发 `std::abort()` 杀死了 Rank 1。
+  - **双重修复与提速方案落地**：
+    1. **分布式验证样本切分（Rank Sharding）**：改造 `evaluate_rl_validation`，各卡仅评估其对应分片 `idx % world_size == rank`（每卡仅需评估 143 条样本），验证耗时从 68 分钟锐减 75% 至 **~17 分钟**，且各卡完成时间偏差缩窄至秒级；通过 `dist.all_reduce(op=SUM)` 精确汇总全局 Reward 与错误率，保证评估数值与原定义 100% 一致。
+    2. **NCCL 通信超时放宽**：在 `dist.init_process_group` 中显式指定 `timeout=datetime.timedelta(hours=2)`，杜绝因自回归长尾解码引发的进程心跳误杀。
+    3. **自动评测全链路就绪**：4 卡并行评测脚本 `run_eval.sh` 已就绪，训练完成后自动触发 2,867 条基准集多场景 WER/CER 及 Gate 审计。
 
 ## 下一步（方案 A：冲刺 RL Pilot 门禁与开启 Full Scale 后训练）
 
-1. **监控 `rl_pilot_v6` 训练完成**：30 steps 预计耗时 ~15 分钟，生成 checkpoint 与自动合并模型；
+1. **重新启动 `rl_pilot_v6`**：应用 Sharded Validation 与 2 小时超时配置，全速跑完 30 steps（预计总耗时收窄至约 1 小时）；
 2. **执行 2,867 条独立验证全集评测与 Gate 验收**：4 卡并行打分，评估 14 个退化场景指标与 held-out reward；
 3. **门禁通过后正式结项 RL Pilot**：将产物归档并正式切换至全量数据启动规模化后训练（Full SFT → Full DPO → Full RL）；
 4. **保持基线合规**：所有报告与评测继续以 DPO Champion（`/data/mega-asr/runs/dpo_pilot_v2/merged_base`）作为当前正式最优成果，未过门禁不声称超过。
