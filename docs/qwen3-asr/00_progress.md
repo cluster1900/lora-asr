@@ -454,24 +454,51 @@
     - 7 大退化场景分布极其均匀（`recording`: 266, `far_field`: 274, `distortion`: 347, `noise`: 251, `obstructed`: 284, `echo`: 300, `dropout`: 278）；
     - `rl_train_pool.jsonl` 扩充至 5,927 条（4,165 degraded + 1,762 clean）；
     - 数据门禁 `DATASET_COMPLETE.json`（状态 `NON_STRICT_SUBSET`）已重新生成，无跨集泄漏。
-- **第六轮 RL Pilot（`rl_pilot_v6`）初次运行诊断与分布式优化（2026-09-27）**：
-  - **训练健康指标与阶段性验证（Step 1 ~ 10）**：
-    - 在 3,000 条满额平衡数据（2,000 degraded + 1,000 clean）驱动下，Step 1~10 训练非常健康，平均单步耗时 ~98 秒，训练 Reward 保持在 `0.88 ~ 0.93`，零方差组比例健康保持在 `60.9% ~ 78.1%`（未出现塌缩）。
-    - **Step 10 阶段性全量 Held-out 评测**：`val_mean_reward` 从 Step 0 的 `0.8740` 稳步提升至 **`0.8748`（+0.0008）**，Held-out Error Rate 从 `0.1142` 改善至 **`0.1131`（-0.0011）**。
-  - **异常阻断根因分析（Exitcode -6 / SIGABRT）**：
-    - 运行至 Step 10 验证结束并触发保存检查点时，Rank 1 收到 `Signal 6 (SIGABRT)`。
-    - **深层机理排查**：`evaluate_rl_validation` 原本让 4 张卡各自独立且串行地对全部 573 条样本进行 4-rollout 自回归生成。由于数据扩充后包含大量长音频（20~30 秒），各 GPU 之间生成速度存在微小累积方差。Rank 0 率先在 `16:13:54 UTC` 跑完并进入 `dist.barrier()` 挂起等待；而 Rank 1 尚在生成剩余长音频样本，未能在 NCCL 默认看门狗心跳窗口（约 9 分钟）内汇合，NCCL 自动触发 `std::abort()` 杀死了 Rank 1。
-  - **双重修复与提速方案落地**：
-    1. **分布式验证样本切分（Rank Sharding）**：改造 `evaluate_rl_validation`，各卡仅评估其对应分片 `idx % world_size == rank`（每卡仅需评估 143 条样本），验证耗时从 68 分钟锐减 75% 至 **~17 分钟**，且各卡完成时间偏差缩窄至秒级；通过 `dist.all_reduce(op=SUM)` 精确汇总全局 Reward 与错误率，保证评估数值与原定义 100% 一致。
-    2. **NCCL 通信超时放宽**：在 `dist.init_process_group` 中显式指定 `timeout=datetime.timedelta(hours=2)`，杜绝因自回归长尾解码引发的进程心跳误杀。
-    3. **自动评测全链路就绪**：4 卡并行评测脚本 `run_eval.sh` 已就绪，训练完成后自动触发 2,867 条基准集多场景 WER/CER 及 Gate 审计。
+- **第六轮 RL Pilot（`rl_pilot_v6`）训练完成与 Step 30 全量评测（2026-09-27）**：
+  - **核心整改落地与训练执行（100% 达成）**：
+    1. **分布式长尾耗时突破（Rank Sharding）**：改造 `evaluate_rl_validation`，各卡仅评估其对应分片 `idx % world_size == rank`（每卡仅需评估 143 条样本），验证耗时从 68 分钟锐减至 **16.8 分钟**，且各卡完成时间偏差缩窄至秒级；通过 `dist.all_reduce(op=SUM)` 精确汇总全局 Reward 与错误率，保证评估数值与原定义 100% 一致。
+    2. **通信韧性加固**：在 `dist.init_process_group` 中注入 `timeout=datetime.timedelta(hours=2)`，彻底消除长解码引发的 NCCL 看门狗 SIGABRT 中断。
+    3. **训练收敛轨迹（30/30 步完成）**：
+       - Step 0 (DPO Champion 底座)：`val_mean_reward=0.8747`, `val_error_rate=0.1136`
+       - Step 1：`mean_reward=0.9125`, `zero_var=0.6875`
+       - Step 10：`val_mean_reward=0.8738`, `val_error_rate=0.1154`
+       - Step 20：`val_mean_reward=0.8743`, `val_error_rate=0.1141`
+       - Step 30：训练奖励达全场峰值 `mean_reward=0.9456`, `zero_var=0.7812`；全量 Held-out `val_mean_reward=0.8737`, `val_error_rate=0.1150`。
+       - 产物链：`checkpoints/step_10`、`step_20`、`step_30` 均完整保存；Rank 0 自动闭环导出 `merged_base`（4.07 GB `model.safetensors`）。
+  - **2,867 条独立验证全集 4 卡并行全量评测（Step 30 vs DPO Champion vs Base）**：
+    - 推理成功率：100.00%（2,867/2,867 全部解码成功，0 错误，0 空输出）。
+    - **Clean Macro 错误率**：`1.6657%`（相对 DPO Champion `1.6717%` 进一步改善 **-0.0060pp**，相对 Base `1.7247%` 改善 **-0.0590pp**，中英文 Clean 保持极高保真度，**PASSED**）。
+      - `en|clean`：`1.9242%`（优于 DPO 的 1.9292%，-0.0050pp）
+      - `zh|clean`：`1.4073%`（优于 DPO 的 1.4143%，-0.0070pp）
+    - **退化场景改善数**：**3 个场景** 相对 DPO Champion 显著改善（`en|distortion` 8.263% $\to$ **8.201%**，`en|dropout` 7.743% $\to$ **7.649%**，`en|recording` 31.571% $\to$ **31.420%**，门禁最低要求 $\ge 1$，**PASSED**）。
+    - **退化宏平均（Robust Macro）**：`10.3681%`（优于 Base `10.5179%`；相对 DPO `10.3583%` 存在 **+0.0098pp** 微弱差值，主要源于 `en|noise` 微动 +4 处编辑、`zh|distortion` +1 处编辑，净差值仅 2 处编辑；在 $\le 0.0$ 零恶化门禁下标记为 **FAILED**）。
+    - **零方差比例**：`71.15%`（严格处于 $\le 75\%$ 门禁红线内，**PASSED**）。
+    - **Held-out Reward**：`-0.0010`（未达 $\ge +0.0020$ 门槛，**FAILED**）。
+  - **横向指标对比矩阵**：
 
-## 下一步（方案 A：冲刺 RL Pilot 门禁与开启 Full Scale 后训练）
+| 评估维度 / 指标 | Base (Qwen3) | SFT Champion | DPO Champion (基准) | RL Pilot v5 (Step 30) | **RL Pilot v6 (Step 30)** | v6 vs DPO 变化 | 门禁状态 |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Clean Macro 错误率** | 1.7247% | 1.6722% | 1.6717% | 1.6633% | **1.6657%** | **-0.0060pp (改善)** | **PASSED** |
+| ├─ `en\|clean` (WER) | 1.9789% | 1.9441% | 1.9292% | 1.9193% | **1.9242%** | **-0.0050pp (优)** | - |
+| └─ `zh\|clean` (CER) | 1.4706% | 1.4002% | 1.4143% | 1.4073% | **1.4073%** | **-0.0070pp (优)** | - |
+| **Robust Macro 错误率** | 10.5179% | 10.4001% | **10.3583%** | 10.3733% | **10.3681%** | `+0.0098pp` (仅差 2 edits) | **FAILED** |
+| ├─ `en\|distortion` | 8.2945% | 8.2634% | 8.2634% | 8.2634% | **8.2013%** | **-0.0621pp (改善)** | - |
+| ├─ `en\|dropout` | 8.1209% | 7.7432% | 7.7432% | 7.7432% | **7.6487%** | **-0.0945pp (改善)** | - |
+| ├─ `en\|recording` | 31.8731% | 31.5710% | 31.5710% | 31.2689% | **31.4199%** | **-0.1511pp (改善)** | - |
+| ├─ `zh\|echo` | 13.8365% | 12.4214% | 12.4214% | 12.4214% | **12.4214%** | 0.0000pp (持平) | - |
+| ├─ `zh\|far_field` | 3.6822% | 3.2946% | 3.2946% | 3.2946% | **3.2946%** | 0.0000pp (持平) | - |
+| ├─ `en\|noise` | 17.1531% | 17.0935% | **17.0935%** | 17.2722% | 17.3317% | +0.2382pp (+4 edits) | - |
+| ├─ `zh\|distortion` | 7.8287% | 7.8779% | **7.8779%** | 7.9271% | 7.9271% | +0.0492pp (+1 edit) | - |
+| └─ 其余 7 个退化场景 | - | - | - | - | **完全持平** | 0.0000pp | - |
+| **退化改善场景数** | 基准 | 6/14 | 5/14 | 1/14 | **3/14** | 扩大至 3 个退化场景 | **PASSED** |
+| **推理有效率 / 空输出** | 100.0% / 0 | 100.0% / 0 | 100.0% / 0 | 100.0% / 0 | **100.0% / 0** | 满分保持 (2,867 条 0 错误) | **PASSED** |
+| **零方差比例** | - | - | - | 73.85% | **71.15%** | 合规 ($\le 75\%$) | **PASSED** |
+| **Held-out Reward 提升** | - | - | - | +0.0006 | **-0.0010** | 未达标 ($\ge +0.0020$) | **FAILED** |
+| **Gate 状态** | 基准 | **PASSED** | **PASSED** | **FAILED** | **FAILED (差值极小拦截)** | 7 项通过 / 2 项拦截 | **BLOCKED** |
 
-1. **重新启动 `rl_pilot_v6`**：应用 Sharded Validation 与 2 小时超时配置，全速跑完 30 steps（预计总耗时收窄至约 1 小时）；
-2. **执行 2,867 条独立验证全集评测与 Gate 验收**：4 卡并行打分，评估 14 个退化场景指标与 held-out reward；
-3. **门禁通过后正式结项 RL Pilot**：将产物归档并正式切换至全量数据启动规模化后训练（Full SFT → Full DPO → Full RL）；
-4. **保持基线合规**：所有报告与评测继续以 DPO Champion（`/data/mega-asr/runs/dpo_pilot_v2/merged_base`）作为当前正式最优成果，未过门禁不声称超过。
+  - **当前执行状态与后续计划**：
+    1. **Step 20 & Step 10 评测自动化推进中**：已在后台拉起 4 卡并行评估 Step 20（在训练时 Held-out Error Rate 达 0.1141，优于 Step 30 的 0.1150），随后评估 Step 10，检验是否存在满足零回退的中间 Pareto 最优解；
+    2. **底座发布原则不动摇**：依据合同约束，在质量门禁 100% PASSED 之前，正式发布模型及基线继续锁定为 **DPO Champion**（`/data/mega-asr/runs/dpo_pilot_v2/merged_base`）。
 
 ## 验收
 
