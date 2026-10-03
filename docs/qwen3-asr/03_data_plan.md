@@ -112,9 +112,9 @@ error-rate 审计字段。
 
 ## RL 输入
 
-RL 只从 `rl_train_pool` 与 `rl_val_pool` 取音频和 reference text，以 DPO 合并模型为起点，采用 GRPO 算法（候选组大小 $G=4$，采样 `temperature=0.7`, `top_p=0.9`）生成 rollouts。每条 rollout
-记录 policy checkpoint、`group_id`、`group_size=4`、`rollout_rank`、rollout seed、prediction、reference error rate、
-reward components、final reward、KL 和 error；advantage 计算前必须完成同组 all-gather。reward 固定为：
+RL 只从 `rl_train_pool` 与 `rl_val_pool` 取音频和 reference text，以 DPO 合并模型为起点。现行 pilot 的采样是 `temperature=1.0`、`top_p=0.95`、`top_k=50`。第一轮是 1 条贪心解码加 3 条采样；未高出贪心 `0.02` 时再抽 8 条，所以一组可以是 4 行或 12 行。优势以贪心解码为锚，未超过 `0.02` 的候选优势为 0。v10/v11 的优化器只使用退化语音，manifest 中的 clean 行保留作审计。每条 rollout
+记录 policy checkpoint、`group_id`、`group_size`、`rollout_rank`、`decode_mode`、rollout seed、prediction、reference error rate、
+reward components、final reward、KL 和 error；advantage 计算前必须完成同组聚合。reward 固定为：
 
 - `asr reward = 1 - min(WER/CER, 1.0)`；
 - empty `-0.25`；repeat `-0.25`；too-long `-0.15`；hallucination `-0.25`；

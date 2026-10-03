@@ -24,7 +24,7 @@ V100 服务器 -> 固定数据 manifest -> SFT -> DPO -> RL -> release adapter
 configs/      数据与训练的唯一配置
 docs/         架构、开发、数据、训练、测试、进度和风险
 notebooks/    预留 Notebook 目录，当前为空，详见 notebooks/README.md
-scripts/      V100 数据 builder 与数据集物化脚本，详见 scripts/README.md
+scripts/      V100 数据 builder、数据集物化，以及 RL pilot 启动与收尾脚本，详见 scripts/README.md
 train/        V100 模型训练 runner（SFT/DPO/RL），详见 train/README.md
 inference/    预留 V100 推理 runner，详见 inference/README.md
 evaluation/   WER/CER 与聚合评测，详见 evaluation/README.md

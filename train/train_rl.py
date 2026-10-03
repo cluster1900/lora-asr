@@ -7,10 +7,10 @@ Supports:
 - Exact 199 Linear LoRA targets (3 Projection + 196 Decoder attention/mlp)
 - FP16, eager attention, gradient checkpointing with input require grads
 - Single-GPU and multi-GPU (DDP via torchrun)
-- Group sampling with G=4 candidates per audio prompt (temperature=0.7, top_p=0.9)
+- Group sampling with G=4 candidates per audio prompt (temperature=0.85, top_p=0.92, top_k=50)
 - Sequence reward calculation per reward_config.yaml (ASR WER/CER + empty/repeat/too_long/hallucination penalties)
 - Group advantage normalization with zero-variance protection (std <= epsilon -> advantage = 0)
-- Policy gradient with token-level KL divergence regularization against frozen reference model
+- Sequence-level policy gradient (sum over response tokens) with Schulman K3 KL against the frozen reference
 - Checkpointing (10+2 step contract) and full state resumption (optimizer, scheduler, RNG, training_state)
 - Weight merging and export via merge_and_unload()
 - Execution contract compliance: environment.json, resolved_config.yaml, manifest_sha256.json, pipeline_state.json, rollouts.jsonl, loss_log.jsonl
@@ -449,6 +449,42 @@ def compute_group_advantages(
     return advs, False
 
 
+def compute_anchored_advantages(
+    rewards: Sequence[float],
+    anchor_index: int = 0,
+    min_improvement: float = 0.02,
+) -> Tuple[List[float], str]:
+    """Advantage against the greedy hypothesis at ``anchor_index``.
+
+    A sampled candidate gets a positive advantage only when its reward beats
+    the greedy decode by at least ``min_improvement``. The best such candidate
+    gets 1, and a smaller real improvement gets its gap divided by that best
+    gap. The greedy decode and any candidate that does not beat it get 0, so
+    a group of merely less-bad samples does not move the policy.
+
+    Returns:
+        (advantages, status) where status is ``update``, ``no_improvement``,
+        or ``identical``.
+    """
+    group_size = len(rewards)
+    if group_size == 0 or not (0 <= anchor_index < group_size):
+        return [0.0] * group_size, "identical"
+
+    anchor_reward = float(rewards[anchor_index])
+    gaps = [
+        0.0 if index == anchor_index else max(0.0, float(reward) - anchor_reward)
+        for index, reward in enumerate(rewards)
+    ]
+    best_gap = max(gaps) if gaps else 0.0
+    if best_gap < min_improvement:
+        reward_span = max(rewards) - min(rewards) if rewards else 0.0
+        status = "identical" if reward_span <= 1e-6 else "no_improvement"
+        return [0.0] * group_size, status
+
+    advantages = [gap / best_gap for gap in gaps]
+    return advantages, "update"
+
+
 def audit_rollouts(
     rollouts_path: Path,
     expected_samples: Optional[int] = None,
@@ -565,6 +601,77 @@ def compute_token_logps(
     return per_token, mask
 
 
+def compute_grpo_group_loss(
+    policy_token_logps: torch.Tensor,
+    ref_token_logps: torch.Tensor,
+    token_mask: torch.Tensor,
+    advantages: Sequence[float],
+    beta: float,
+    zero_variance: bool,
+    reduction: str = "sequence_sum",
+) -> Dict[str, torch.Tensor]:
+    """GRPO policy loss plus Schulman K3 KL for one candidate group.
+
+    The reward is a sequence score. ``sequence_sum`` uses
+    ``-A_i * sum_t log pi(y_t) + beta * sum_t K3_t``. ``token_mean`` divides
+    that sum by the response length, which shrinks the gradient by about the
+    number of response tokens.
+
+    A zero-variance group returns a graph-connected zero so DDP still
+    synchronizes. Logged policy/KL contributions are 0 in that case. The
+    returned ``seq_kl_mean`` is always the per-token K3 mean, including
+    zero-variance groups, and is detached for rollout logging.
+    """
+    if reduction not in ("sequence_sum", "token_mean"):
+        raise ValueError(f"Unsupported GRPO loss reduction: {reduction}")
+
+    log_ratio = (ref_token_logps - policy_token_logps) * token_mask
+    log_ratio_clamped = log_ratio.clamp(min=-10.0, max=10.0)
+    token_kl = (torch.exp(log_ratio_clamped) - log_ratio_clamped - 1.0) * token_mask
+    token_count = token_mask.sum(dim=-1).clamp(min=1)
+    seq_kl_mean = token_kl.sum(dim=-1) / token_count
+
+    adv_tensor = torch.tensor(
+        list(advantages),
+        device=policy_token_logps.device,
+        dtype=policy_token_logps.dtype,
+    )
+    token_loss = (
+        -(adv_tensor.unsqueeze(-1) * policy_token_logps) + beta * token_kl
+    ) * token_mask
+    policy_token = (-(adv_tensor.unsqueeze(-1) * policy_token_logps) * token_mask)
+    kl_token = (beta * token_kl) * token_mask
+
+    if reduction == "token_mean":
+        policy_seq = policy_token.sum(dim=-1) / token_count
+        kl_seq = kl_token.sum(dim=-1) / token_count
+        seq_losses = token_loss.sum(dim=-1) / token_count
+    else:
+        policy_seq = policy_token.sum(dim=-1)
+        kl_seq = kl_token.sum(dim=-1)
+        seq_losses = token_loss.sum(dim=-1)
+
+    if zero_variance:
+        group_loss = policy_token_logps.sum() * 0.0
+        zero = torch.zeros((), device=policy_token_logps.device, dtype=policy_token_logps.dtype)
+        policy_log: torch.Tensor = zero
+        kl_log: torch.Tensor = zero
+        raw_kl_log: torch.Tensor = zero
+    else:
+        group_loss = seq_losses.mean()
+        policy_log = policy_seq.mean()
+        kl_log = kl_seq.mean()
+        raw_kl_log = seq_kl_mean.mean()
+
+    return {
+        "group_loss": group_loss,
+        "policy_loss": policy_log,
+        "kl_loss": kl_log,
+        "raw_kl": raw_kl_log,
+        "seq_kl_mean": seq_kl_mean.detach(),
+    }
+
+
 def setup_lora_rl(thinker: Any, config: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
     """Inject exact 199 canonical Linear LoRA targets into thinker model."""
     target_modules: List[str] = []
@@ -659,10 +766,15 @@ def evaluate_rl_validation(
     max_eval_samples: Optional[int] = None,
     reward_config: Optional[Dict[str, Any]] = None,
     eval_seed: int = 42,
-) -> Tuple[float, float]:
-    """Evaluate mean reward on held-out validation set with deterministic seed sharded across ranks."""
+) -> Tuple[float, float, int, int]:
+    """Evaluate mean reward on the full held-out set, sharded across ranks.
+
+    Returns mean reward, mean error, scored rollout count, and the number of
+    manifest rows assigned across ranks. Assigned rows cover the evaluated
+    prefix exactly once.
+    """
     if not HAVE_TORCH or len(val_dataset) == 0:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0, 0
 
     eval_model = thinker_model.module if hasattr(thinker_model, "module") else thinker_model
     eval_model.eval()
@@ -741,20 +853,24 @@ def evaluate_rl_validation(
         if cuda_rng_state is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(cuda_rng_state)
 
+    assigned_rows = float(len(indices))
     if is_dist:
         stat_tensor = torch.tensor(
-            [total_reward, total_error_rate, float(total_rollouts)],
+            [total_reward, total_error_rate, float(total_rollouts), assigned_rows],
             device=device,
             dtype=torch.float64,
         )
         dist.all_reduce(stat_tensor, op=dist.ReduceOp.SUM)
-        global_reward, global_error, global_rollouts = stat_tensor.tolist()
+        global_reward, global_error, global_rollouts, global_assigned = stat_tensor.tolist()
     else:
-        global_reward, global_error, global_rollouts = total_reward, total_error_rate, float(total_rollouts)
+        global_reward = total_reward
+        global_error = total_error_rate
+        global_rollouts = float(total_rollouts)
+        global_assigned = assigned_rows
 
-    mean_reward = global_reward / max(1, global_rollouts)
-    mean_err = global_error / max(1, global_rollouts)
-    return mean_reward, mean_err
+    mean_reward = global_reward / max(1.0, global_rollouts)
+    mean_err = global_error / max(1.0, global_rollouts)
+    return mean_reward, mean_err, int(global_rollouts), int(global_assigned)
 
 
 def train_rl(
@@ -853,6 +969,10 @@ def train_rl(
     )
     adv_cfg = grpo_cfg.get("advantage", {})
     epsilon = float(adv_cfg.get("epsilon", 1.0e-6))
+    anchor_mode = str(adv_cfg.get("anchor", "none")).strip().lower()
+    min_improvement = float(adv_cfg.get("min_improvement", 0.02))
+    if anchor_mode not in ("none", "greedy"):
+        raise ValueError(f"advantage.anchor must be none or greedy, got {anchor_mode!r}")
     zero_var_thresh = (
         zero_var_thresh_override
         if zero_var_thresh_override is not None
@@ -860,6 +980,12 @@ def train_rl(
     )
     kl_cfg = grpo_cfg.get("kl_regularization", {})
     beta = float(kl_cfg.get("beta", 0.04))
+    loss_reduction = str(train_cfg.get("loss_reduction", "sequence_sum")).strip().lower()
+    if loss_reduction not in ("sequence_sum", "token_mean"):
+        raise ValueError(
+            f"train.loss_reduction must be sequence_sum or token_mean, got {loss_reduction!r}"
+        )
+    max_held_out_reward_drop = float(train_cfg.get("max_held_out_reward_drop", 0.02))
 
     if rank == 0:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -978,14 +1104,25 @@ def train_rl(
         weight_decay=0.01,
     )
 
-    if warmup_steps > 0:
-        scheduler = get_linear_schedule_with_warmup(
+    schedule_name = str(train_cfg.get("lr_scheduler", "linear")).strip().lower()
+    if schedule_name == "constant":
+        if get_constant_schedule_with_warmup is None:
+            raise RuntimeError("Constant LR schedule requires transformers.")
+        scheduler = get_constant_schedule_with_warmup(
             optimizer,
             num_warmup_steps=warmup_steps,
-            num_training_steps=max_steps,
         )
+    elif schedule_name == "linear":
+        if warmup_steps > 0:
+            scheduler = get_linear_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=warmup_steps,
+                num_training_steps=max_steps,
+            )
+        else:
+            scheduler = None
     else:
-        scheduler = None
+        raise ValueError(f"Unsupported lr_scheduler: {schedule_name}")
 
     start_step = 0
     # Resumption
@@ -1041,9 +1178,17 @@ def train_rl(
     accum_total_loss = 0.0
     accum_rewards: List[float] = []
     accum_zero_vars: int = 0
+    accum_no_improvement: int = 0
     consecutive_high_zero_var: int = 0
     step_start_time = time.time()
     skip_offset = 0
+    step0_reward: Optional[float] = None
+    best_val_reward: Optional[float] = None
+    best_saved_step: Optional[int] = None
+    best_saved_reward: Optional[float] = None
+    stop_for_reward_drop = False
+    val_manifest_sha = compute_file_sha256(val_manifest_path) if val_manifest_path else ""
+    val_manifest_rows = len(val_dataset) if val_dataset is not None else 0
 
     if rank == 0:
         print(f"Starting GRPO training: global_step={global_step} -> {max_steps}, accum={grad_accum_steps}, world_size={world_size}, G={group_size}")
@@ -1059,6 +1204,8 @@ def train_rl(
                     rec = json.loads(line)
                     if rec.get("global_step") == 0 and rec.get("val_eval_scope") == "Full Held-out":
                         has_step0 = True
+                        if rec.get("val_mean_reward") is not None:
+                            step0_reward = float(rec["val_mean_reward"])
                         if rank == 0:
                             print(f"Step 0 Reference baseline already evaluated in loss_log.jsonl (reward={rec.get('val_mean_reward')}). Skipping re-evaluation.")
                         break
@@ -1068,7 +1215,7 @@ def train_rl(
     if val_dataset and start_step == 0 and not has_step0:
         if rank == 0:
             print(f"Evaluating Step 0 Policy / Reference baseline on full held-out validation set ({len(val_dataset)} samples)...")
-        val_rew0, val_err0 = evaluate_rl_validation(
+        val_rew0, val_err0, val_rollouts0, val_assigned0 = evaluate_rl_validation(
             ddp_model,
             asr_model,
             val_dataset,
@@ -1080,19 +1227,36 @@ def train_rl(
             reward_config=reward_cfg,
             eval_seed=eval_seed,
         )
+        step0_reward = val_rew0
         if rank == 0:
-            print(f"--- [Step 0 Reference Baseline (Full Held-out)] val_mean_reward={val_rew0:.4f}, val_error_rate={val_err0:.4f} ---")
+            print(
+                f"--- [Step 0 Reference Baseline (Full Held-out)] "
+                f"val_mean_reward={val_rew0:.4f}, val_error_rate={val_err0:.4f}, "
+                f"rows={val_manifest_rows}, assigned={val_assigned0}, rollouts={val_rollouts0} ---"
+            )
+            if val_assigned0 != val_manifest_rows:
+                print(
+                    f"WARNING: held-out assigned rows {val_assigned0} != manifest rows {val_manifest_rows}",
+                    file=sys.stderr,
+                )
             val_log_entry = {
                 "global_step": 0,
                 "val_mean_reward": round(val_rew0, 4),
                 "val_error_rate": round(val_err0, 4),
                 "val_eval_scope": "Full Held-out",
+                "val_manifest_rows": val_manifest_rows,
+                "val_manifest_sha256": val_manifest_sha,
+                "val_assigned_rows": val_assigned0,
+                "val_rollouts": val_rollouts0,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
             with open(loss_log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(val_log_entry) + "\n")
         if is_distributed:
             dist.barrier()
+
+    if step0_reward is not None:
+        best_val_reward = step0_reward
 
     while global_step < max_steps:
         total_micro_step = global_step * grad_accum_steps + accum_count + skip_offset
@@ -1138,32 +1302,66 @@ def train_rl(
         if torch.cuda.is_available():
             torch.cuda.manual_seed(cand_seed)
 
+        def decode_sequences(seqs: Any) -> List[str]:
+            texts: List[str] = []
+            limit = seqs.shape[0]
+            for row_index in range(limit):
+                cand_tokens = seqs[row_index, prompt_len:]
+                cand_str = asr_model.processor.tokenizer.decode(
+                    cand_tokens, skip_special_tokens=True
+                ).strip()
+                texts.append(cand_str)
+            return texts
+
+        def generate_once(**gen_kwargs: Any) -> List[str]:
+            gen_inputs = {
+                key: value.clone() if torch.is_tensor(value) else value
+                for key, value in inputs_gen.items()
+            }
+            gen_out = asr_model.model.generate(
+                **gen_inputs,
+                max_new_tokens=128,
+                **gen_kwargs,
+            )
+            seqs = gen_out.sequences if hasattr(gen_out, "sequences") else gen_out
+            return decode_sequences(seqs)
+
         with torch.no_grad():
             try:
-                gen_out = asr_model.model.generate(
-                    **inputs_gen,
-                    do_sample=True,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    num_return_sequences=group_size,
-                    max_new_tokens=128,
-                )
-                seqs = gen_out.sequences if hasattr(gen_out, "sequences") else gen_out
+                if anchor_mode == "greedy":
+                    greedy_texts = generate_once(do_sample=False, num_return_sequences=1)
+                    sample_count = max(group_size - 1, 0)
+                    sampled_texts = (
+                        generate_once(
+                            do_sample=True,
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            num_return_sequences=sample_count,
+                        )
+                        if sample_count
+                        else []
+                    )
+                    cand_texts = greedy_texts[:1] + sampled_texts
+                    cand_roles = ["greedy"] + ["sample"] * (len(cand_texts) - 1)
+                else:
+                    cand_texts = generate_once(
+                        do_sample=True,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        num_return_sequences=group_size,
+                    )
+                    cand_roles = ["sample"] * len(cand_texts)
             except Exception as gen_err:
                 print(f"Generation error on {sample_id}: {gen_err}", file=sys.stderr)
                 skip_offset += 1
                 continue
 
-        cand_texts: List[str] = []
-        for g_i in range(min(group_size, seqs.shape[0])):
-            cand_tokens = seqs[g_i, prompt_len:]
-            cand_str = asr_model.processor.tokenizer.decode(cand_tokens, skip_special_tokens=True).strip()
-            cand_texts.append(cand_str)
-
         # Pad candidates if fewer than group_size
         while len(cand_texts) < group_size:
             cand_texts.append(cand_texts[-1] if cand_texts else "")
+            cand_roles.append(cand_roles[-1] if cand_roles else "sample")
 
         # 2. Sequence Rewards and GRPO Advantage
         rewards: List[float] = []
@@ -1177,7 +1375,19 @@ def train_rl(
             reward_comps_list.append(comps)
             err_rates.append(err)
 
-        advantages, is_zero_var = compute_group_advantages(rewards, epsilon=epsilon)
+        if anchor_mode == "greedy":
+            advantages, advantage_status = compute_anchored_advantages(
+                rewards,
+                anchor_index=0,
+                min_improvement=min_improvement,
+            )
+            is_zero_var = advantage_status == "identical"
+            apply_update = advantage_status == "update"
+            if advantage_status == "no_improvement":
+                accum_no_improvement += 1
+        else:
+            advantages, is_zero_var = compute_group_advantages(rewards, epsilon=epsilon)
+            apply_update = not is_zero_var
         accum_rewards.extend(rewards)
         if is_zero_var:
             accum_zero_vars += 1
@@ -1255,39 +1465,28 @@ def train_rl(
         )
         policy_token_logps, _ = compute_token_logps(policy_outputs.logits, batch_labels)
 
-        # 6. Policy Gradient Loss + Reference KL Regularization (Schulman K3 estimator)
-        # K3(pi_\theta, pi_ref) = exp(log pi_ref - log pi_\theta) - (log pi_ref - log pi_\theta) - 1
-        log_ratio = (ref_token_logps - policy_token_logps) * token_mask
-        log_ratio_clamped = log_ratio.clamp(min=-10.0, max=10.0)
-        token_kl = (torch.exp(log_ratio_clamped) - log_ratio_clamped - 1.0) * token_mask
-        seq_kls = token_kl.sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
-
-        adv_tensor = torch.tensor(advantages, device=device, dtype=policy_token_logps.dtype)
-
-        # Policy gradient: - A_i * log pi_\theta(t)
-        # KL term: + beta * K3_kl(t)
-        token_loss = (- (adv_tensor.unsqueeze(-1) * policy_token_logps) + beta * token_kl) * token_mask
-        seq_losses = token_loss.sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
-
-        policy_term_loss = - (adv_tensor.unsqueeze(-1) * policy_token_logps * token_mask).sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
-        kl_term_loss = (beta * token_kl).sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
-        raw_kl_term = token_kl.sum(dim=-1) / token_mask.sum(dim=-1).clamp(min=1)
-
-        if is_zero_var:
-            # On zero-variance groups (no contrastive reward signal), zero out group loss
-            # while maintaining graph connectivity for DDP gradient synchronization.
-            # This prevents unproductive policy pulling towards reference when advantage is 0.
-            group_loss = 0.0 * policy_token_logps.sum()
-        else:
-            group_loss = seq_losses.mean()
+        # 6. Sequence-level policy gradient + Schulman K3 KL.
+        # Reward is a sequence score, so the default reduction sums over response
+        # tokens instead of averaging them away.
+        loss_parts = compute_grpo_group_loss(
+            policy_token_logps,
+            ref_token_logps,
+            token_mask,
+            advantages,
+            beta=beta,
+            zero_variance=not apply_update,
+            reduction=loss_reduction,
+        )
+        group_loss = loss_parts["group_loss"]
+        seq_kls = loss_parts["seq_kl_mean"]
 
         scaled_loss = group_loss / grad_accum_steps
         scaled_loss.backward()
 
         accum_total_loss += group_loss.item()
-        accum_policy_loss += (0.0 if is_zero_var else policy_term_loss.mean().item())
-        accum_kl_loss += (0.0 if is_zero_var else kl_term_loss.mean().item())
-        accum_raw_kl += (0.0 if is_zero_var else raw_kl_term.mean().item())
+        accum_policy_loss += loss_parts["policy_loss"].item()
+        accum_kl_loss += loss_parts["kl_loss"].item()
+        accum_raw_kl += loss_parts["raw_kl"].item()
         accum_count += 1
 
         # 7. Record Rollouts to rank-specific rollouts_rank_{rank}.jsonl
@@ -1301,6 +1500,7 @@ def train_rl(
                 "group_id": f"{sample_id}:{global_step}:{rank}:{accum_count}",
                 "group_size": group_size,
                 "rollout_rank": g_i,
+                "decode_mode": cand_roles[g_i],
                 "policy_checkpoint": f"step_{global_step}",
                 "rollout_seed": cand_seed + g_i,
                 "prediction": cand_texts[g_i],
@@ -1320,7 +1520,7 @@ def train_rl(
 
         # 8. Gradient Step
         if accum_count == grad_accum_steps:
-            torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), max_norm=1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), max_norm=1.0)
             optimizer.step()
             if scheduler is not None:
                 scheduler.step()
@@ -1336,6 +1536,7 @@ def train_rl(
             mean_raw_kl = accum_raw_kl / grad_accum_steps
             mean_rew = sum(accum_rewards) / max(1, len(accum_rewards))
             zero_var_ratio = accum_zero_vars / grad_accum_steps
+            no_improvement_ratio = accum_no_improvement / grad_accum_steps
 
             accum_total_loss = 0.0
             accum_policy_loss = 0.0
@@ -1343,11 +1544,15 @@ def train_rl(
             accum_raw_kl = 0.0
             accum_rewards = []
             accum_zero_vars = 0
+            accum_no_improvement = 0
             accum_count = 0
 
             # Gather metrics across ranks if distributed
             if is_distributed:
-                metrics_t = torch.tensor([mean_tot_loss, mean_pol_loss, mean_kl, mean_raw_kl, mean_rew, zero_var_ratio], device=device)
+                metrics_t = torch.tensor(
+                    [mean_tot_loss, mean_pol_loss, mean_kl, mean_raw_kl, mean_rew, zero_var_ratio, no_improvement_ratio],
+                    device=device,
+                )
                 dist.all_reduce(metrics_t, op=dist.ReduceOp.SUM)
                 mean_tot_loss = (metrics_t[0] / world_size).item()
                 mean_pol_loss = (metrics_t[1] / world_size).item()
@@ -1355,6 +1560,7 @@ def train_rl(
                 mean_raw_kl = (metrics_t[3] / world_size).item()
                 mean_rew = (metrics_t[4] / world_size).item()
                 zero_var_ratio = (metrics_t[5] / world_size).item()
+                no_improvement_ratio = (metrics_t[6] / world_size).item()
 
             current_lr = scheduler.get_last_lr()[0] if scheduler is not None else lr
 
@@ -1367,13 +1573,18 @@ def train_rl(
                     "raw_kl": round(mean_raw_kl, 6),
                     "mean_reward": round(mean_rew, 4),
                     "zero_variance_ratio": round(zero_var_ratio, 4),
+                    "no_improvement_ratio": round(no_improvement_ratio, 4),
+                    "grad_norm": round(float(grad_norm), 6),
+                    "loss_reduction": loss_reduction,
                     "learning_rate": current_lr,
                     "step_seconds": round(step_duration, 3),
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 }
                 print(
                     f"[Step {global_step}/{max_steps}] loss={mean_tot_loss:.4f}, pol_loss={mean_pol_loss:.4f}, "
-                    f"raw_kl={mean_raw_kl:.6f}, kl_loss={mean_kl:.6f}, rew={mean_rew:.3f}, zero_var={zero_var_ratio:.2f}, lr={current_lr:.2e}, time={step_duration:.2f}s"
+                    f"raw_kl={mean_raw_kl:.6f}, kl_loss={mean_kl:.6f}, rew={mean_rew:.3f}, zero_var={zero_var_ratio:.2f}, "
+                    f"no_improve={no_improvement_ratio:.2f}, "
+                    f"grad_norm={float(grad_norm):.4f}, lr={current_lr:.2e}, time={step_duration:.2f}s"
                 )
                 with open(loss_log_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(log_entry) + "\n")
@@ -1417,7 +1628,7 @@ def train_rl(
 
             # Periodic validation on full held-out pool
             if val_dataset and (global_step % eval_steps == 0 or global_step == max_steps):
-                val_rew, val_err = evaluate_rl_validation(
+                val_rew, val_err, val_rollouts, val_assigned = evaluate_rl_validation(
                     ddp_model,
                     asr_model,
                     val_dataset,
@@ -1430,17 +1641,45 @@ def train_rl(
                     eval_seed=eval_seed,
                 )
                 if rank == 0:
-                    print(f"--- [Validation @ Step {global_step} (Full Held-out)] val_mean_reward={val_rew:.4f}, val_error_rate={val_err:.4f} ---")
+                    print(
+                        f"--- [Validation @ Step {global_step} (Full Held-out)] "
+                        f"val_mean_reward={val_rew:.4f}, val_error_rate={val_err:.4f}, "
+                        f"rows={val_manifest_rows}, assigned={val_assigned}, rollouts={val_rollouts} ---"
+                    )
                     val_log_entry = {
                         "global_step": global_step,
                         "val_mean_reward": round(val_rew, 4),
                         "val_error_rate": round(val_err, 4),
                         "val_eval_scope": "Full Held-out",
+                        "val_manifest_rows": val_manifest_rows,
+                        "val_manifest_sha256": val_manifest_sha,
+                        "val_assigned_rows": val_assigned,
+                        "val_rollouts": val_rollouts,
                         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     }
                     with open(loss_log_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(val_log_entry) + "\n")
+                    if step0_reward is not None and (step0_reward - val_rew) > max_held_out_reward_drop:
+                        print(
+                            f"FATAL: held-out reward {val_rew:.4f} dropped more than "
+                            f"{max_held_out_reward_drop:.4f} below step 0 ({step0_reward:.4f}).",
+                            file=sys.stderr,
+                        )
+                        stop_for_reward_drop = True
+                    if best_val_reward is None or val_rew >= best_val_reward:
+                        best_val_reward = val_rew
+                    will_save = global_step > 0 and (global_step % save_steps == 0 or global_step == max_steps)
+                    if will_save and (best_saved_reward is None or val_rew >= best_saved_reward):
+                        best_saved_reward = val_rew
+                        best_saved_step = global_step
                 if is_distributed:
+                    stop_flag = torch.tensor(
+                        [1.0 if stop_for_reward_drop else 0.0],
+                        device=device,
+                        dtype=torch.float32,
+                    )
+                    dist.broadcast(stop_flag, src=0)
+                    stop_for_reward_drop = bool(stop_flag.item() > 0.5)
                     dist.barrier()
 
             # Periodic Checkpoint
@@ -1466,19 +1705,31 @@ def train_rl(
                         "target_map_hash": lora_meta["target_map_hash"],
                         "manifest": str(manifest_path),
                         "manifest_sha256": compute_file_sha256(manifest_path),
-                        "scheduler": "linear" if scheduler is not None else None,
+                        "scheduler": schedule_name if scheduler is not None else None,
                         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     }
                     with open(ckpt_dir / "training_state.json", "w", encoding="utf-8") as sf_f:
                         json.dump(st_meta, sf_f, indent=2)
 
                     # Update pipeline_state.json
+                    if stop_for_reward_drop:
+                        run_status = "STOPPED_REWARD_DROP"
+                    elif global_step >= max_steps:
+                        run_status = "COMPLETED"
+                    else:
+                        run_status = "RUNNING"
                     pipeline_state = {
                         "stage": "rl_pilot",
                         "global_step": global_step,
                         "world_size": world_size,
                         "last_valid_checkpoint": str(ckpt_dir),
-                        "status": "COMPLETED" if global_step >= max_steps else "RUNNING",
+                        "best_checkpoint": (
+                            str(output_dir / "checkpoints" / f"step_{best_saved_step}")
+                            if best_saved_step is not None else str(ckpt_dir)
+                        ),
+                        "best_val_reward": None if best_saved_reward is None else round(best_saved_reward, 4),
+                        "step0_val_reward": None if step0_reward is None else round(step0_reward, 4),
+                        "status": run_status,
                         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     }
                     with open(output_dir / "pipeline_state.json", "w", encoding="utf-8") as pf:
@@ -1506,6 +1757,14 @@ def train_rl(
                     except Exception as merr:
                         print(f"Warning: Rollouts merge on checkpoint: {merr}", file=sys.stderr)
 
+            if stop_for_reward_drop:
+                if rank == 0:
+                    print(
+                        f"Stopping at step {global_step}: held-out reward fell more than "
+                        f"{max_held_out_reward_drop:.4f} below step 0."
+                    )
+                break
+
     if is_distributed:
         dist.barrier()
 
@@ -1520,17 +1779,22 @@ def train_rl(
         dist.destroy_process_group()
 
     if rank == 0:
-        if export_merged_on_finish and global_step >= max_steps:
-            last_ckpt = output_dir / "checkpoints" / f"step_{global_step}"
+        finished_normally = global_step >= max_steps or stop_for_reward_drop
+        export_step = best_saved_step if best_saved_step is not None else global_step
+        if export_merged_on_finish and finished_normally and export_step > 0:
+            export_ckpt = output_dir / "checkpoints" / f"step_{export_step}"
             merged_dir = output_dir / "merged_base"
-            if last_ckpt.is_dir():
-                print(f"Exporting merged model from {last_ckpt} to {merged_dir}...")
+            if export_ckpt.is_dir():
+                print(
+                    f"Exporting merged model from best held-out checkpoint {export_ckpt} "
+                    f"(reward={best_saved_reward}) to {merged_dir}..."
+                )
                 try:
-                    export_merged_model(last_ckpt, merged_dir, config)
+                    export_merged_model(export_ckpt, merged_dir, config)
                     print(f"Exported merged model successfully to {merged_dir}")
                 except Exception as ex_err:
                     print(f"Warning: Failed to auto-export merged model: {ex_err}", file=sys.stderr)
-        print(f"GRPO RL Training successfully finished {global_step} steps!")
+        print(f"GRPO RL Training finished {global_step} steps. Best saved step: {export_step}.")
 
 
 def build_parser() -> argparse.ArgumentParser:

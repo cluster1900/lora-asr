@@ -594,6 +594,86 @@ class VerifyGateTest(unittest.TestCase):
         self.assertEqual(gate["gate_status"], "FAILED")
         self.assertEqual(gate["checks"]["held_out_reward"], "FAILED")
 
+    def test_evaluate_gate_pilot_feasibility_is_not_release_eligible(self) -> None:
+        dpo_metrics = {
+            "overall": {
+                "samples": 100,
+                "inference_errors": 0,
+                "empty_outputs": 0,
+                "clean_language_macro_error_rate": 0.020,
+                "robust_language_macro_error_rate": 0.090,
+            },
+            "by_scenario": [
+                {"group": "en|clean", "error_rate": 0.020},
+                {"group": "zh|clean", "error_rate": 0.020},
+                {"group": "en|noise", "error_rate": 0.110},
+            ],
+        }
+        rl_metrics = {
+            "overall": {
+                "samples": 100,
+                "inference_errors": 0,
+                "empty_outputs": 0,
+                "clean_language_macro_error_rate": 0.020,
+                "robust_language_macro_error_rate": 0.090014,
+            },
+            "by_scenario": [
+                {"group": "en|clean", "error_rate": 0.020},
+                {"group": "zh|clean", "error_rate": 0.020},
+                {"group": "en|noise", "error_rate": 0.105},
+            ],
+        }
+
+        gate = verify_gate.evaluate_gate(
+            base_metrics=self.mock_base_metrics,
+            pilot_metrics=rl_metrics,
+            dpo_metrics=dpo_metrics,
+            stage="rl_pilot",
+            reward_improvement=0.0001,
+            gate_profile="pilot_feasibility",
+        )
+
+        self.assertEqual(gate["gate_status"], "PILOT_PASSED")
+        self.assertFalse(gate["release_eligible"])
+        self.assertEqual(gate["gate_profile"], "pilot_feasibility")
+        self.assertEqual(gate["thresholds"]["reward_improvement_min"], 0.0)
+        self.assertEqual(gate["thresholds"]["robust_error_rate_increase_max"], 0.001)
+
+    def test_pilot_feasibility_rejects_reward_regression(self) -> None:
+        dpo_metrics = {
+            "overall": {
+                "samples": 100,
+                "inference_errors": 0,
+                "empty_outputs": 0,
+                "clean_language_macro_error_rate": 0.020,
+                "robust_language_macro_error_rate": 0.090,
+            },
+            "by_scenario": [{"group": "en|noise", "error_rate": 0.110}],
+        }
+        rl_metrics = {
+            "overall": {
+                "samples": 100,
+                "inference_errors": 0,
+                "empty_outputs": 0,
+                "clean_language_macro_error_rate": 0.020,
+                "robust_language_macro_error_rate": 0.090,
+            },
+            "by_scenario": [{"group": "en|noise", "error_rate": 0.105}],
+        }
+
+        gate = verify_gate.evaluate_gate(
+            base_metrics=self.mock_base_metrics,
+            pilot_metrics=rl_metrics,
+            dpo_metrics=dpo_metrics,
+            stage="rl_pilot",
+            reward_improvement=-0.0001,
+            gate_profile="pilot_feasibility",
+        )
+
+        self.assertEqual(gate["gate_status"], "FAILED")
+        self.assertFalse(gate["release_eligible"])
+        self.assertEqual(gate["checks"]["held_out_reward"], "FAILED")
+
     def test_cli_rl_loss_log_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_p = Path(tmpdir)

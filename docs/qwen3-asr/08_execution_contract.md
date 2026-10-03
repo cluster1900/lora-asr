@@ -161,12 +161,10 @@ DPO full 目标为至少 20,000 训练 pairs（16,000 robust、2,000 English cle
 RL 从 `dpo_release`（合并模型）开始，使用 `rl_train_pool` 与 `rl_val_pool` 的音频和 gold reference 计算序列级 reward。RL 不使用
 Bench/test。第一版采用带 reference policy KL 正则项的 Group Relative Policy Optimization (GRPO)：
 
-- 组大小与采样：同一 `sample_id` 必须生成完整 $G=4$ 个候选，使用 `group_id`、`group_size=4`、`rollout_rank` 标识；
-  可在单卡生成 4 个，或四卡各生成 1 个后 all-gather，必须在计算 advantage 前完成组内聚合。采样参数推荐 `temperature=0.85`、
-  `top_k=50`、`top_p=0.92`，并为每张卡和每个 Candidate 注入独立 RNG seed，确保声学与语言多样性，避免归一化后文本坍缩；组内候选奖励标准差 ≤ epsilon 的 group（如全对或全错同质组）其标准化优势置 0（不贡献策略梯度，保护 clean 稳定性）。鉴于 ASR 训练集包含约 45% 的清晰语音（Clean 错误率极低，4 次采样全部正确天然产生零奖励方差），单批次零奖励方差率监控上限设定为 80%（在动态种子下均值实测约 63.9%，单批次由于 N=64 二项抽样波动可达 ~76%）；采样坍缩硬拦截判定以异常低分坍缩为准（`zero_var_ratio > 80%` 且 `mean_reward < 0.85`；若批次全为清晰语音且 `mean_reward >= 0.85`，全对零方差属声学正常现象，标准化优势置 0 保护 Clean 基线，不计入坍缩停机）；若连续 2 步批次确认异常分布坍缩，必须在 `pipeline_state.json` 写入 `FAILED_ZERO_VARIANCE` 并抛出异常硬中止 RL 训练。门禁核验以全流程平均批次零方差率 ≤ 75% 为准。
-- 四卡 Rollout 全量收集：所有 rank 必须各自记录 `rollouts_rank_{rank}.jsonl`，在保存 checkpoint 或训练结束时汇聚为完整的 `rollouts.jsonl`（预期 $60 \times 16 \times 4 \times 4 = 15,360$ 行），严禁仅落盘 Rank 0；每条记录必须包含 `sample_id`、`condition_group`、`group_id`、`group_size`、`rollout_rank`、`reward`、`advantage`、`kl_to_reference` 等全字段，并通过全量审计。
-- 独立验证集统一口径：周期性验证必须统一评测全量 573 条 `rl_val_pool.jsonl`（禁止 Sub-25 抽样与全量混算）；在训练启动前（Step 0）必须强制评测初始 Policy / 冻结 Reference 底座的基准指标并写入 `loss_log.jsonl`（标注 `val_eval_scope: "Full Held-out"`），后续各 Step 的奖励提升严格以 $R_{\text{step}} - R_0$ 计算。
-- GRPO 损失函数：遵循业内标准，对组内候选标准化优势 $A_i = \frac{r_i - \text{mean}(\{r\})}{\text{std}(\{r\}) + \epsilon}$，并在策略损失中加入针对冻结参考策略（`dpo_release`）的 KL 正则约束 $\beta D_{KL}(\pi_\theta || \pi_{\text{ref}})$。
+- 组大小与采样：v10/v11 的第一轮是 1 条贪心解码加 3 条采样（`temperature=1.0`、`top_p=0.95`、`top_k=50`）。第一轮没有样本高出贪心 `0.02` 时，再用 `cand_seed+10007` 抽 8 条。反向固定为长度 2。日志里的 `group_size` 因此是 4 或 12。计算 advantage 前必须完成组内聚合。v4–v9 固定 G=4。`0.85/0.92/50` 在 v4–v8 中约有 71% 的组奖励完全相同。优势以贪心为锚：最好的有效改进为 1，未超过贪心的候选为 0。全对或全错的同质组优势为 0。v10/v11 使用 `sample_strategy: degraded`，manifest 里的 clean 行留作审计，不进入损失。坍缩硬拦截是相同奖励比例 > 0.80 且批奖励低于配置地板（v10/v11 为 0.75），连续 2 步写入 `FAILED_ZERO_VARIANCE`。门禁里的平均零方差比例上限是 75%，锚点模式下只统计 `identical`。
+- 四卡 Rollout 全量收集：所有 rank 必须各自记录 `rollouts_rank_{rank}.jsonl`，在保存 checkpoint 或训练结束时汇聚为完整的 `rollouts.jsonl`，严禁仅落盘 Rank 0。审计检查每一组的行数和字段是否完整，不把某一个固定总行数当作通过条件。v4–v7 的 30 步运行对应 7,680 行；更早的 full 规划里 $60 \times 16 \times 4 \times 4 = 15,360$ 行只属于固定 G=4 的那一版步数，不用于 v10/v11。每条记录必须包含 `sample_id`、`condition_group`、`group_id`、`group_size`、`rollout_rank`、`reward`、`advantage`、`kl_to_reference`。v10 起还记录 `round`、`decode_mode`、`trained`、`advantage_status`。
+- 独立验证集统一口径：周期性验证必须评测 `rl_val_pool.jsonl` 的全部行，禁止抽样或把不同版本的池混成一个 R_0。2026-09-26 扩增后的当前池是 1,698 行（1,298 degraded + 400 clean，SHA-256 `b0701db2ec3735222179e21fb4bf3c49c256d8da5d3a85cb7e61bfa6b7d9cd99`）。v5 使用的 573 行池（SHA-256 `a50f172482d3a0a039b498a1d354935d89d137ad5af1b03cd8c8c078d201af55`，Step 0 reward `0.9379`）已经退役，`0.9379` 不得再当作当前池的基线。训练启动前必须评测 Step 0 并写入 `loss_log.jsonl`（`val_eval_scope: "Full Held-out"`，同时写入 `val_manifest_rows` 与 manifest sha）。奖励提升只按本次运行的 $R_{\text{step}} - R_0$ 计算；缺 Step 0、行数或 sha 对不上，视为 FAILED。
+- GRPO 损失函数：当前 pilot 的优势是相对贪心解码的奖励差，最好的有效改进为 1，未超过贪心解码的候选为 0；不再把组内标准差归一化成正负优势。奖励是序列级分数，策略项必须是 $-A_i \sum_t \log \pi_\theta(y_t)$，KL 项用同样的 token 求和 $\beta \sum_t \mathrm{K3}_t$，再对组内候选取平均。不得先对 token 取平均。日志里的 `raw_kl` 仍是逐 token 的 K3 均值。没有有效改进的组损失置 0，只保留 DDP 计算图。
 
 reward 配置必须冻结并写入 `reward_config.yaml`：
 
@@ -218,7 +216,8 @@ policy checkpoint；缺少 rollout 或 reward 明细时，RL 阶段不算完成�
 - `rollouts/`：DPO pair 审计和 RL rollout/reward JSONL；
 - `metrics/`：`metrics.json`、`by_language.csv`、`by_scenario.csv`、必要时 `by_cell.csv`；
 - `failures.jsonl`：推理错误、空输出、重复、过长和 hallucination 样本；
-- `gate.json`：每项门禁的 status、阈值、实际值和失败原因。
+- `gate.json`：正式 release 门禁的 status、阈值、实际值和失败原因；
+- `pilot_gate.json`：可选的 `pilot_feasibility` 门禁结果，只用于验证训练闭环和 checkpoint 可恢复性，不能替代 `gate.json`。
 
 prediction 至少包含 `sample_id`、`text`、`prediction`、`language`、`scenario`、`model_id`、
 `model_revision`、`dtype`、`attention`、`method`、`adapter_dir`、`error` 和 `infer_seconds`。
@@ -298,17 +297,18 @@ adapter 与 merged base 均可重新加载。
 
 ### E6：RL rollout 与 RL pilot
 
-输入：来自 `rl_train_pool` 的 2,000 robust + 500 English clean + 500 Chinese clean、来自 `rl_val_pool`
-的 573 条验证音频、`dpo_pilot` 合并底座、冻结 reference policy、reward config 和 rollout config（G=4，`temperature=0.85`, `top_p=0.92`, `top_k=50`）。推荐运行 30 步（约 0.8 epoch，单 epoch 泛化黄金窗口，避免二轮复读导致零方差策略塌缩）。
+输入：`pilot_rl.jsonl` 共 3,000 行，其中 2,000 条退化、500 条英文 clean、500 条中文 clean。v10/v11 的优化器使用 `sample_strategy: degraded`，clean 行留在 manifest 里，不进入损失。v6–v9 使用 `balanced`。验证池是当前全量 `rl_val_pool`（2026-09-26 起为 1,698 条，见第 5 节口径）。底座是 DPO Champion，reference policy 冻结。v10 学习率 `1e-5`，v11 学习率 `2e-5`；锚、β=`0.04`、采样 `temperature=1.0`、`top_p=0.95`、`top_k=50` 和序列求和损失相同。最多 12 步，每 4 步一块。
 
 输出：`rl_pilot` adapter、最终合并权重、rollout/reward/KL JSONL、reward summary、2,867 条独立验证全集的 base/SFT/DPO/RL predictions、`metrics.json`
-和 `gate.json`。
+和正式 `gate.json`。如果正式门禁尚未达到 release 阈值，可以额外写出独立的 `pilot_gate.json`。
 
-通过标准：held-out mean reward 相对冻结 DPO reference 在全量验证集上提升 ≥0.0020（严格同口径 Full Held-out 相比，初始基线在修复异常重复后为 0.9379，提升 0.0020 对应错误率降低约 0.3pp；缺失 Step 0 基线或口径不一致视为 FAILED）；全程平均零方差 group 比例 ≤75%；四卡 rollout 完整收集（30 步对应 7,680 行）且 audit 通过；至少一个 degraded scenario 相对 DPO 改善；clean 相对 DPO 回退 ≤0.02，且相对 Base 累积回退 ≤0.025；robust macro 相对 DPO 零恶化（≤ 0.0）；有效输出率 ≥0.95；KL、reward、gradient 均有限；最终 adapter 与 merged model 均可加载；`environment.json` 必须包含非空 `git_commit`。
+通过标准：正式 release 仍要求贪心 held-out mean reward 相对本次运行的 Step 0 Full Held-out 提升 ≥0.0020（同一 `rl_val_pool` 文件、同一解码；v10 起 `val_decode=greedy`。提升 0.0020 约对应错误率降低 0.2–0.3pp；缺失 Step 0 基线、验证集行数或 sha 不一致视为 FAILED。旧 573 行池上的 0.9379 只作为历史记录）；全程平均零方差 group 比例 ≤75%；四卡 rollout 按组内完整性审计通过；至少一个 degraded scenario 相对 DPO 改善；clean 相对 DPO 回退 ≤0.02，且相对 Base 累积回退 ≤0.025；robust macro 相对 DPO 零恶化（≤ 0.0）；有效输出率 ≥0.95；KL、reward、gradient 均有限。只有整道 `gate.json` 为 `PASSED` 的检查点可以导出到该 run 自己的目录并成为候选，导出的 adapter 与 merged model 必须可加载。held-out reward 最高而门禁未通过的检查点留在 run 目录作诊断。不得写入 DPO Champion 目录。`environment.json` 必须包含非空 `git_commit`。v6–v9 的采样 held-out 历史门禁重算时使用 `--held-out-decode sample`。
+
+为确认小规模训练可以完成，可以单独运行 `pilot_feasibility` 门禁：held-out reward 只要求不下降（≥0），robust macro 最多允许 +0.001 的回退，同时仍保留 degraded 改善、clean regression、有效输出率、空输出、失败率、KL/梯度有限和 checkpoint 可加载等安全检查。该结果的状态为 `PILOT_PASSED`，且 `release_eligible=false`；它只能说明训练闭环可行，不能导出发布模型、推进 E7 或替换正式 `gate.json`。
 
 ### E7：full SFT → full DPO → full RL
 
-只有 E4、E5、E6 全部通过才允许执行 full。三个 full 阶段仍必须按顺序运行，每阶段保留上一个有效
+只有 E4、E5、E6 的正式门禁全部通过才允许执行 full。`PILOT_PASSED` 不计入 E6 通过。三个 full 阶段仍必须按顺序运行，每阶段保留上一个有效
 adapter、合并权重和完整 gate。任何阶段失败都停止扩大规模并回退，不得跳过 DPO/RL 直接宣称完整后训练完成。
 
 ### E8：最终 release

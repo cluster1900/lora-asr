@@ -71,12 +71,30 @@ DPO 测试必须验证：
 
 RL 测试必须验证：
 
-- GRPO 组大小 $G=4$，采样 `temperature=0.7`, `top_p=0.9`，避免同质方差归零；
+- 第一轮是 1 条贪心解码加 3 条采样（`temperature=1.0`、`top_p=0.95`、`top_k=50`）；采样奖励高出贪心解码至少 `0.02` 才有正优势；未打过时第二轮 8 条，反向长度固定为 2；策略项是序列求和 $-A\sum_t\log\pi$；
+- v10/v11 训练前的 128 条退化探针：`projected_train_reward_mass >= 17.0` 才是 `GO_GRPO`；前 32 条贪心 `generate` 与 `transcribe` 不一致则是 `BLOCKED_DECODE_MISMATCH`，不构造优化器；
+- v12 的获胜优势是原始奖励差，v13 的获胜优势是固定 `0.10`。v13 只在 v12 裁剪前 `grad_norm` 中位数 > `1.5` 时启动。`unit` 仍返回优势 1，供缺省配置使用；
+- v14 从 v12 Step 4 续训，学习率和原始奖励差不变。v15 只在 v14 Step 8 为 `BLOCKED_TRANSFER` 且贪心增量仍 ≥ 0 时从 Champion 新开，学习率 `2e-5`。奖励转负、Robust 增量 ≥ `0.0005` 或 KL 停止时不切换；
+- v16 仍用 `1e-5` 和原始奖励差。获胜样本还要落在贪心文本的局部编辑距离内（`local_max_relative: 0.35`，至少允许 2 个 token）。Step 8 起 Robust 增量 > 0 停止；增量 ≥ 0 且 Robust ≤ 0 时可以续到 Step 24。`BLOCKED_TRANSFER` 在这个条件下由驱动续块，不另开学习率。该运行已在 Step 8 停止，门禁 FAILED；
+- v17 的过滤和学习率与 v16 相同，获胜优势改为 `unit`。该运行已在 Step 4 因贪心转负停止，门禁 FAILED；
+- v18 只读恢复 v16 Step 8，优势回到 `raw_gap`。跟步规则与 v17 相同。该运行已在 Step 10 因 `raw_kl` `0.000529` 停止，门禁 FAILED：贪心 `+0.0001`，Robust `+0.000014`；
+- v19 仍只读恢复 v16 Step 8。获胜优势改为 `min(奖励差, 0.05)`。该运行已在 Step 12 停止，门禁 FAILED：贪心 `−0.0001`，Robust `+0.000014`，`raw_kl` `0.000640`。梯度比不截断时小，KL 和贪心仍过不了线；
+- v20 从 DPO Champion 新开，学习率改为 `5e-6`。优势仍是 `raw_gap`，局部阈值 `0.35`，`β` 和 `5e-4` 不变。不恢复 v16 Step 8 的优化器。horizon 80。该运行已在 Step 4 因贪心 `−0.0003` 停止，门禁 FAILED：Robust `+0.000202`。通过线仍是贪心 ≥ `+0.002`、Robust 六位小数 ≤ 0；
+- v21 回到 v16 的 `1e-5`、`raw_gap` 和局部阈值 `0.35`。`lora.train_audio_projections: false`，目标数 196。horizon 24。该运行已在 Step 4 停止，门禁 FAILED：贪心 `−0.0002`，Robust `−0.000090`，只有奖励项失败。通过线不变；
+- v22 只读恢复 v21 Step 4。配置杠杆与 v21 相同。Step 8 贪心 `+0.0001`、Robust `−0.000038`，动作 `continue`。Step 11 因 `raw_kl` `0.000604` 停止，门禁 FAILED：贪心 `−0.0004`，Robust `−0.000143`。通过线不变；
+- v23 只读恢复 v22 Step 8，恢复后的学习率是 `5e-6`。2026-10-01 22:15 CST Step 12 门禁 FAILED：贪心 `−0.0004`，Robust `−0.000090`，动作 `stop`，训练状态 `STOPPED_KL`。通过线不变；
+- v24 从 DPO Champion 新开。学习率、`raw_gap`、局部阈值 `0.35` 和 199 个音频投影目标与 v16 相同。`grpo.policy_token_mask: changes_only` 只让策略梯度打在替换和插入 token 上，KL 仍按整句，天花板仍是 `5e-4`。有更新的步必须在损失日志里写出小于 1 的 `policy_keep_ratio`。2026-10-02 00:13 CST Step 4 门禁 FAILED：贪心 `+0.0001`，Robust `+0.000217`。Step 1 到 Step 5 的比例是 `0.1449`、`0.1661`、`0.144`、`0.1981`、`0.1378`。00:19 CST 续块退出，一条更新的掩码全是 0。通过线不变；
+- v25 仍用 `1e-5`、`raw_gap`、局部阈值 `0.35` 和 199 个目标。`signed_edit_loss_args` 把序列优势设成 `(-gap, gap)`。2026-10-02 02:52 CST Step 4 门禁 FAILED：贪心 `−0.0003`，Robust `+0.000209`，动作 `stop`。通过线不变；
+- v26 保持 v25 的学习率、优势、掩码和 199 个目标。`sample_strategy: degraded_skip_regressed` 让 `noise` 和 `recording` 不进优化器，清单仍是完整的 `pilot_rl.jsonl`。2026-10-02 04:39 CST Step 4 门禁 FAILED：贪心 `−0.0005`，Robust `+0.000359`，变好的场景数是 0，动作 `stop`。通过线不变；
+- v27 回到 `sample_strategy: degraded`。学习率、优势、掩码和 199 个目标不变。`include_reference_candidate: true` 时，参考文本先经 `append_reference_candidate`，再由 `local_winner_index` 决定是否更新。距离超过 `0.35` 的参考文本不训练。2026-10-02 06:21 CST Step 4 门禁 FAILED，只差奖励：贪心 `+0.0001`，Robust `−0.000007`。07:10 CST Step 7 门禁 FAILED：贪心 `+0.0002`，Robust `+0.000014`，动作 `stop`，训练状态 `STOPPED_KL`。通过线不变；
+- v28 只读恢复 v27 Step 4。`apply_learning_rate_on_resume: true` 把学习率写成 `5e-6`。参考文本、`signed_edits`、`raw_gap`、`0.35` 和 199 个目标不变。不恢复 Step 7。通过线不变；
 - reward 组件（asr 及各项惩罚）和最终 reward 对空输出、重复、过长、hallucination 的单测；
-- rollout 每行包含 policy checkpoint、seed、prediction、reward、KL 和 error；
+- rollout 按组完整：每行包含 policy checkpoint、seed、prediction、reward、KL 和 error。一组可以是 4 行或 12 行。不把 7,680 或 15,360 这个固定总行数当作 v10/v11 的通过条件；
 - reference policy 冻结，KL 正则与 gradient 有限；
-- held-out mean reward 相对 DPO reference 提升 ≥0.05；
-- 相对 DPO 至少一个 degraded scenario 改善，clean 相对 DPO 回退不超过 0.02，且相对 Base 全局累积回退不超过 0.025；
+- 贪心 held-out mean reward 相对本次运行的 Step 0 提升 ≥0.0020，`val_decode=greedy`，验证集行数与 sha 记入 loss log；
+- Robust Macro 相对 DPO 零恶化（`max_robust_macro_regression <= 0.0`，按六位小数，没有 ±1 次编辑豁免）；
+- 相对 DPO 至少一个 degraded scenario 改善，clean 相对 DPO 回退不超过 0.02，且相对 Base 全局累积回退不超过 0.025，有效输出率不少于 0.95；
+- 只有整道 `gate.json` 为 `PASSED` 的检查点可以导出。设计内停止落在 4/8/12 之外时，仍要给 `pipeline_state.global_step` 的完整检查点补上贪心 held-out 和 2,867 条门禁；
 - RL adapter 能在新进程加载并完成 clean/degraded 推理。
 
 没有 SFT、DPO、RL 三个阶段的 gate.json、四组 prediction、合并 release 模型和固定 test 结果，不得标记完整后训练完成。

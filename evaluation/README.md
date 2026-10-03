@@ -56,6 +56,7 @@ python evaluation/eval_wer.py \
   --output-dir /path/to/evaluation
 
 # 2. 运行门禁判定并生成机器可读 gate.json（含退化场景改善、Clean 回退、鲁棒宏平均回退上限与空输出率硬拦截）
+# 默认 profile=release；pilot_feasibility 只确认小闭环可运行，不具备发布资格。
 # SFT Pilot 门禁判定
 python evaluation/verify_gate.py \
   --base-metrics /path/to/base/metrics.json \
@@ -100,6 +101,18 @@ python evaluation/verify_gate.py \
   --max-robust-regression 0.0 \
   --max-empty-rate 0.002 \
   --output /data/mega-asr/runs/rl_pilot/gate.json
+
+# RL Pilot 可行性门禁：允许 reward 不下降、Robust 最多回退 0.001；
+# 输出必须使用独立文件，不能覆盖 release gate.json。
+python evaluation/verify_gate.py \
+  --base-metrics /data/mega-asr/runs/sft_pilot_controlled/merged_base_eval/metrics.json \
+  --dpo-metrics /data/mega-asr/runs/dpo_pilot_v2/predictions_eval/metrics.json \
+  --pilot-metrics /data/mega-asr/runs/rl_pilot_v27/predictions_step_4_eval/metrics.json \
+  --manifest /data/mega-asr/manifests/validation.jsonl \
+  --rl-loss-log /data/mega-asr/runs/rl_pilot_v27/loss_log.jsonl \
+  --stage rl_pilot \
+  --gate-profile pilot_feasibility \
+  --output /data/mega-asr/runs/rl_pilot_v27/pilot_gate.json
 
 # 3. 运行多 Checkpoint 序列自动化横向评测与 Pareto 优选
 python evaluation/eval_checkpoint_series.py \

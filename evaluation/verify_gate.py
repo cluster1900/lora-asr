@@ -17,6 +17,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+GATE_PROFILES = {
+    "release": {
+        "description": "Formal release gate; all RL contract thresholds remain strict.",
+        "status_on_pass": "PASSED",
+        "release_eligible": True,
+    },
+    "pilot_feasibility": {
+        "description": "Feasibility-only gate; confirms a usable pilot without granting release eligibility.",
+        "max_robust_macro_regression": 0.001,
+        "min_reward_improvement": 0.0,
+        "status_on_pass": "PILOT_PASSED",
+        "release_eligible": False,
+    },
+}
+
+
 def compute_file_sha256(path: Path) -> str:
     """Compute SHA-256 hash of a file."""
     if not path.is_file():
@@ -50,7 +66,7 @@ def evaluate_gate(
     preference_accuracy: Optional[float] = None,
     min_preference_accuracy: float = 0.55,
     reward_improvement: Optional[float] = None,
-    min_reward_improvement: float = 0.002,
+    min_reward_improvement: Optional[float] = None,
     zero_variance_ratio: Optional[float] = None,
     max_zero_variance_ratio: float = 0.75,
     manifest_path: Optional[Path] = None,
@@ -66,8 +82,23 @@ def evaluate_gate(
     dpo_loss_log_path: Optional[Path] = None,
     rl_val_manifest_path: Optional[Path] = None,
     rl_loss_log_path: Optional[Path] = None,
+    gate_profile: str = "release",
 ) -> Dict[str, Any]:
     """Compare base, sft, dpo, and pilot metrics and determine gate status."""
+    if gate_profile not in GATE_PROFILES:
+        raise ValueError(f"Unknown gate profile: {gate_profile!r}")
+    if gate_profile == "pilot_feasibility" and stage != "rl_pilot":
+        raise ValueError("pilot_feasibility profile is only valid for stage=rl_pilot")
+
+    profile = GATE_PROFILES[gate_profile]
+    if min_reward_improvement is None:
+        min_reward_improvement = (
+            float(profile["min_reward_improvement"])
+            if gate_profile == "pilot_feasibility"
+            else 0.002
+        )
+    if gate_profile == "pilot_feasibility" and max_robust_macro_regression is None:
+        max_robust_macro_regression = float(profile["max_robust_macro_regression"])
     if max_robust_macro_regression is None:
         max_robust_macro_regression = 0.0 if stage in ("dpo_pilot", "rl_pilot") else 0.005
     base_overall = base_metrics.get("overall", {})
@@ -273,9 +304,17 @@ def evaluate_gate(
         thresholds_dict["reward_improvement_min"] = min_reward_improvement
         thresholds_dict["zero_variance_ratio_max"] = max_zero_variance_ratio
 
+    gate_status = (
+        profile["status_on_pass"]
+        if overall_passed
+        else "FAILED"
+    )
+
     gate_record = {
         "stage": stage,
-        "gate_status": "PASSED" if overall_passed else "FAILED",
+        "gate_profile": gate_profile,
+        "gate_status": gate_status,
+        "release_eligible": bool(overall_passed and profile["release_eligible"]),
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "thresholds": thresholds_dict,
         "metrics": {
@@ -319,6 +358,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pilot-predictions", default=None, help="Path to Pilot predictions.jsonl (optional)")
     parser.add_argument("--manifest", default=None, help="Path to evaluation manifest (optional)")
     parser.add_argument("--stage", default="sft_pilot", help="Evaluation stage tag (default: sft_pilot)")
+    parser.add_argument(
+        "--gate-profile",
+        choices=sorted(GATE_PROFILES),
+        default="release",
+        help="Gate profile: release (default) or pilot_feasibility (RL-only, never release-eligible).",
+    )
     parser.add_argument("--output", required=True, help="Path to write gate.json")
     parser.add_argument(
         "--min-degraded-improvements",
@@ -405,8 +450,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--min-reward-improvement",
         type=float,
-        default=0.002,
-        help="Minimum required held-out reward improvement for RL (default: 0.002)",
+        default=None,
+        help="Minimum required held-out reward improvement for RL (default: profile-specific)",
     )
     parser.add_argument(
         "--rl-loss-log",
@@ -438,6 +483,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     """Main execution function."""
     args = build_parser().parse_args(argv)
+
+    if args.gate_profile == "pilot_feasibility" and args.stage != "rl_pilot":
+        print("Error: --gate-profile pilot_feasibility requires --stage rl_pilot", file=sys.stderr)
+        return 2
 
     base_metrics_path = Path(args.base_metrics).resolve()
     pilot_metrics_path = Path(args.pilot_metrics).resolve()
@@ -531,6 +580,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     rl_loss_log_p = Path(args.rl_loss_log).resolve() if args.rl_loss_log else None
     output_p = Path(args.output).resolve()
 
+    if args.gate_profile == "pilot_feasibility" and output_p.name == "gate.json":
+        print(
+            "Error: pilot_feasibility must write an independent output such as pilot_gate.json",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.min_reward_improvement is None:
+        min_reward_improvement = (
+            float(GATE_PROFILES["pilot_feasibility"]["min_reward_improvement"])
+            if args.gate_profile == "pilot_feasibility"
+            else 0.002
+        )
+    else:
+        min_reward_improvement = args.min_reward_improvement
+
+    max_robust_regression = args.max_robust_regression
+    if max_robust_regression is None and args.gate_profile == "pilot_feasibility":
+        max_robust_regression = float(GATE_PROFILES["pilot_feasibility"]["max_robust_macro_regression"])
+
     gate_record = evaluate_gate(
         base_metrics=base_metrics,
         pilot_metrics=pilot_metrics,
@@ -540,14 +609,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_degraded_improvements=args.min_degraded_improvements,
         max_clean_regression=args.max_clean_regression,
         max_cumulative_clean_regression=args.max_cumulative_clean_regression,
-        max_robust_macro_regression=args.max_robust_regression,
+        max_robust_macro_regression=max_robust_regression,
         min_valid_output_rate=args.min_valid_output_rate,
         max_empty_output_rate=args.max_empty_rate,
         max_failure_increase=args.max_failure_increase,
         preference_accuracy=preference_accuracy,
         min_preference_accuracy=args.min_preference_accuracy,
         reward_improvement=reward_improvement,
-        min_reward_improvement=args.min_reward_improvement,
+        min_reward_improvement=min_reward_improvement,
         zero_variance_ratio=zero_variance_ratio,
         max_zero_variance_ratio=args.max_zero_variance_ratio,
         manifest_path=manifest_p,
@@ -563,6 +632,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         dpo_loss_log_path=dpo_loss_log_p,
         rl_val_manifest_path=rl_val_manifest_p,
         rl_loss_log_path=rl_loss_log_p,
+        gate_profile=args.gate_profile,
     )
 
     output_p.parent.mkdir(parents=True, exist_ok=True)
@@ -581,7 +651,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"failure_inc={gate_record['metrics']['failure_rate_increase']}"
     )
 
-    return 0 if gate_record["gate_status"] == "PASSED" else 1
+    return 0 if gate_record["gate_status"] in ("PASSED", "PILOT_PASSED") else 1
 
 
 if __name__ == "__main__":

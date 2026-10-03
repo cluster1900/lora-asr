@@ -37,7 +37,7 @@ FP16 base -> inference runner（待实现） -> base predictions
 
 ## 训练策略
 
-SFT、DPO、RL 各使用一个独立 stage adapter 和独立输出目录。阶段交接采用 `merge_and_unload()` 策略：SFT 从 base 开始，通过门禁后合并权重作为 DPO 基座；DPO 阶段通过门禁后合并作为 RL 基座；RL 最终产出合并模型与 release adapter。LoRA 目标层同时覆盖 LLM Decoder 与音频塔 Projection 层。SFT pilot 使用 5k robust + 1k English clean + 1k Chinese clean；DPO 和 RL 使用各自不重叠的 pool 并包含独立验证集，DPO clean 音频候选池扩大 5 倍以过滤平局，RL 采用 GRPO（$G=4$），具体 schema、配额和 reward 见 08 号合同。
+SFT、DPO、RL 各使用一个独立 stage adapter 和独立输出目录。阶段交接采用 `merge_and_unload()` 策略：SFT 从 base 开始，通过门禁后合并权重作为 DPO 基座；DPO 阶段通过门禁后合并作为 RL 基座。RL 只有整道 `gate.json` 为 `PASSED` 时，才把该检查点合并到该 run 自己的目录；未通过时发布底座保持 DPO Champion。LoRA 目标层同时覆盖 LLM Decoder 与音频塔 Projection 层。SFT pilot 使用 5k robust + 1k English clean + 1k Chinese clean；DPO 和 RL 使用各自不重叠的 pool 并包含独立验证集，DPO clean 音频候选池扩大 5 倍以过滤平局。现行 RL pilot 的第一轮是 1 条贪心解码加 3 条采样，未高出贪心 `0.02` 时再抽 8 条。具体 schema、配额和 reward 见 08 号合同与 `10_rl_v11_design.md`。
 
 ## 接口
 

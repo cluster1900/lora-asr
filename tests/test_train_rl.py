@@ -13,7 +13,9 @@ from train.train_rl import (
     audit_rollouts,
     build_epoch_sample_indices,
     build_parser,
+    compute_anchored_advantages,
     compute_group_advantages,
+    compute_grpo_group_loss,
     compute_sample_error_rate,
     compute_sequence_reward,
     get_environment_info,
@@ -88,6 +90,27 @@ class TestRLRewardAndAdvantage(unittest.TestCase):
         self.assertAlmostEqual(sum(advs), 0.0, places=5)
         self.assertGreater(advs[0], 0.0)
         self.assertLess(advs[3], 0.0)
+
+    def test_anchored_advantages_ignore_samples_that_do_not_beat_greedy(self) -> None:
+        # Index 0 is greedy. The samples are worse or only slightly better.
+        rewards = [0.90, 0.80, 0.91, 0.70]
+        advantages, status = compute_anchored_advantages(rewards, anchor_index=0, min_improvement=0.02)
+        self.assertEqual(status, "no_improvement")
+        self.assertEqual(advantages, [0.0, 0.0, 0.0, 0.0])
+
+    def test_anchored_advantages_scale_real_improvements(self) -> None:
+        rewards = [0.80, 0.70, 0.90, 0.84]
+        advantages, status = compute_anchored_advantages(rewards, anchor_index=0, min_improvement=0.02)
+        self.assertEqual(status, "update")
+        self.assertEqual(advantages[0], 0.0)
+        self.assertEqual(advantages[1], 0.0)
+        self.assertAlmostEqual(advantages[2], 1.0)
+        self.assertAlmostEqual(advantages[3], 0.4)
+
+    def test_anchored_advantages_mark_identical_rewards(self) -> None:
+        advantages, status = compute_anchored_advantages([0.9, 0.9, 0.9, 0.9], min_improvement=0.02)
+        self.assertEqual(status, "identical")
+        self.assertEqual(advantages, [0.0, 0.0, 0.0, 0.0])
 
 class TestRLDatasetAndParser(unittest.TestCase):
     """Test dataset loader and CLI argument parser."""
@@ -329,6 +352,65 @@ class TestGitCommitAndEnvironment(unittest.TestCase):
         self.assertIn("git_commit", info)
         self.assertIsInstance(info["git_commit"], str)
         self.assertTrue(len(info["git_commit"]) > 0)
+
+
+class TestSequenceGrpoLoss(unittest.TestCase):
+    """Sequence-level GRPO loss must not divide the policy gradient by length."""
+
+    def test_sequence_sum_scales_with_response_length(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+
+        policy = torch.tensor([[-0.25, -0.25, -0.25, -0.25]], requires_grad=True)
+        ref = policy.detach().clone()
+        mask = torch.ones_like(policy, dtype=torch.bool)
+        summed = compute_grpo_group_loss(
+            policy, ref, mask, [1.0], beta=0.0, zero_variance=False, reduction="sequence_sum"
+        )
+        averaged = compute_grpo_group_loss(
+            policy, ref, mask, [1.0], beta=0.0, zero_variance=False, reduction="token_mean"
+        )
+        # -A * sum(log p) = -1 * (-1.0) = 1.0; the token mean is 1.0 / 4.
+        self.assertAlmostEqual(summed["group_loss"].item(), 1.0, places=5)
+        self.assertAlmostEqual(averaged["group_loss"].item(), 0.25, places=5)
+        self.assertAlmostEqual(summed["raw_kl"].item(), 0.0, places=6)
+
+    def test_positive_advantage_raises_chosen_logprob(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+
+        policy = torch.tensor([[-1.0, -1.0], [-1.0, -1.0]], requires_grad=True)
+        ref = policy.detach().clone()
+        mask = torch.ones_like(policy, dtype=torch.bool)
+        loss = compute_grpo_group_loss(
+            policy, ref, mask, [1.0, -1.0], beta=0.0, zero_variance=False, reduction="sequence_sum"
+        )
+        loss["group_loss"].backward()
+        self.assertIsNotNone(policy.grad)
+        self.assertTrue(torch.all(policy.grad[0] < 0))
+        self.assertTrue(torch.all(policy.grad[1] > 0))
+
+    def test_zero_variance_group_has_zero_gradient(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+
+        policy = torch.tensor([[-0.4, -0.2], [-0.4, -0.2]], requires_grad=True)
+        ref = policy.detach().clone()
+        mask = torch.ones_like(policy, dtype=torch.bool)
+        loss = compute_grpo_group_loss(
+            policy, ref, mask, [0.0, 0.0], beta=0.04, zero_variance=True, reduction="sequence_sum"
+        )
+        self.assertEqual(loss["group_loss"].item(), 0.0)
+        self.assertEqual(loss["policy_loss"].item(), 0.0)
+        loss["group_loss"].backward()
+        self.assertIsNotNone(policy.grad)
+        self.assertTrue(torch.all(policy.grad == 0))
 
 
 class TestZeroVarianceLossComputation(unittest.TestCase):
