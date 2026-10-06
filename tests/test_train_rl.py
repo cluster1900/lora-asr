@@ -10,6 +10,7 @@ from pathlib import Path
 
 from train.train_rl import (
     RLAudioDataset,
+    assert_resume_checkpoint,
     audit_rollouts,
     build_epoch_sample_indices,
     build_parser,
@@ -20,7 +21,13 @@ from train.train_rl import (
     compute_sequence_reward,
     get_environment_info,
     get_git_commit,
+    is_terminal_train_status,
+    load_run_dose,
     merge_and_audit_rollouts,
+    resolve_sample_strategy,
+    scale_futility_streak,
+    select_resume_step,
+    truncate_resume_artifacts,
 )
 
 
@@ -226,6 +233,12 @@ class TestEpochSampleIndices(unittest.TestCase):
         self.assertEqual(len(idx_ep0), len(self.dataset))
         self.assertEqual(sorted(idx_ep0), list(range(len(self.dataset))))
 
+    def test_unknown_sampling_strategy_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported sample strategy"):
+            resolve_sample_strategy(None, "degraded_balanecd")
+        with self.assertRaisesRegex(ValueError, "unsupported sample strategy"):
+            build_epoch_sample_indices(self.dataset, strategy="degraded_balanecd")
+
 
 class TestRolloutAudit(unittest.TestCase):
     """Test rollout log auditing and multi-rank aggregation."""
@@ -252,6 +265,7 @@ class TestRolloutAudit(unittest.TestCase):
                     "reward": 1.0,
                     "kl_to_reference": 0.01,
                     "advantage": 0.0,
+                    "decode_mode": "greedy" if g_i == 0 else "sample",
                 }))
             rollouts_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -309,6 +323,7 @@ class TestRolloutAudit(unittest.TestCase):
                     "reward": 0.9,
                     "kl_to_reference": 0.02,
                     "advantage": 0.0,
+                    "decode_mode": "greedy" if g_i == 0 else "sample",
                 }) for g_i in range(4)]
                 r_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -317,6 +332,31 @@ class TestRolloutAudit(unittest.TestCase):
             self.assertEqual(res["total_rows"], 16)
             self.assertEqual(res["num_groups"], 4)
             self.assertEqual(res["ranks_represented"], [0, 1, 2, 3])
+
+    def test_audit_rollouts_group_without_greedy_row_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            rollouts_path = Path(tmp_dir) / "rollouts.jsonl"
+            lines = [json.dumps({
+                "sample_id": "s1",
+                "condition_group": "degraded",
+                "rank": 0,
+                "group_id": "s1:0:0:0",
+                "group_size": 4,
+                "rollout_rank": g_i,
+                "policy_checkpoint": "step_0",
+                "rollout_seed": 100 + g_i,
+                "prediction": f"pred_{g_i}",
+                "language": "en",
+                "reference_error_rate": 0.1,
+                "reward_components": {"asr": 0.9},
+                "reward": 0.9,
+                "kl_to_reference": 0.01,
+                "advantage": 0.0,
+                "decode_mode": "sample",
+            }) for g_i in range(4)]
+            rollouts_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "greedy rows"):
+                audit_rollouts(rollouts_path, world_size=1)
 
 
 class TestGitCommitAndEnvironment(unittest.TestCase):
@@ -433,6 +473,470 @@ class TestZeroVarianceLossComputation(unittest.TestCase):
         group_loss.backward()
         self.assertIsNotNone(policy_logps.grad)
         self.assertTrue(torch.all(policy_logps.grad == 0.0))
+
+
+def _write_jsonl(path: Path, rows: list) -> None:
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def _read_jsonl(path: Path) -> list:
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
+
+
+def _rollout_group(group_id: str, policy_step: int | None) -> list:
+    rows = []
+    for index, mode in ((0, "greedy"), (1, "sample")):
+        row = {
+            "sample_id": "utt",
+            "condition_group": "degraded",
+            "rank": 0,
+            "group_id": group_id,
+            "group_size": 2,
+            "rollout_rank": index,
+            "decode_mode": mode,
+            "rollout_seed": 7 + index,
+            "prediction": "hello" if mode == "greedy" else "hello there",
+            "language": "en",
+            "reference_error_rate": 0.0,
+            "reward_components": {"asr": 1.0},
+            "reward": 1.0 if mode == "greedy" else 0.8,
+            "kl_to_reference": 0.0,
+            "advantage": 0.0,
+        }
+        if policy_step is not None:
+            row["policy_checkpoint"] = f"step_{policy_step}"
+        rows.append(row)
+    return rows
+
+
+def _complete_checkpoint(root: Path, step: int, *, world_size: int = 1, skip: str = "") -> Path:
+    checkpoint = root / "checkpoints" / f"step_{step}"
+    checkpoint.mkdir(parents=True, exist_ok=True)
+    if skip != "adapter":
+        (checkpoint / "adapter").mkdir(exist_ok=True)
+    for name in ("optimizer.pt", "scheduler.pt", "training_state.json"):
+        if name == skip:
+            continue
+        (checkpoint / name).write_text("ok", encoding="utf-8")
+    for rank in range(world_size):
+        name = f"rng_state_rank_{rank}.pt"
+        if name == skip:
+            continue
+        (checkpoint / name).write_bytes(b"rng")
+    return checkpoint
+
+
+def _write_pipeline(root: Path, step: int, status: str) -> None:
+    (root / "pipeline_state.json").write_text(
+        json.dumps({"global_step": step, "status": status}),
+        encoding="utf-8",
+    )
+
+
+class TestResumeArtifactTruncate(unittest.TestCase):
+    """Uncommitted optimizer steps must not survive a chunk resume."""
+
+    def test_truncate_drops_uncommitted_rows_and_dose_is_not_doubled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            loss_rows = [
+                {
+                    "global_step": 0,
+                    "val_mean_reward": 0.8773,
+                    "val_eval_scope": "Full Held-out",
+                    "val_decode": "greedy",
+                },
+                {"global_step": 1, "reward_mass_in_step": 1.0, "winners_in_step": 1},
+                {"global_step": 2, "reward_mass_in_step": 5.0, "winners_in_step": 2},
+            ]
+            committed = _rollout_group("utt:0:0:1", 0)
+            replayed = _rollout_group("utt:1:0:1", 1)
+            rank_rows = committed + replayed + replayed
+            _write_jsonl(root / "loss_log.jsonl", loss_rows)
+            _write_jsonl(root / "rollouts_rank_0.jsonl", rank_rows)
+            _write_jsonl(root / "rollouts.jsonl", rank_rows)
+            self.assertAlmostEqual(load_run_dose(root / "loss_log.jsonl")["cumulative_reward_mass"], 6.0)
+            with self.assertRaisesRegex(ValueError, "expected 2"):
+                audit_rollouts(root / "rollouts_rank_0.jsonl")
+
+            summary = truncate_resume_artifacts(root, 1, 1)
+            self.assertEqual(summary["dropped_loss_rows"], 1)
+            self.assertEqual(summary["kept_loss_rows"], 2)
+            self.assertEqual(summary["dropped_rollout_rows"], 8)
+            self.assertEqual(summary["kept_rollout_rows"], 4)
+
+            kept_loss = _read_jsonl(root / "loss_log.jsonl")
+            self.assertEqual([row["global_step"] for row in kept_loss], [0, 1])
+            self.assertAlmostEqual(load_run_dose(root / "loss_log.jsonl")["cumulative_reward_mass"], 1.0)
+            for name in ("rollouts_rank_0.jsonl", "rollouts.jsonl"):
+                kept = _read_jsonl(root / name)
+                self.assertEqual([row["policy_checkpoint"] for row in kept], ["step_0", "step_0"])
+                audited = audit_rollouts(root / name)
+                self.assertEqual(audited["status"], "PASSED")
+                self.assertEqual(audited["num_groups"], 1)
+
+            again = truncate_resume_artifacts(root, 1, 1)
+            self.assertEqual(again["dropped_loss_rows"], 0)
+            self.assertEqual(again["dropped_rollout_rows"], 0)
+            self.assertEqual(_read_jsonl(root / "loss_log.jsonl"), kept_loss)
+
+    def test_start_step_zero_keeps_baseline_and_drops_policy_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_jsonl(
+                root / "loss_log.jsonl",
+                [
+                    {"global_step": 0, "val_mean_reward": 0.8773},
+                    {"global_step": 1, "reward_mass_in_step": 1.0},
+                ],
+            )
+            legacy = _rollout_group("legacy", None)
+            committed = _rollout_group("utt:0:0:1", 0)
+            _write_jsonl(root / "rollouts_rank_0.jsonl", legacy + committed)
+            summary = truncate_resume_artifacts(root, 0, 1)
+            self.assertEqual(summary["kept_loss_rows"], 1)
+            self.assertEqual(summary["dropped_loss_rows"], 1)
+            self.assertEqual(summary["dropped_rollout_rows"], 2)
+            kept = _read_jsonl(root / "rollouts_rank_0.jsonl")
+            self.assertEqual([row["group_id"] for row in kept], ["legacy", "legacy"])
+            self.assertTrue(all("policy_checkpoint" not in row for row in kept))
+
+    def test_null_policy_checkpoint_is_kept(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rows = _rollout_group("legacy", 0)
+            for row in rows:
+                row["policy_checkpoint"] = None
+            _write_jsonl(root / "rollouts_rank_0.jsonl", rows)
+            summary = truncate_resume_artifacts(root, 4, 1)
+            self.assertEqual(summary["dropped_rollout_rows"], 0)
+            self.assertEqual(summary["kept_rollout_rows"], 2)
+
+    def test_bad_loss_step_and_corrupt_json_are_rejected_without_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            loss = root / "loss_log.jsonl"
+            original = '{"global_step": true}\n'
+            loss.write_text(original, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "integer global_step"):
+                truncate_resume_artifacts(root, 1, 1)
+            self.assertEqual(loss.read_text(encoding="utf-8"), original)
+
+            original = '{"global_step": 1.5}\n'
+            loss.write_text(original, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "integer global_step"):
+                truncate_resume_artifacts(root, 1, 1)
+            self.assertEqual(loss.read_text(encoding="utf-8"), original)
+
+            original = "{not json}\n"
+            loss.write_text(original, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not JSON"):
+                truncate_resume_artifacts(root, 1, 1)
+            self.assertEqual(loss.read_text(encoding="utf-8"), original)
+
+    def test_rank_files_follow_the_launch_world_size(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_jsonl(root / "rollouts_rank_0.jsonl", _rollout_group("a", 3))
+            _write_jsonl(root / "rollouts_rank_1.jsonl", _rollout_group("b", 3))
+            summary = truncate_resume_artifacts(root, 3, 2)
+            self.assertEqual(summary["dropped_rollout_rows"], 4)
+            self.assertEqual(_read_jsonl(root / "rollouts_rank_0.jsonl"), [])
+            self.assertEqual(_read_jsonl(root / "rollouts_rank_1.jsonl"), [])
+
+
+class TestSelectResumeStep(unittest.TestCase):
+    def test_terminal_statuses(self) -> None:
+        for status in ("COMPLETED", "CANDIDATE", "BLOCKED_TRANSFER", "STOPPED_KL", "FAILED_ZERO_VARIANCE"):
+            with self.subTest(status=status):
+                self.assertTrue(is_terminal_train_status(status))
+        self.assertFalse(is_terminal_train_status("CHUNK_DONE"))
+        self.assertFalse(is_terminal_train_status(""))
+
+    def test_incomplete_pipeline_falls_back_to_the_last_complete_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _complete_checkpoint(root, 320)
+            _complete_checkpoint(root, 640, skip="rng_state_rank_0.pt")
+            _write_pipeline(root, 640, "CHUNK_DONE")
+            choice = select_resume_step(root, world_size=1)
+            self.assertEqual(choice["step"], 320)
+            self.assertFalse(choice["terminal"])
+            self.assertEqual(choice["status"], "CHUNK_DONE")
+
+    def test_complete_terminal_checkpoint_is_not_resumed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _complete_checkpoint(root, 320)
+            _complete_checkpoint(root, 640)
+            _write_pipeline(root, 320, "STOPPED_KL")
+            choice = select_resume_step(root, world_size=1)
+            self.assertEqual(choice["step"], 320)
+            self.assertTrue(choice["terminal"])
+            self.assertEqual(choice["status"], "STOPPED_KL")
+            self.assertEqual(choice["source"], "pipeline")
+
+    def test_newer_complete_checkpoint_beats_a_stale_chunk_done_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _complete_checkpoint(root, 320)
+            _complete_checkpoint(root, 640)
+            _write_pipeline(root, 320, "CHUNK_DONE")
+            choice = select_resume_step(root, world_size=1)
+            self.assertEqual(choice["step"], 640)
+            self.assertFalse(choice["terminal"])
+            self.assertEqual(choice["status"], "CHUNK_DONE")
+
+    def test_corrupt_pipeline_json_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _complete_checkpoint(root, 320)
+            (root / "pipeline_state.json").write_text("{", encoding="utf-8")
+            choice = select_resume_step(root, world_size=1)
+            self.assertEqual(choice["step"], 320)
+            self.assertFalse(choice["terminal"])
+
+    def test_incomplete_stop_falls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _complete_checkpoint(root, 320)
+            _complete_checkpoint(root, 640, skip="rng_state_rank_0.pt")
+            _write_pipeline(root, 640, "STOPPED_KL")
+            choice = select_resume_step(root, world_size=1)
+            self.assertEqual(choice["step"], 320)
+            self.assertFalse(choice["terminal"])
+
+    def test_terminal_checkpoint_metadata_is_safe_without_pipeline_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint = _complete_checkpoint(root, 320)
+            (checkpoint / "training_state.json").write_text(
+                json.dumps({"global_step": 320, "status": "STOPPED_KL"}),
+                encoding="utf-8",
+            )
+            choice = select_resume_step(root, world_size=1)
+            self.assertEqual(choice["step"], 320)
+            self.assertTrue(choice["terminal"])
+            self.assertEqual(choice["status"], "STOPPED_KL")
+            self.assertEqual(choice["source"], "checkpoint")
+
+
+class TestAssertResumeCheckpoint(unittest.TestCase):
+    def _state(self, **extra: object) -> dict:
+        state = {
+            "manifest_sha256": "abc",
+            "world_size": 1,
+            "model_revision": "rev",
+            "scheduler": "constant",
+            "global_step": 320,
+        }
+        state.update(extra)
+        return state
+
+    def _write(self, root: Path, state: dict, *, skip: str = "") -> Path:
+        checkpoint = _complete_checkpoint(root, 320, skip=skip)
+        if skip != "training_state.json":
+            (checkpoint / "training_state.json").write_text(
+                json.dumps(state),
+                encoding="utf-8",
+            )
+        return checkpoint
+
+    def _assert(self, checkpoint: Path, **overrides: object):
+        kwargs = dict(
+            manifest_sha256="abc",
+            world_size=1,
+            model_revision="rev",
+            scheduler_name="constant",
+            require_scheduler=True,
+            val_manifest_sha256="val",
+            wer_manifest_sha256="wer",
+            seed=7,
+            gradient_accumulation_steps=4,
+        )
+        kwargs.update(overrides)
+        return assert_resume_checkpoint(checkpoint, **kwargs)
+
+    def test_matching_checkpoint_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = self._write(
+                Path(tmp),
+                self._state(
+                    seed=7,
+                    gradient_accumulation_steps=4,
+                    val_manifest_sha256="val",
+                    wer_manifest_sha256="wer",
+                ),
+            )
+            state = self._assert(checkpoint)
+            self.assertEqual(state["global_step"], 320)
+
+    def test_old_checkpoint_without_new_fields_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = self._write(Path(tmp), self._state())
+            state = self._assert(checkpoint)
+            self.assertNotIn("seed", state)
+
+    def test_identity_mismatches_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint = self._write(root, self._state())
+            with self.assertRaisesRegex(ValueError, "manifest sha256"):
+                self._assert(checkpoint, manifest_sha256="other")
+            with self.assertRaisesRegex(ValueError, "world_size"):
+                self._assert(checkpoint, world_size=4)
+            with self.assertRaisesRegex(ValueError, "model_revision"):
+                self._assert(checkpoint, model_revision="other-rev")
+
+    def test_missing_scheduler_file_is_rejected_when_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = self._write(Path(tmp), self._state(), skip="scheduler.pt")
+            with self.assertRaisesRegex(ValueError, "scheduler.pt"):
+                self._assert(checkpoint)
+
+    def test_scheduler_null_still_requires_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            present = self._write(root, self._state(scheduler=None))
+            self._assert(present)
+            missing = self._write(root / "missing", self._state(scheduler=None), skip="scheduler.pt")
+            with self.assertRaisesRegex(ValueError, "scheduler.pt"):
+                self._assert(missing)
+
+    def test_scheduler_name_mismatch_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = self._write(Path(tmp), self._state(scheduler="linear"))
+            with self.assertRaisesRegex(ValueError, "scheduler"):
+                self._assert(checkpoint)
+
+    def test_present_optional_fields_must_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint = self._write(root, self._state(seed=9))
+            with self.assertRaisesRegex(ValueError, "seed"):
+                self._assert(checkpoint)
+            (checkpoint / "training_state.json").write_text(
+                json.dumps(self._state(seed=7, gradient_accumulation_steps=8)),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "gradient_accumulation_steps"):
+                self._assert(checkpoint)
+            (checkpoint / "training_state.json").write_text(
+                json.dumps(
+                    self._state(
+                        seed=7,
+                        gradient_accumulation_steps=4,
+                        val_manifest_sha256="old-val",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "validation manifest"):
+                self._assert(checkpoint)
+
+    def test_optional_scheduler_file_can_be_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = self._write(Path(tmp), self._state(scheduler=None), skip="scheduler.pt")
+            state = self._assert(checkpoint, require_scheduler=False)
+            self.assertIsNone(state["scheduler"])
+
+
+class TestScaleFutilityStreak(unittest.TestCase):
+    def _records(self) -> list:
+        return [
+            {
+                "global_step": 0,
+                "val_mean_reward": 0.8773,
+                "val_eval_scope": "Full Held-out",
+                "val_decode": "greedy",
+            },
+            {
+                "global_step": 320,
+                "val_mean_reward": 0.8770,
+                "val_eval_scope": "Full Held-out",
+                "val_decode": "greedy",
+            },
+        ]
+
+    def test_only_full_evals_at_or_after_640_count_and_a_gain_resets(self) -> None:
+        records = self._records()
+        self.assertEqual(scale_futility_streak(records, profile="scale"), 0)
+        self.assertEqual(scale_futility_streak(records, profile="pilot"), 0)
+        records.append(
+            {
+                "global_step": 640,
+                "val_mean_reward": 0.8771,
+                "val_eval_scope": "Full Held-out",
+                "val_decode": "greedy",
+            }
+        )
+        self.assertEqual(scale_futility_streak(records, profile="scale"), 1)
+        records.append(
+            {
+                "global_step": 960,
+                "val_mean_reward": 0.8770,
+                "val_eval_scope": "Full Held-out",
+                "val_decode": "greedy",
+            }
+        )
+        self.assertEqual(scale_futility_streak(records, profile="scale"), 2)
+        records.append(
+            {
+                "global_step": 1280,
+                "val_mean_reward": 0.8780,
+                "val_eval_scope": "Full Held-out",
+                "val_decode": "greedy",
+            }
+        )
+        self.assertEqual(scale_futility_streak(records, profile="scale"), 0)
+
+    def test_last_row_for_a_step_wins(self) -> None:
+        records = self._records() + [
+            {
+                "global_step": 640,
+                "val_mean_reward": 0.8700,
+                "val_eval_scope": "Full Held-out",
+                "val_decode": "greedy",
+            },
+            {
+                "global_step": 640,
+                "val_mean_reward": 0.8780,
+                "val_eval_scope": "Full Held-out",
+                "val_decode": "greedy",
+            },
+        ]
+        self.assertEqual(scale_futility_streak(records, profile="scale"), 0)
+
+
+class TestResumeWiring(unittest.TestCase):
+    def test_truncate_and_pipeline_write_happen_in_the_safe_order(self) -> None:
+        trainer = Path(__file__).resolve().parents[1].joinpath("train", "train_rl.py").read_text(
+            encoding="utf-8"
+        )
+        truncate_call = trainer.index("truncate_summary = truncate_resume_artifacts(")
+        dist_init = trainer.index("dist.init_process_group")
+        self.assertLess(trainer.index("resume_state = assert_resume_checkpoint("), truncate_call)
+        self.assertLess(truncate_call, dist_init)
+        self.assertLess(trainer.index("torch.save(rng_dict"), trainer.index("write_pipeline(training_process_status"))
+        self.assertIn(
+            'if not probe_only and resume_from_checkpoint:\n'
+            '        try:\n            truncate_summary = truncate_resume_artifacts(',
+            trainer,
+        )
+        self.assertLess(
+            trainer.index("resume LoRA target hash"),
+            trainer.index("ddp_model = DDP("),
+        )
+        self.assertIn('os.replace(state_tmp, ckpt_dir / "training_state.json")', trainer)
+        self.assertIn('"status": training_process_status(global_step, horizon, stop_status)', trainer)
+        self.assertIn("output directory already contains RL training artifacts", trainer)
 
 
 if __name__ == "__main__":

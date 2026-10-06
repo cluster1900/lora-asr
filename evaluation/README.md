@@ -15,6 +15,7 @@ WER/CER，而是通过 `by_language` 和 language macro 汇总。
 | `eval_wer.py` | 评测入口。执行文本归一化、WER/CER、失败输出检测、scenario 聚合和固定 32-cell Bench 聚合。 |
 | `verify_gate.py` | 门禁判定与机器可读 gate.json 生成入口。对比 Base 与当前阶段模型评估指标，校验退化场景改善数、Clean 回退、有效输出率和失败率变化，记录输入 manifest 与预测文件 SHA-256 哈希。 |
 | `eval_checkpoint_series.py` | 检查点序列自动化横向评测工具。遍历指定 step 检查点（如 step 100/150/200/250/300），批量运行推理与 WER/CER 评估，输出横向对比矩阵与 Pareto 最优检查点推荐。 |
+| `paired_significance.py` | 配对显著性工具。读取两份 `scored.jsonl`（基线、候选），要求每行有 `sample_id`、`error_rate`、`prediction_normalized`、`scenario`、`language`、`condition_group`，并按 `sample_id` 内连接且逐样本元数据一致；输出逐样本 `error_rate` 差（候选减基线，负为改善）的均值与固定 seed 的 bootstrap 95% 区间、预测文本变化数、变好/变差计数和双侧精确符号检验 p 值，并按 `condition_group`、`language\|condition_group` 与 `language\|scenario` 分组。`--baseline`/`--candidate` 可各给多个文件（按 `sample_id` 合并，跨文件重复报错）；`--gate` 输出 v31 统计验收段（degraded 显著改善且 clean 非劣）。只读，不加载模型。 |
 | `README.md` | 说明本目录边界、文件职责、输入输出和维护要求。 |
 
 `__pycache__/` 是 Python 自动生成的本地缓存，已被 Git 忽略，不是项目产物，可随时删除。
@@ -123,9 +124,36 @@ python evaluation/eval_checkpoint_series.py \
   --output-dir /data/mega-asr/runs/sft_pilot_controlled/eval_series
 ```
 
-对应测试：`tests/test_eval_wer.py`、`tests/test_verify_gate.py`、`tests/test_eval_checkpoint_series.py`。
+```bash
+# 配对显著性：比较两份 eval_wer.py 产出的 scored.jsonl（退出码 2 表示输入不匹配或损坏）
+python evaluation/paired_significance.py \
+  --baseline /data/mega-asr/runs/dpo_pilot_v2/predictions_eval/scored.jsonl \
+  --candidate /data/mega-asr/runs/rl_pilot_v30a/predictions_step_4_eval/scored.jsonl \
+  --output /data/mega-asr/runs/rl_pilot_v30a/paired_significance_step_4.json
+```
+
+输出 `verdict` 为 `significant_improvement`（区间上界 < 0）、`significant_regression`（下界 > 0）或 `indistinguishable_from_noise`。
+
+```bash
+# v31 判定（docs/qwen3-asr/29_rl_v31_scale_design.md）：每边可给多个 scored.jsonl，按 sample_id 合并
+# （跨文件重复 id 退出 2）；--gate 写入 gate 段：degraded 区间上界 < 0 且 clean 区间上界 <= --clean-margin（默认 0.002）
+python evaluation/paired_significance.py \
+  --baseline /data/mega-asr/runs/dpo_pilot_v2/predictions_eval/scored.jsonl \
+             /data/mega-asr/runs/eval_dpo_champion_verdict_extra/predictions_eval/scored.jsonl \
+  --candidate /data/mega-asr/runs/rl_scale_v31/predictions_step_64_eval/scored.jsonl \
+              /data/mega-asr/runs/rl_scale_v31/predictions_step_64_extra_eval/scored.jsonl \
+  --gate --output /data/mega-asr/runs/rl_scale_v31/paired_verdict_step_64.json
+```
+
+报告字段：`overall`、`by_condition_group`、`by_language_condition`（如 `en|degraded`）、`by_language_scenario`、`inputs`，以及 `--gate` 时的 `gate`（`status`、`failures`、`clean_margin`）。分语言结果只报告，不是门禁条件。
+
+对应测试：`tests/test_eval_wer.py`、`tests/test_verify_gate.py`、`tests/test_eval_checkpoint_series.py`、`tests/test_paired_significance.py`。
 
 ## 维护要求
 
 新增、重命名或删除本目录文件时，必须同步更新“文件清单”。修改指标定义、输入字段、输出产物或
 CLI 参数时，必须在同一提交更新本 README 和对应测试；不得把中英文错误率合并成一个 WER/CER。
+
+## 2026-10-04 当前 v31 修订
+
+`paired_significance.py` 新增 `--tail-gate`（须同时 --gate）与 `--require-max-new-tokens`：要求每行合同一致、错误率有限且非负；按语言×场景报告输出异常计数，任一严重异常（错误率 ≥2 且 too_long/hallucination_like）相对 DPO 恶化即失败。保留原始分数，不移除离群样本。

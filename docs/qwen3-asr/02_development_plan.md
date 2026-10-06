@@ -62,3 +62,11 @@ revision、manifest hash、随机种子、dtype、attention、world size 和 gat
 新功能必须直接延伸上述四个入口。训练器不提供跳过 pilot gate 或命令行注入旧 adapter 的入口；
 恢复只读取当前 output directory 的 pipeline state 和 checkpoint。需要第二套入口时，先证明现有
 接口无法表达需求并更新本文件。
+
+## 2026-10-04 当前 v31 修订
+
+当前 v31 解码修复在 `inference/decoding.py` 统一预算，训练/推理显式透传并记录合同，checkpoint 恢复和预测续跑拒绝合同不一致；启动器自动执行 5+1 步 smoke 后继续。接口、范围、影响与完成条件见 `29_rl_v31_scale_design.md` 的 2026-10-04 修订。
+
+## 2026-10-05 当前 v31 失败归因修订
+
+当前 v31 运行已确认训练池是非严格子集（4,165/16,000 degraded），并在 Step 32 因一次 `−0.0002` held-out 增益触发 `BLOCKED_TRANSFER`。同一方案内继续扩大量级：正式启动器拒绝低于 160,000 条 degraded、16-cell（含 `mixed`）覆盖不足或单 cell 超过 20% 的 manifest；训练 horizon 调整为 2,560 步、保存/评估每 320 步；scale 无效截停从 Step 640 起需要连续两次负增益；正式训练按 320 步 chunk 执行并支持显式 resume。修改前后都必须先通过配置契约、数据隔离、停止规则和目录 README 合同测试；本次不启动 V100 训练。

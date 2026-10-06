@@ -472,6 +472,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target step number in rl_loss_log to extract held-out validation reward for (default: last step)",
     )
     parser.add_argument(
+        "--held-out-decode",
+        choices=("greedy", "sample"),
+        default="greedy",
+        help="Decode mode to select from RL held-out records; legacy records without metadata are accepted for sample.",
+    )
+    parser.add_argument(
         "--max-zero-variance-ratio",
         type=float,
         default=0.75,
@@ -544,7 +550,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                             if "val_mean_reward" in rec and rec["val_mean_reward"] is not None:
                                 scope = rec.get("val_eval_scope", "")
                                 step_v = rec.get("global_step", rec.get("step"))
-                                if scope == "Full Held-out" and step_v is not None:
+                                decode_mode = rec.get("val_decode")
+                                if args.held_out_decode == "sample":
+                                    # v6-v9 logs predate val_decode; their Full Held-out rows are sample-mode.
+                                    decode_matches = decode_mode in (None, "sample")
+                                else:
+                                    decode_matches = decode_mode == "greedy"
+                                if scope == "Full Held-out" and step_v is not None and decode_matches:
                                     val_records[int(step_v)] = rec
                             # Training record with zero-variance ratio
                             if "zero_variance_ratio" in rec and rec["zero_variance_ratio"] is not None:
@@ -634,6 +646,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rl_loss_log_path=rl_loss_log_p,
         gate_profile=args.gate_profile,
     )
+    gate_record["held_out_decode"] = args.held_out_decode
 
     output_p.parent.mkdir(parents=True, exist_ok=True)
     with output_p.open("w", encoding="utf-8") as f:

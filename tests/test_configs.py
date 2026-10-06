@@ -59,7 +59,7 @@ class ConfigContractTest(unittest.TestCase):
         self.assertEqual(roles["dpo_val_pool"]["target_pairs"]["english_clean"], 200)
         self.assertEqual(roles["dpo_val_pool"]["target_pairs"]["chinese_clean"], 200)
 
-        self.assertEqual(roles["rl_train_pool"]["quotas"]["robust_degraded"], 16000)
+        self.assertEqual(roles["rl_train_pool"]["quotas"]["robust_degraded"], 160000)
         self.assertEqual(roles["rl_train_pool"]["quotas"]["english_clean"], 1000)
         self.assertEqual(roles["rl_train_pool"]["quotas"]["chinese_clean"], 1000)
 

@@ -100,7 +100,7 @@ roles:
   rl_train_pool:
     purpose: rl_rollout_train
     quotas:
-      robust_degraded: 16000
+      robust_degraded: 160000
       english_clean: 1000
       chinese_clean: 1000
     sources:

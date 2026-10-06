@@ -11,13 +11,13 @@
 | `__init__.py` | 包声明与初始化文件。 |
 | `train_sft.py` | SFT 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu` 调试模式；注入 199 个 Linear LoRA 目标（Projection 3 + Decoder 196）；实现标签掩码 Cross-Entropy 损失与分层均衡 validation loss 评估；支持 10+2 检查点保存与断点恢复（optimizer、scheduler、RNG、training_state）；提供 `--export-merged` 执行 `merge_and_unload()` 权重导出。 |
 | `train_dpo.py` | DPO 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu` 调试模式；继承 199 个 Linear LoRA 目标；基于预计算的参考对数概率（或在线计算）实现 Bradley-Terry 偏好损失函数，记录隐式奖励差与 preference accuracy；提供全状态断点保存/恢复与 `--export-merged` 权重导出。 |
-| `train_rl.py` | RL (GRPO) 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu`。Policy 与冻结 reference 都从 DPO 合并模型注入 LoRA。缺省 199 个 Linear；服务器副本在 `lora.train_audio_projections: false` 时经 `filter_lora_targets` 去掉 3 个音频投影，剩下 196 个。v10/v11 第一轮是 1 条贪心加 3 条 `temperature=1.0`、`top_p=0.95`、`top_k=50` 采样；未高出贪心 0.02 时再抽 8 条，反向长度固定为 2。优势以贪心为锚。服务器副本读取 `grpo.advantage.mode`：`unit` 为 1，`raw_gap` 为原始奖励差，`fixed` 为 `fixed_value`，`capped_gap` 为不超过 `cap` 的原始奖励差。配置里有 `local_max_relative` 时，过远的获胜样本不进反向。`train.apply_learning_rate_on_resume: true` 时，服务器副本在加载 `scheduler.pt` 之后调用 `apply_configured_learning_rate`，把学习率写成 YAML 的值。`grpo.policy_token_mask: changes_only` 时，服务器副本只在获胜句相对贪心句的替换和插入 token 上累积策略梯度，KL 仍用整句；缺省 `all` 时策略项覆盖全部 response token。掩码为空或全是 0 时，服务器副本在 `changes_only` 的更新上直接报错。`grpo.policy_token_mask: signed_edits` 时，服务器副本调用 `signed_edit_loss_args`：序列优势是 `(-gap, gap)`，贪心掩码只留删除，获胜掩码只留替换和插入；token 相同则这次不更新。本地这份文件还没有这段调用，不要覆盖服务器副本。KL 为 Schulman K3，β=0.04，策略项为序列求和。`sample_strategy: degraded` 时 clean 行不进优化器。服务器副本在 `sample_strategy: degraded_skip_regressed` 时调用 `degraded_skip_regressed_indices`，再去掉场景 `noise` 和 `recording`。`--sample-strategy` 的可选值包含这个名字。本地这份文件还没有这次调用，不要覆盖服务器副本。Rollout 按组审计。Step 0 写入贪心 Full Held-out。只有 `gate.json` 为 PASSED 时才 `--export-merged` 到该 run 自己的目录。本地这份文件还没有服务器上的锚定选择逻辑，不要覆盖服务器副本。`grpo.include_reference_candidate: true` 时，服务器副本在 `local_max_relative` 有值的选择里调用 `append_reference_candidate`，再交给 `local_winner_index`。缺省 false 时不追加参考文本。本地这份文件还没有这次调用，不要覆盖服务器副本。 |
+| `train_rl.py` | RL (GRPO) 阶段训练 Runner：支持单机 4 卡 DDP 与 `--single-gpu`。Policy 与冻结 reference 都从 DPO 合并模型注入 LoRA。缺省 199 个 Linear；本文件在 `lora.train_audio_projections: false` 时经 `filter_lora_targets` 去掉 3 个音频投影，剩下 196 个。v10/v11 第一轮是 1 条贪心加 3 条 `temperature=1.0`、`top_p=0.95`、`top_k=50` 采样；未高出贪心 0.02 时再抽 8 条，反向长度固定为 2。优势以贪心为锚。本文件读取 `grpo.advantage.mode`：`unit` 为 1，`raw_gap` 为原始奖励差，`fixed` 为 `fixed_value`，`capped_gap` 为不超过 `cap` 的原始奖励差。配置里有 `local_max_relative` 时，过远的获胜样本不进反向。`train.apply_learning_rate_on_resume: true` 时，本文件在加载 `scheduler.pt` 之后调用 `apply_configured_learning_rate`，把学习率写成 YAML 的值。`grpo.policy_token_mask: changes_only` 时，本文件只在获胜句相对贪心句的替换和插入 token 上累积策略梯度，KL 仍用整句；缺省 `all` 时策略项覆盖全部 response token。掩码为空或全是 0 时，本文件在 `changes_only` 的更新上直接报错。`grpo.policy_token_mask: signed_edits` 时，本文件调用 `signed_edit_loss_args`：序列优势是 `(-gap, gap)`，贪心掩码只留删除，获胜掩码只留替换和插入；token 相同则这次不更新。KL 为 Schulman K3，β=0.04，策略项为序列求和。`sample_strategy: degraded` 时 clean 行不进优化器；新增 `degraded_balanced` 时按 `train.sample_strategy_options` 对 14 个 language×scenario cell 做固定 seed 的有界重复采样，并在日志写采样摘要。本文件在 `sample_strategy: degraded_skip_regressed` 时调用 `degraded_skip_regressed_indices`，再去掉场景 `noise` 和 `recording`。`--sample-strategy` 的可选值包含这些名字。Rollout 按组审计。Step 0 写入贪心 Full Held-out。只有 `gate.json` 为 PASSED 时才 `--export-merged` 到该 run 自己的目录。`grpo.include_reference_candidate: true` 时，本文件在 `local_max_relative` 有值的选择里调用 `append_reference_candidate`，再交给 `local_winner_index`。缺省 false 时不追加参考文本。 2026-10-03 起本文件以 V100 训练器为基线（仓库是唯一来源，服务器应从仓库更新），在其上叠加 `degraded_balanced` 补丁；`train.sample_strategy_options` 含未知键时直接报错。v30A 配置的场景权重为等权，见 `docs/qwen3-asr/28_rl_v30_trainer_sync_and_stats.md`。 停止/探针阈值集中在 `STOP_PROFILES`：`pilot`（`STOP_CONTRACT` 是它的别名，`max_raw_kl=5e-4` 与 Step 4/8/12 搜索/迁移截停，v10–v30 行为不变）和 `scale`（v31：`max_raw_kl=2e-2`，无 Step 4/8/12 截停，Step ≥ 64 且连续两次贪心增益 < 0 时 `BLOCKED_TRANSFER`；见 `docs/qwen3-asr/29_rl_v31_scale_design.md`）。`train.stop_profile` 选择档位（缺省 `pilot`），训练循环与 `plan_driver_action`/`driver_action_from_records` 都按该档调用 `decide_rl_stop`，启动日志打印档名和阈值。`TRAIN_SEQUENCES=2`；启动时 `check_config_contract` 比对 YAML 中的同名副本，不一致、未知档名或出现其他档专有的阈值键即报错，不会再被静默忽略。 |
 | `rl_resume_lr.py` | 恢复检查点之后，把优化器参数组和调度器 `base_lrs` 写成配置里的学习率。不改 `last_epoch`。非正学习率直接拒绝。 |
 | `rl_lora_targets.py` | 按 `train_audio_projections` 过滤 LoRA 模块名。false 去掉以 `audio_tower.` 开头的名字，true 原样保留。 |
 | `rl_pair_advantage.py` | 长度 2 的获胜优势：`unit`、`raw_gap`、`fixed`、`capped_gap`。非法模式、越界的固定值或越界的上限直接拒绝。 |
 | `rl_local_winner.py` | 局部改正过滤。英文按词、中文按字。编辑距离超过 `max(2, floor(0.35 × 较长一边))` 的样本不训练。平局保留较小下标。 |
 | `rl_policy_mask.py` | 长度 2 的策略梯度掩码。`changed_token_mask` 把与贪心 token 对齐的位置标成 0，替换和插入标成 1。`signed_edit_update` 在这些获胜 token 上放 `raw_gap`，在被删除的贪心 token 上放 `-raw_gap`；token 完全相同则 `skip`。只有删除时仍是 `update`，不抛错。`signed_edit_loss_args` 把这个结果收成序列优势 `(-gap, gap)` 和两条掩码。`scatter_keep` 把掩码放到移位后的 response label 上。KL 不在这里被掩掉。 |
-| `rl_sample_strategy.py` | v26 的选行。`degraded_skip_regressed_indices` 保留退化行，去掉场景名 `noise` 和 `recording`，返回清单顺序的下标。一行都没有时抛错。打乱仍由训练器按种子做。 |
+| `rl_sample_strategy.py` | RL 选行策略。`degraded_skip_regressed_indices` 保留退化行并去掉 `noise`/`recording`；`degraded_balanced_indices` 按语言和场景配额生成 virtual epoch，单个原始样本最多重复 4 次；`validate_degraded_manifest` 检查正式 RL pool 的最低 degraded 行数、16 个 language×scenario cell（含 `mixed`）覆盖和可选单 cell 占比上限（v31 scale 为 160,000/640/20%）。所有策略都要求确定性 seed，非法 cell 或空选择直接抛错。 |
 | `rl_reference_candidate.py` | v27 的候选追加。`append_reference_candidate` 在没有规范化相同的候选时，把参考文本和调用方给的奖励加到末尾。空参考文本不追加。是否训练仍由 `local_winner_index` 决定。 |
 | `rl_v14_decision.py` | v14/v15 门禁写成之后的动作：`passed`、`continue`、`switch`、`stop`。不改训练器的停止表。`BLOCKED_TRANSFER` 且贪心增量仍 ≥ 0、调用方允许切换时返回 `switch`。 |
 | `rl_v16_decision.py` | v16 门禁写成之后的动作：`passed`、`continue`、`stop`。Step 8 起 Robust 仍大于 0 就停止。`BLOCKED_TRANSFER` 在奖励非负且 Robust 已不高于 DPO 时返回 `continue`。 |
@@ -26,6 +26,8 @@
 | `README.md` | 说明当前目录职责、文件清单、主要输入输出、CLI 参数与维护要求。 |
 
 ## 使用入口与 CLI 参数
+
+v31 scale 使用 2,560 步、每 320 步保存/评估；稳定性补丁使用 `learning_rate=2e-6`、`warmup_steps=64`、`kl_regularization.beta=0.08`；Step 640 起的 `BLOCKED_TRANSFER` 需要连续两次负 held-out 增益。正式启动器在构造 optimizer 前检查 RL pool 的最低 degraded 行数、含 `mixed` 的 16-cell 覆盖、单 cell 占比、六个角色的身份零交集和文件系统容量，`validate_degraded_manifest` 的检查结果写入 run 的 `source.json`。训练按 320 步 chunk 执行。`RL_RESUME=1` 只从完整 checkpoint 恢复：adapter、optimizer、scheduler、训练状态和四卡 RNG 都在；恢复前裁掉该步之后的损失行和 rollout 行，并拒绝 manifest sha、world size 或 scheduler 不一致的检查点。`pipeline_state.json` 在这些文件落盘之后才写。`pipeline_state.json` 和 `training_state.json` 都先写临时文件再替换，避免半截 JSON 被当成完整检查点。旧 pilot 配置继续使用原有停止档。
 
 ```bash
 # 1. 运行单机 4 卡 DDP SFT Pilot 训练（7,000 条子集，指定 --allow-subset）
@@ -110,7 +112,21 @@ torchrun --standalone --nproc_per_node=4 train/train_rl.py \
     --sample-strategy degraded \
     --no-export-merged-on-finish
 
-# 10. 只有该步 gate.json 为 PASSED 时，才把合并权重写到这一 run 自己的目录。
+# 10. v30A 可行性 pilot：只改 degraded 场景采样，固定 4 steps，不自动导出。
+# 显卡空闲后先完成本地 sampler smoke，再使用独立 pilot_feasibility gate 评测。
+torchrun --standalone --nproc_per_node=4 train/train_rl.py \
+    --manifest /data/mega-asr/manifests/pilot_rl.jsonl \
+    --val-manifest /data/mega-asr/manifests/rl_val_pool.jsonl \
+    --wer-manifest /data/mega-asr/manifests/validation.jsonl \
+    --config configs/train/qwen3_asr_rl_v30a.yaml \
+    --output-dir /data/mega-asr/runs/rl_pilot_v30a \
+    --sample-strategy degraded_balanced \
+    --max-steps 4 \
+    --save-steps 4 \
+    --eval-steps 4 \
+    --no-export-merged-on-finish
+
+# 11. 只有该步 gate.json 为 PASSED 时，才把合并权重写到这一 run 自己的目录。
 # 把 step_<N> 换成那份 PASSED gate 的步数。held-out reward 最高本身不构成导出条件。
 # 不写入 /data/mega-asr/runs/dpo_pilot_v2/merged_base。
 python3 train/train_rl.py \
@@ -139,3 +155,7 @@ python3 train/train_rl.py \
 2. 训练配置、随机种子与输入 manifest 散列必须随 run 落盘；
 3. 断点恢复必须保证 global step、优化器与调度器状态无缝连续；
 4. 提交前必须运行单元测试与目录 README 合同测试。
+
+## 2026-10-04 当前 v31 修订
+
+当前 v31 使用顶层 `decoding.max_new_tokens: 512`，与正式推理一致；未声明的历史训练仍为 128。rollout/held-out/probe 共享预算，日志和 checkpoint 保存合同，跨预算恢复被拒绝；配置随 checkpoint 保存。

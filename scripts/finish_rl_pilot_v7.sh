@@ -166,6 +166,7 @@ eval_step() {
     --rl-loss-log "${RUN}/loss_log.jsonl" \
     --rl-step "$step" \
     --stage rl_pilot \
+    --held-out-decode sample \
     --max-robust-regression 0.0 \
     --max-empty-rate 0.002 \
     --output "$gate"

@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import sys
 import tempfile
+import shutil
 import unittest
 import wave
 from pathlib import Path
@@ -66,6 +67,7 @@ class StageParquetTest(unittest.TestCase):
         self.assertEqual(lang, "en")
         self.assertEqual(scen, "far_field")
 
+    @unittest.skipIf(shutil.which("ffmpeg") is None, "ffmpeg is not installed")
     def test_transcode_bytes_to_wav(self) -> None:
         raw_bytes = create_raw_wav_bytes(44100, 2, 2, 1.2)
         out_wav = self.root / "transcoded_sample.wav"

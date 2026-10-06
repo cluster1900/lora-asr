@@ -64,6 +64,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Attention implementation (default: eager).",
     )
     parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=512,
+        help="Maximum generated tokens passed to official Qwen3-ASR (default: 512).",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=1,
@@ -175,6 +181,7 @@ def run_parallel_inference(args: argparse.Namespace) -> Path:
                 "--dtype", str(args.dtype),
                 "--attention", str(args.attention),
                 "--batch-size", str(args.batch_size),
+                "--max-new-tokens", str(args.max_new_tokens),
             ]
             if args.adapter_dir:
                 cmd.extend(["--adapter-dir", str(args.adapter_dir)])

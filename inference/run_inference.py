@@ -18,6 +18,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from inference.decoding import configure_greedy_model, decoding_contract, positive_token_budget
+
 LANGUAGE_MAP: Dict[str, str] = {
     "en": "English",
     "zh": "Chinese",
@@ -92,6 +94,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Attention implementation (default: eager for V100).",
     )
     parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=512,
+        help="Maximum generated tokens; must match the training/evaluation contract (default: 512).",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=1,
@@ -140,6 +148,7 @@ def load_model(
     device: str = "cuda:0",
     dtype: str = "float16",
     attention: str = "eager",
+    max_new_tokens: int = 512,
 ) -> Any:
     """Load Qwen3-ASR model and optionally attach PEFT adapter."""
     if not HAVE_QWEN_ASR:
@@ -148,18 +157,21 @@ def load_model(
         raise RuntimeError("PyTorch is not installed.")
 
     torch_dtype = get_torch_dtype(dtype)
+    max_new_tokens = positive_token_budget(max_new_tokens)
 
     # Qwen3ASRModel.from_pretrained kwargs
     load_kwargs: Dict[str, Any] = {
         "dtype": torch_dtype,
         "device_map": device,
         "attn_implementation": attention,
+        "max_new_tokens": max_new_tokens,
     }
     if revision:
         load_kwargs["revision"] = revision
 
     print(f"Loading Qwen3-ASR base model from {model_id} (revision={revision}, dtype={dtype}, attention={attention}, device={device})...")
     model = Qwen3ASRModel.from_pretrained(model_id, **load_kwargs)
+    configure_greedy_model(model, max_new_tokens)
 
     if adapter_dir:
         print(f"Loading PEFT adapter from {adapter_dir}...")
@@ -274,6 +286,7 @@ def run_inference_on_manifest(
     resume: bool = True,
     transcribe_fn: Optional[Callable[[Any, str, Optional[str]], str]] = None,
     method: Optional[str] = None,
+    max_new_tokens: int = 512,
 ) -> tuple[int, int, int]:
     """Process manifest line by line, writing results and syncing immediately.
 
@@ -283,6 +296,7 @@ def run_inference_on_manifest(
     manifest_p = Path(manifest_path).resolve()
     output_p = Path(output_path).resolve()
     output_p.parent.mkdir(parents=True, exist_ok=True)
+    max_new_tokens = positive_token_budget(max_new_tokens)
 
     if resume:
         existing_ids: Set[str] = load_existing_sample_ids(output_p)
@@ -364,6 +378,7 @@ def run_inference_on_manifest(
                 "model_revision": revision or "",
                 "dtype": dtype,
                 "attention": attention,
+                "decoding": decoding_contract(max_new_tokens),
                 "method": method,
                 "adapter_dir": adapter_dir or "",
                 "infer_seconds": duration_sec,
@@ -419,6 +434,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         device=args.device,
         dtype=args.dtype,
         attention=args.attention,
+        max_new_tokens=args.max_new_tokens,
     )
 
     total, success, failed = run_inference_on_manifest(
@@ -433,6 +449,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         max_samples=args.max_samples,
         resume=not args.no_resume,
         method=args.method,
+        max_new_tokens=args.max_new_tokens,
     )
 
     if args.eval:

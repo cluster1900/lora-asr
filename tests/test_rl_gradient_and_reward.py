@@ -10,9 +10,12 @@ import unittest
 from pathlib import Path
 from typing import Any, Dict
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+try:
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+except ModuleNotFoundError as exc:  # CPU-less dev machines; V100 venv has torch.
+    raise unittest.SkipTest(f"torch is required: {exc}")
 
 from train.train_rl import (
     compute_sequence_reward,

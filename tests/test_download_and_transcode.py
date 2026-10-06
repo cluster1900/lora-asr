@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import shutil
 import unittest
 import wave
 import yaml
@@ -94,6 +95,7 @@ class DownloadAndTranscodeTest(unittest.TestCase):
         self.assertEqual(data["status"], "COMPLETE")
         self.assertIn("voices_in_the_wild", data["sources"])
 
+    @unittest.skipIf(shutil.which("ffmpeg") is None, "ffmpeg is not installed")
     def test_transcode_to_wav_converts_stereo_44k_to_mono_16k(self) -> None:
         raw_stereo = self.root / "raw_stereo_44k.wav"
         create_sample_wav(raw_stereo, framerate=44100, nchannels=2, sampwidth=2, duration_s=1.5)

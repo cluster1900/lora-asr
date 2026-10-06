@@ -28,6 +28,7 @@ class ParallelInferenceTest(unittest.TestCase):
         self.assertEqual(args.gpus, [0, 1, 2, 3])
         self.assertEqual(args.dtype, "float16")
         self.assertEqual(args.attention, "eager")
+        self.assertEqual(args.max_new_tokens, 512)
         self.assertFalse(args.eval)
         self.assertFalse(args.keep_shards)
 
@@ -93,6 +94,7 @@ class ParallelInferenceTest(unittest.TestCase):
                 gpus=[0, 1],
                 dtype="float16",
                 attention="eager",
+                max_new_tokens=512,
                 batch_size=1,
                 method="base",
                 eval=False,

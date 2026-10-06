@@ -1,4 +1,14 @@
 schema_version: 1
+decoding:
+  # Same budget as official deployment. Also used for probe and held-out.
+  max_new_tokens: 512
+# v31 scale experiment (RL option B). Design: docs/qwen3-asr/29_rl_v31_scale_design.md
+# Relative to v28/v29 only the scale changes: full rl_train_pool degraded
+# (160,000 degraded rows, ~1 epoch in 2,560 steps), the `scale` stop profile,
+# and eval/save every 320 steps. The launcher refuses a smaller formal pool.
+# Reward, advantage, sampling and LoRA stay fixed. The v31 stability patch
+# uses a smaller learning rate, longer warmup and stronger KL tether so the
+# 10x run does not spend its budget on early policy drift.
 
 model:
   model_id: /data/mega-asr/runs/dpo_pilot_v2/merged_base
@@ -13,7 +23,7 @@ runtime:
   device: cuda
   world_size: 4
   micro_batch_size: 1 # 1 audio prompt per forward pass
-  gradient_accumulation_steps: 16 # effective batch = 1 * 16 * 4 = 64 prompts (256 rollouts)
+  gradient_accumulation_steps: 16 # effective batch = 1 * 16 * 4 = 64 prompts
   global_batch_size: 64
   gradient_checkpointing: true
   enable_input_require_grads: true
@@ -22,31 +32,31 @@ runtime:
   dataloader_workers: 2
 
 train:
-  # Horizon. A chunk's CLI --max-steps must not replace this.
-  max_steps: 12
-  save_steps: 4
-  eval_steps: 4
-  # 2e-6 did not move the policy. 2e-5 moved it and made Robust worse.
-  # 1e-5 is the step size for updates that beat the greedy decode.
-  learning_rate: 1.0e-5
-  warmup_steps: 2
+  # Fresh start from the DPO Champion; 2,560 steps x 64 prompts = 163,840
+  # degraded prompts, matching the 160,000-row RL data contract.
+  max_steps: 2560
+  save_steps: 320
+  eval_steps: 320
+  learning_rate: 2.0e-6
+  apply_learning_rate_on_resume: false
+  warmup_steps: 64
   lr_scheduler: constant
-  # Sequence reward uses a sum over response tokens. The sum does not enlarge
-  # Adam steps once gradients are clipped to a fixed norm.
   loss_reduction: sequence_sum
-  # Virtual epoch is the degraded rows only. Clean rows stay in the manifest.
   sample_strategy: degraded
-  # Contract copy. decide_rl_stop hardcodes the same floors; verify_gate does not read them.
+  # Contract copies of STOP_PROFILES["scale"]; check_config_contract rejects
+  # any change here that is not also made in train_rl.py, and rejects
+  # pilot-only keys (step4/8/12 floors) under this profile.
+  stop_profile: scale
   early_held_out_reward_drop: 0.005
+  max_raw_kl: 2.0e-2
+  futility_step: 640
+  futility_min_gain: 0.0
+  futility_patience: 2
   probe_mass_min: 17.0
-  step12_mass_floor: 17.0
-  step8_transfer_mass_floor: 11.33
-  step8_search_mass_floor: 8.50
-  step4_lcb_fraction: 0.5
-  min_step8_greedy_reward_gain: 0.001
-  max_raw_kl: 5.0e-4
 
 grpo:
+  policy_token_mask: signed_edits
+  include_reference_candidate: true
   group_size: 4
   train_sequences: 2
   second_round:
@@ -54,41 +64,30 @@ grpo:
     sample_size: 8
     max_generate_batch: 4
   sampling:
-    # 0.85 left 71% of groups with identical rewards, so samples rarely
-    # offered a transcript better than the DPO mode.
     temperature: 1.0
     top_p: 0.95
     top_k: 50
   advantage:
-    epsilon: 1.0e-6
+    mode: raw_gap
+    fixed_value: 0.10
+    local_max_relative: 0.35
     zero_variance_threshold: 0.80
-    # Below the old 0.85 floor so a degraded-only batch is not called a collapse.
     collapse_mean_reward_floor: 0.75
-    # Index 0 is greedy. A sample must beat it by this reward gap to update.
     anchor: greedy
     min_improvement: 0.02
   kl_regularization:
-    beta: 0.04
+    beta: 0.08
 
 reward:
+  # The trainer reads penalties and clip from this file only.
   config_path: configs/train/reward_config.yaml
-  clip:
-    min: -1.0
-    max: 1.0
-  penalties:
-    empty: -0.25
-    repeat: -0.25
-    too_long: -0.15
-    too_long_ratio: 1.5
-    hallucination: -0.25
-    hallucination_error_threshold: 0.8
 
 lora:
   r: 16
   lora_alpha: 32
-  # Dropout would make the reinforced log-probs differ from the eval policy.
   lora_dropout: 0.0
   bias: none
+  train_audio_projections: true
   target_groups:
     projection: 3
     decoder_attention: 112
@@ -117,7 +116,7 @@ lifecycle:
       output_adapter: rl_release
       output_merged: rl_merged_base
 
-gates:  # 文档抄录。verify_gate 不读这里。驱动脚本必须把同样的数字传成 CLI。
+gates:
   rl_pilot:
     held_out_decode: greedy
     held_out_mean_reward_improvement_min: 0.002

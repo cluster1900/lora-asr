@@ -18,6 +18,9 @@ CKPT="${RUN}/checkpoints/step_${STEP}"
 PREDS="${RUN}/predictions_step_${STEP}.jsonl"
 GATE="${RUN}/gate_step_${STEP}.json"
 GATE_PROFILE="${RL_GATE_PROFILE:-release}"
+BASE_EVAL_DIR="${RL_BASE_EVAL_DIR:-/data/mega-asr/runs/eval_validation_base}"
+DPO_EVAL_DIR="${RL_DPO_EVAL_DIR:-/data/mega-asr/runs/dpo_pilot_v2}"
+MAX_NEW_TOKENS="${RL_MAX_NEW_TOKENS:-512}"
 case "$GATE_PROFILE" in
   release)
     ;;
@@ -124,6 +127,7 @@ if ! prediction_rows_ok; then
     --adapter-dir "${CKPT}/adapter" \
     --method "$METHOD" \
     --gpus 0 1 2 3 \
+    --max-new-tokens "$MAX_NEW_TOKENS" \
     --eval
   if ! prediction_rows_ok; then
     echo "FAILED: predictions_step_${STEP}.jsonl is not 2867 rows"
@@ -139,10 +143,10 @@ fi
 
 if [ ! -f "$GATE" ]; then
   "$PYTHON" evaluation/verify_gate.py \
-    --base-metrics /data/mega-asr/runs/eval_validation_base/predictions_eval/metrics.json \
-    --base-predictions /data/mega-asr/runs/eval_validation_base/predictions.jsonl \
-    --dpo-metrics /data/mega-asr/runs/dpo_pilot_v2/predictions_eval/metrics.json \
-    --dpo-predictions /data/mega-asr/runs/dpo_pilot_v2/predictions.jsonl \
+    --base-metrics "$BASE_EVAL_DIR/predictions_eval/metrics.json" \
+    --base-predictions "$BASE_EVAL_DIR/predictions.jsonl" \
+    --dpo-metrics "$DPO_EVAL_DIR/predictions_eval/metrics.json" \
+    --dpo-predictions "$DPO_EVAL_DIR/predictions.jsonl" \
     --pilot-metrics "$METRICS" \
     --pilot-predictions "$PREDS" \
     --manifest "$WER_MANIFEST" \

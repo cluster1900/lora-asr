@@ -78,3 +78,7 @@ python3 inference/parallel_inference.py \
 
 新增推理 runner 时，必须同步更新本 README、根 README、架构/开发/测试文档和对应测试。实现必须
 先通过单条 clean、单条 degraded、错误恢复和新进程 adapter 加载测试，再进入 pilot。
+
+## 2026-10-04 当前 v31 修订
+
+`decoding.py`：共享解码合同解析、官方模型设置与元数据验证。单卡和多卡入口支持 `--max-new-tokens`（正整数，默认 512）。每条预测记录 `decoding`，续跑要求已有预测合同与模型/adapter 一致，否则拒绝，需使用新输出文件。

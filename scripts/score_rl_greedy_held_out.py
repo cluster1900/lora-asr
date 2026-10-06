@@ -87,6 +87,7 @@ def build_greedy_row(
     assigned_rows: int,
     rollouts: int,
     timestamp: str,
+    max_new_tokens: int = 512,
 ) -> Dict[str, Any]:
     return {
         "global_step": int(step),
@@ -94,6 +95,12 @@ def build_greedy_row(
         "val_error_rate": round(float(error_rate), 4),
         "val_eval_scope": FULL_HELD_OUT_SCOPE,
         "val_decode": "greedy",
+        "decoding": {
+            "max_new_tokens": int(max_new_tokens),
+            "do_sample": False,
+            "num_beams": 1,
+            "num_return_sequences": 1,
+        },
         "val_manifest_rows": int(manifest_rows),
         "val_manifest_sha256": manifest_sha256,
         "val_assigned_rows": int(assigned_rows),
@@ -172,6 +179,7 @@ def score_checkpoint(args: argparse.Namespace) -> int:
         compute_file_sha256,
         evaluate_rl_validation,
         load_asr_for_rl,
+        training_token_budget,
     )
 
     if "decode_mode" not in inspect.signature(evaluate_rl_validation).parameters:
@@ -242,6 +250,7 @@ def score_checkpoint(args: argparse.Namespace) -> int:
                 int(assigned),
                 int(rollouts),
                 datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                training_token_budget(config),
             )
             fresh = append_decision(read_jsonl(loss_log), int(args.step))
             if fresh == "skip":

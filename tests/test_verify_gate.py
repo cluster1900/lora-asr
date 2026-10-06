@@ -717,9 +717,9 @@ class VerifyGateTest(unittest.TestCase):
             pilot_p.write_text(json.dumps(pilot_metrics), encoding="utf-8")
 
             loss_log_p.write_text(
-                json.dumps({"global_step": 0, "val_mean_reward": 0.7802, "val_eval_scope": "Full Held-out"}) + "\n" +
+                json.dumps({"global_step": 0, "val_mean_reward": 0.7802, "val_eval_scope": "Full Held-out", "val_decode": "greedy"}) + "\n" +
                 json.dumps({"global_step": 1, "zero_variance_ratio": 0.15}) + "\n" +
-                json.dumps({"global_step": 60, "val_mean_reward": 0.8410, "val_eval_scope": "Full Held-out"}) + "\n",
+                json.dumps({"global_step": 60, "val_mean_reward": 0.8410, "val_eval_scope": "Full Held-out", "val_decode": "greedy"}) + "\n",
                 encoding="utf-8"
             )
 
@@ -849,10 +849,10 @@ class VerifyGateTest(unittest.TestCase):
             pilot_p.write_text(json.dumps(pilot_metrics), encoding="utf-8")
 
             loss_log_p.write_text(
-                json.dumps({"global_step": 0, "val_mean_reward": 0.7000, "val_eval_scope": "Full Held-out"}) + "\n" +
+                json.dumps({"global_step": 0, "val_mean_reward": 0.7000, "val_eval_scope": "Full Held-out", "val_decode": "greedy"}) + "\n" +
                 json.dumps({"global_step": 1, "zero_variance_ratio": 0.80}) + "\n" +
                 json.dumps({"global_step": 2, "zero_variance_ratio": 0.90}) + "\n" +
-                json.dumps({"global_step": 60, "val_mean_reward": 0.8500, "val_eval_scope": "Full Held-out"}) + "\n",
+                json.dumps({"global_step": 60, "val_mean_reward": 0.8500, "val_eval_scope": "Full Held-out", "val_decode": "greedy"}) + "\n",
                 encoding="utf-8"
             )
             exit_code = verify_gate.main([
@@ -869,6 +869,39 @@ class VerifyGateTest(unittest.TestCase):
             self.assertEqual(gate_data["checks"]["held_out_reward"], "PASSED")
             self.assertEqual(gate_data["checks"]["zero_variance"], "FAILED")
             self.assertAlmostEqual(gate_data["metrics"]["zero_variance_ratio"], 0.85)
+
+    def test_cli_accepts_historical_sample_decode_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_p = Path(tmp_dir)
+            base_p = tmp_p / "base_metrics.json"
+            pilot_p = tmp_p / "pilot_metrics.json"
+            dpo_p = tmp_p / "dpo_metrics.json"
+            loss_p = tmp_p / "loss_log.jsonl"
+            out_p = tmp_p / "gate.json"
+            base_p.write_text(json.dumps(self.mock_base_metrics), encoding="utf-8")
+            dpo_p.write_text(json.dumps(self.mock_base_metrics), encoding="utf-8")
+            pilot = json.loads(json.dumps(self.mock_base_metrics))
+            pilot["overall"]["robust_language_macro_error_rate"] = 0.09
+            pilot["by_scenario"][2]["error_rate"] = 0.11
+            pilot["by_scenario"][3]["error_rate"] = 0.07
+            pilot_p.write_text(json.dumps(pilot), encoding="utf-8")
+            loss_p.write_text(
+                "\n".join([
+                    json.dumps({"global_step": 0, "val_mean_reward": 0.70, "val_eval_scope": "Full Held-out", "val_decode": "sample"}),
+                    json.dumps({"global_step": 1, "val_mean_reward": 0.80, "val_eval_scope": "Full Held-out", "val_decode": "sample"}),
+                    json.dumps({"global_step": 1, "val_mean_reward": 1.80, "val_eval_scope": "Full Held-out", "val_decode": "greedy"}),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            code = verify_gate.main([
+                "--stage", "rl_pilot", "--base-metrics", str(base_p), "--pilot-metrics", str(pilot_p),
+                "--dpo-metrics", str(dpo_p), "--rl-loss-log", str(loss_p),
+                "--held-out-decode", "sample", "--output", str(out_p),
+            ])
+            self.assertEqual(code, 0)
+            data = json.loads(out_p.read_text(encoding="utf-8"))
+            self.assertEqual(data["held_out_decode"], "sample")
+            self.assertAlmostEqual(data["metrics"]["held_out_reward_improvement"], 0.1)
 
 
 if __name__ == "__main__":

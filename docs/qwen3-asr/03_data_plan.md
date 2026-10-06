@@ -51,7 +51,7 @@ raw source snapshot
 | `sft_train` | 120,000 | 16,000 | 16,000 | SFT 训练 |
 | `dpo_train_pool` | 32,000 source → 16,000 pairs | 10,000 source → 2,000 pairs | 10,000 source → 2,000 pairs | DPO 训练 pairs，源音频不重叠 |
 | `dpo_val_pool` | 3,200 source → 1,600 pairs | 1,000 source → 200 pairs | 1,000 source → 200 pairs | 独立 DPO 验证 pairs，源音频不重叠 |
-| `rl_train_pool` | 16,000 | 1,000 | 1,000 | RL rollout 训练（16,000 robust + 1,000 en + 1,000 zh） |
+| `rl_train_pool` | 160,000 | 1,000 | 1,000 | RL rollout 训练（160,000 robust + 1,000 en + 1,000 zh） |
 | `rl_val_pool` | 1,600 | 200 | 200 | 独立 RL rollout 验证（1,600 robust + 200 en + 200 zh） |
 | `validation` | 8,000 | 1,000 | 1,000 | 全阶段固定 ASR 评测 |
 | `bench_test` | 5,000 | — | — | 只做最终 test |
@@ -67,7 +67,21 @@ Smoke 子集固定为 128 条平衡样本（`manifests/smoke.jsonl`：32 条 Eng
 ### E1.1 数据扩增阶段与验证集绝对冻结铁律
 当为了打破训练信息熵瓶颈扩充分片数据（从 14k 扩充至 70k–90k）时：
 1. **验证集绝对冻结**：`validation.jsonl`（固定 2,867 条，SHA-256 为 `8950f29f...`）和 `bench_test.jsonl`（固定 4,999 条）必须保持 100% 字节不变，其包含的所有 `source_utterance_id` 永久从训练候选池排除；
-2. **纯粹单向扩增**：所有新转码的退化音频只扩充训练池（`sft_train`, `dpo_train_pool`, `rl_train_pool`）和独立评测池（`dpo_val_pool`, `rl_val_pool`），使 `rl_train_pool` 的退化语音从 1,236 条实质性扩充至 10,000–16,000 条，并使 `pilot_rl.jsonl` 达到完整的 3,000 条配额。
+2. **纯粹单向扩增**：所有新转码的退化音频只扩充训练池（`sft_train`, `dpo_train_pool`, `rl_train_pool`）和独立评测池（`dpo_val_pool`, `rl_val_pool`），使旧阶段的 `rl_train_pool` 退化语音从 1,236 条实质性扩充至 10,000–16,000 条，并使 `pilot_rl.jsonl` 达到完整的 3,000 条配额；v31 的正式合同由下节提高到 160,000 条。
+
+### E1.2 v31 RL 训练池门禁（2026-10-05）
+
+v31 scale 的 RL 训练量以 `rl_train_pool` 中至少 160,000 条 degraded 音频为合同（在原 16,000 条合同上再扩大 10 倍），不接受构建器在候选不足时生成的按比例 `NON_STRICT_SUBSET`。当前远端清单只有 4,165 条 degraded；这是 staged Voices-in-the-Wild 数量和 SFT/DPO/RL 角色先后分配后的数据短缺，不是 RL 训练器可以通过重复采样解决的优化问题。
+
+正式启动前，启动器必须同时检查：
+
+1. degraded 总行数 `>= 160,000`；
+2. `en|zh × distortion/dropout/echo/far_field/noise/obstructed/recording/mixed` 每个 16-cell 至少 640 条；单 cell 不得超过 degraded 总量的 20%；
+3. `sample_id`、`source_utterance_id`、`audio_sha256` 与 RL validation、DPO、固定 validation 和 bench/test 零交集。
+
+不从 SFT 或 DPO 角色回填 RL，避免把“训练量增加”混成数据泄漏。扩增完成前只运行 CPU/preflight 和 manifest 审计，不启动 V100 训练；扩增后必须重新生成角色清单、`*_COMPLETE.json` 和总门禁，再进入 v31 smoke。由于 SFT/DPO 配额保持不变，数据构建必须实际物化足够多的独立 Voices-in-the-Wild 源行，不能用 virtual epoch 重复采样冒充 160,000 条训练音频。`mixed` 是正式 v31 validator 接受的退化场景；七场景 `degraded_balanced` sampler 的历史合同不因此改变。
+
+按当前 90/10 source-identity 分区和角色配额，训练侧至少需要 `120,000 + 32,000 + 160,000 = 312,000` 条 robust 行；考虑分区损耗和 held-out 角色，实际 staging 应准备约 35 万条以上的独立候选，最终以各角色的 `COMPLETE.json` 和零泄漏检查为准。
 
 ## SFT 输入
 

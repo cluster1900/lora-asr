@@ -28,6 +28,9 @@
 - `24_rl_v27_design.md`：v27 回到完整退化集，只在局部编辑距离内加入参考文本。Step 7 门禁 FAILED，贪心 `+0.0002`，Robust `+0.000014`，`STOPPED_KL`。
 - `25_rl_v28_design.md`：v28 只读恢复 v27 Step 4，恢复后的学习率是 `5e-6`。参考文本和其余杠杆不变。
 - `26_rl_pilot_gate_profiles.md`：RL Pilot 的 `release` 与 `pilot_feasibility` 分层门禁、阈值、输出和验收规则。
+- `27_rl_v30_feasibility_plan.md`：针对 v29 稀疏更新与 Robust 回退的 v30A 场景均衡采样方案，以及 v30B 音频投影冻结对照组。
+- `28_rl_v30_trainer_sync_and_stats.md`：v30 前置整改。服务器训练器纳入仓库并叠加 `degraded_balanced`，配置契约测试，v30A 场景改等权，配对显著性工具与统计验收。
+- `29_rl_v31_scale_design.md`：方案 B（换实验量级）。正式运行要求 `rl_train_pool` 至少 160,000 条 degraded，16 个 language×scenario cell（含 `mixed`）各至少 640 且单 cell 不超过 20%，跑 2,560 步；启动器按 320 步 checkpoint 分块并支持显式 resume；`scale` 停止档使用 `raw_kl` 上限 `2e-2`、无 Step 4/8/12 截停、Step 640 起连续两次负增益才截停；判定集扩为 `validation` + `dpo_val_pool` degraded，以配对区间与未放宽的 release 门禁共同验收。
 
 当前正式执行入口规划为服务器上的 CLI。旧 Colab notebook、依赖和训练入口已经删除，待按 V100
 方案重新实现。

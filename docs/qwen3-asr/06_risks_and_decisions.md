@@ -16,6 +16,15 @@
 - Mega-ASR 只作方法和外部 baseline，不进入运行时依赖。
 - 不使用 Teacher、Router 或量化训练；RL 是正式链路第三阶段。
 - Hub 数据只按角色配额流式 staging，不镜像完整数据集；SFT、DPO、RL 使用隔离 pool。
+- 2026-10-03 RL 选择方案 B（`29_rl_v31_scale_design.md`）：不再做 4–12 步改一个杠杆的 pilot；v31 只放大量级（完整 `rl_train_pool` degraded、256 步、`scale` 停止档 `raw_kl ≤ 2e-2`），奖励/优势/采样/学习率/β 不变。理由：20 个 pilot checkpoint 与 DPO 统计不可区分，训练长度由 `5e-4` KL 上限截停而非由数据决定；英文采样候选上限增益 `0.117`，说明策略分布内仍有可学信号。验收以配对区间（判定集 `validation` + `dpo_val_pool` degraded）与**未放宽**的 release 门禁共同决定。回滚条件：Step 64–128 held-out 增益都 ≤ 0、或配对 degraded 区间跨 0 且无剂量反应，即收口 RL（方案 A）；`scale` 档只由 v31 配置启用，pilot 行为逐位不变。
+
+- 2026-10-04 v31 复核更正：已核实训练 128 / 官方发布 512 的生成预算差异；异常行是 508 次编辑（并非已测得的生成 token 数）。额外判定集约 97% 的均值回退来自该行，但 held-out 负增益与 validation 回退仍需独立解释。按用户要求只迭代现有 v31：统一到发布预算 512，重新计算可比对照，补充尾部门禁，在同一 run 先做 5+1 步保存/恢复 smoke，再自动继续；是否改善以完整门禁为准。
+- 2026-10-05 v31 失败归因与修复决策：当前 `rl_train_pool` 是 `NON_STRICT_SUBSET`，只有 4,165 条 degraded；v31 在 Step 32 已结束，实际只消费 2,048 prompt，不能代表 16,000 条 RL 数据合同。训练本身仍有更新信号（887/2,048 group 更新、`raw_kl=0.010715`、zero variance `0.3125`），但 Step 32 的 held-out 增益 `−0.0002` 被单次 futility 规则截停。保留 DPO→RL、reward、LoRA、学习率和最终 gate 不变；正式启动器增加最低样本量与语言×场景覆盖门禁，v31 horizon 对齐到 256 步，scale futility 改为 Step 64 起连续两次负增益才停止。本轮只完成文档、配置和代码修复，不启动训练。
+- 2026-10-05 v31 训练量扩大决策：在上述方案内把 RL degraded 合同从 16,000 再扩大 10 倍到 160,000，语言×场景最低覆盖从 64 提到 640，horizon 从 256 步提到 2,560 步，保存/评估间隔从 32 提到 320，futility 起点同步到 Step 640。SFT、DPO、reward、LoRA、学习率、验证集和 release gate 不变；本轮只完成门禁与配置修改，不启动训练。
+- 2026-10-05 10x 效果风险：样本扩大预计降低估计方差，但旧 run 的 `raw_kl=0.010715` 已接近 `0.02` 上限，按 Step 1–32 日志粗略外推可能在 Step 58–72 触发 `STOPPED_KL`。在完成 KL 剂量预检前，不把 10x 训练视为已确认的收益方案；若预检仍显示早期 KL 快速上升，应在当前 v31 内先处理优化步幅，再决定是否占用 V100。
+- 2026-10-05 v31 稳定性处理：在不放宽 gate 的前提下，把学习率降至 `2e-6`、warmup 提至 `64`、KL beta 提至 `0.08`。若后续仍出现早期 KL 超限或 held-out 负增益，停止继续扩大步数，回到 reward/credit assignment 分析。
+- 2026-10-05 v31 对抗性修复落地：上述 10x 方案的有效执行合同为 160,000 degraded、16-cell（含 `mixed`）各至少 640、单 cell ≤20%，正式训练按 320 步 checkpoint 分块并以 `RL_RESUME=1` 显式恢复，run 文件系统至少 100 GiB 可用。smoke 只验证闭环；只有 release、paired、tail 三道门和安全停止条件全部满足才算 RL 成功。本轮不启动训练。
+- 2026-10-05 v31 恢复提交点：分块进程被杀掉时，未写入完整检查点的损失行和 rollout 不能留在下一次续跑里，否则剂量会双计、rollout 组审计会失败。续跑只承认 adapter、optimizer、scheduler、训练状态和四卡 RNG 都在的检查点；清单 sha、world size 或 scheduler 不一致则拒绝恢复。本轮仍不启动训练。
 
 ## 风险与回滚条件
 
@@ -36,6 +45,9 @@
 | RL reward 投机或 KL 发散 | reward 组件单测、KL/rollout gate、reference freeze | 停止 RL，回退到 DPO adapter |
 | 4 卡 DDP 梯度/数据 shard 不一致 | global batch、sample_id 去重、world size 记录 | 停止当前 run，保留最后有效 checkpoint |
 | DDP 在线验证耗时方差引发 NCCL 看门狗超时 | Rank 分片评估 + dist.all_reduce 聚合、NCCL timeout 显式设置为 2 小时 | 修复进程间屏障等待，启用样本 rank-sharding |
+| 仓库训练器与服务器训练器漂移，配置悄悄跑成另一个实验 | `tests/test_rl_config_contract.py` 固定未被读取的配置键；训练日志输出 `degraded_balanced_summary=` | 以仓库为唯一来源更新服务器；契约测试失败即停止启动 |
+| 训练与发布解码预算不一致，长尾重复/幻觉未被 rollout 观测 | 训练、held-out、release 共享 `max_new_tokens`；逐样本记录长度、repeat、too_long、hallucination；`en|noise` stress gate | 任一阶段合同不一致或长尾门禁失败，停止并回退到 DPO Champion |
+| 4 步量级 pilot 的验收线低于 seed 噪声 | seed 噪声基线、`paired_significance.py` 区间上界 < 0 | 区间跨 0 记为“与噪声无法区分”，不写成有效改善 |
 | 指标不可比 | 同 manifest、同 evaluator、分语言指标 | 废弃该次比较 |
 | 运行时加载非官方 wrapper | import 和 model revision 记录 | 停止并移除不合规依赖 |
 

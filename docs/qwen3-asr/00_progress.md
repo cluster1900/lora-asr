@@ -1,12 +1,60 @@
 # 开发进度
 
-最后更新：2026-10-02
+最后更新：2026-10-05
 
 ## 当前状态
 
-当前状态：**v27 Step 7 门禁 FAILED，动作 `stop`。** 07:10 CST：贪心 `0.8773 → 0.8775`（`+0.0002`），Robust `+0.000014`（+2 次编辑），clean `−0.000144`，有效输出 `1.0`，训练状态 `STOPPED_KL`。未通过的是 `held_out_reward` 和 `robust_retention`。没有 `merged_base`。2026-10-02 07:28 CST 启动 `rl_pilot_v28`，驱动 PID 139274，PPID 1。只读恢复 v27 Step 4，日志是 `configured_learning_rate=5.00e-06`、`global_step=4 -> chunk_end=8`、`include_reference_candidate=True`、`LoRA targets: 199`。通过线不变。发布底座仍是 DPO Champion。方案在 `25_rl_v28_design.md`。Step 8 门禁还没写成。
+2026-10-05 v31 分块恢复修复（不训练）：10x 启动器按 320 步提交检查点，但损失日志和 rollout 每个 step 都追加。进程在块中间退出后，从上一份检查点继续会重放这些步，`reward_mass` 被加两次，重复 `group_id` 让 rollout 审计失败，而合并失败只记警告。`pipeline_state.json` 还写在四卡 RNG 之前，可能指向半成品检查点。现已改为只保留最后完整步及以前的日志和 rollout，pipeline 在检查点文件齐全后才提交，`pipeline_state.json` 与 `training_state.json` 都先写临时文件再替换，恢复时核对 manifest sha、world size 和 scheduler。数据合同仍是 160,000/640/20%，本轮不启动 V100。本地 `.venv` `pytest -q` 为 `337 passed, 9 skipped, 39 subtests passed`；`py_compile train/train_rl.py`、`bash -n scripts/run_rl_scale_v31.sh` 和 `git diff --check` 通过。
+
+2026-10-04 V100 异步 v31 进度：远端 `/data/mega-asr/runs/rl_scale_v31/` 已完成 probe（`GO_GRPO`，mass `22.3636`）和 Step 1–32 训练，保存 `step_16`、`step_32` checkpoint。Step 32 held-out greedy reward 为 `0.8770`，相对 Step 0 增益 `−0.0003`，触发 scale 档预设的 `BLOCKED_TRANSFER`；训练进程退出码为 0，没有出现零方差崩溃，`raw_kl=0.010763`、`zero_var=0.3125`、`cumulative_winners=888`。launcher 仍在执行 Step 32 的 release 评测和后续配对流程，最终 gate 尚未产生。V100 `/data/mega-asr/venv` 已安装 pytest `9.1.1`。
+
+2026-10-04 v31 最终结果：训练与后处理于 V100 19:05（UTC+8）结束，Step 32 的 release gate 和 paired gate 均 FAILED。paired 判定集 degraded 平均差为 `+0.008196`（候选错误率上升），bootstrap 95% 区间 `[-0.000446, +0.024456]`，未达到显著改善；最终摘要见远端 `/data/mega-asr/runs/rl_scale_v31/scale_verdict.json`。本轮不晋级模型，发布底座继续保持 DPO Champion。
+
+2026-10-04 v31 诊断修正与当前方案内修复：已在 V100 安装的官方 `qwen_asr/inference/qwen3_asr.py` 核实 `from_pretrained(max_new_tokens=512)`，而训练器 rollout/held-out 固定 128，存在确定的解码预算不一致。上一条记录误把 `num_edits=508` 写成 508 个生成 token，并把错误率差 `26.8` 写成编辑数，现更正：异常行参考长度 15、编辑数 508、WER 33.866667，候选减 DPO 的 WER 差为 26.8；单条贡献额外判定集平均回退的约 97%。这是额外判定集失败的主要数值来源，但不能解释全部失败：原 validation Robust 仍回退 `+0.000728`，held-out reward 为 `−0.0003`。解码预算不一致是已证实的缺陷，其因果贡献尚需对照验证，不能声称只修此处就能保证 RL 改善。
+
+2026-10-05 当前 v31 修复已同步 V100：本地完整测试 `307 passed, 9 skipped, 34 subtests passed`，服务器关键单测、编译与 shell 语法通过。异步链已启动，先运行 `rl_scale_v31_smoke_20261005T093505` 的 5 步 smoke，再自动启动 `rl_scale_v31_20261005T093505` 正式 run；两者均使用 512 token 解码合同，旧 `rl_scale_v31` 保留。当前 smoke probe 正在 4 卡运行，尚未产生训练结论。
+
+2026-10-05 v31 修复运行中：5 步 smoke 于 V100 10:30（UTC+8）完成，状态 `CHUNK_DONE`、返回码 0，`GO_GRPO`，checkpoint/配置链完整。正式 run 已自动开始并完成 Step 0–15；Step 16 正在全量 held-out 评估，当前没有异常退出。Step 15 `raw_kl=0.001642`、zero variance `0.31`、累计 winners `28`；512-token 合同已写入训练日志和 checkpoint 元数据。由于评估耗时尚未有新 release/paired 结论。
+
+2026-10-05 v31 运行后的只读归因：正式训练在 Step 32 写入 `BLOCKED_TRANSFER`，实际消费 `2,048 = 32×64` 个 prompt；配置原计划 64 步，但当前 `rl_train_pool` 只有 4,165 条 degraded，而数据合同目标是 16,000 条。Step 32 held-out reward `0.8771`，Step 0 为 `0.8773`，单次增益 `−0.0002`；`raw_kl=0.010715`、zero variance `0.3125`、累计 winners `887`，未触发 KL 或零方差停止。2,048 个 group 中 887 个更新、728 个 identical、433 个 no-improvement；离线把候选阈值从 `0.02` 降到 `0.01` 只增加 4 个更新组，主问题不是该阈值。当前 v31 只做方案内修复：正式启动前要求 16,000 条 degraded 和 cell 覆盖，训练预算改为 256 步，Step 64 起连续两次负增益才触发无效截停；本轮不启动训练。
+
+用户要求今后只修改当前方案：继续使用 `29_rl_v31_scale_design.md`、v31 配置与启动器，不新增方案编号。本次将 v31 rollout、held-out、probe、正式推理统一为 512 token（保留发布预算，不靠缩短预测改善指标），显式贪心解码并记录合同；同预算重新计算 base/DPO 对照，增加按语言×场景的尾部诊断与“严重异常相对 DPO 恶化”门禁。异步运行先完成 5 步 smoke，通过后用同一配置从 DPO Champion 新开正式 256 步 run；旧 run 保留，不续训已被停止的 Step 32。实现、测试与运行状态待下条记录。
+
+2026-10-05 当前 v31 量级调整：按要求把 RL degraded 训练合同从 16,000 再扩大 10 倍到 160,000，language×scenario 最低覆盖从 64 提到 640，训练 horizon 从 256 步提到 2,560 步，保存/评估间隔改为 320，futility 起点改为 Step 640。SFT、DPO、验证集和 gate 不变；只做文档、配置、代码门禁和测试，不启动训练。
+
+2026-10-05 10x 效果只读预估：旧 v31 的更新率为 43.3%，按同分布外推可得到约 70,960 个更新组，更新率标准误约从 0.01095 降到 0.00122；但 Step 32 held-out 增益仍为 −0.0002，paired degraded mean delta 为 +0.008069。旧日志的 raw_kl 线性外推约在 Step 58–72 达到 0.02，可能早于 Step 640 停止，因此 10x 样本能提高稳定性，却不能单独保证 WER/reward 改善。本轮继续不训练。
+
+2026-10-05 v31 通过率稳定性补丁：保持 reward、采样、LoRA、数据门禁和 gate 不变，将学习率改为 `2e-6`、warmup 改为 `64`、KL beta 改为 `0.08`，目标是避免旧 run 在 Step 58–72 左右触发 KL 上限。该补丁只做 CPU/配置验证，尚未训练。
+
+2026-10-05 v31 10x 对抗性审计：训练前新增阻断项——当前数据距离 160,000 还差 155,835 条；正式启动器没有 2,560 步的自动 resume loop；数据源配置允许 `mixed` 但 validator 不接受；smoke 会把数据门槛降到 1，不能代表正式数据可用；rollout/merge 产物和 KL 剂量需要单独做容量与趋势门禁。本轮不训练。
+
+2026-10-05 v31 对抗性修复已完成（不训练）：正式 validator 接受 `mixed` 并固定 16-cell、160,000 degraded、每 cell 至少 640 和单 cell 不超过 20%；启动器增加 100 GiB 可用空间门禁；正式训练按 320 步 checkpoint 分块，并支持 `RL_RESUME=1 RL_RUN_DIR=<run>` 从最后完整块续跑；设计内停止状态不会被强行恢复。成功目标更新为“数据/隔离/可恢复执行门禁通过 + 训练到 horizon 或安全停止 + release/paired/tail 全部通过”，不再把 smoke 或 probe 视为 RL 成功。本轮只完成方案、代码、文档和测试，不启动 V100。
+
+2026-10-03 复核修复：在未占用 GPU、未启动训练的前提下，修复历史 sample held-out 门禁参数、v31 的 `nvidia-smi` GPU 占用门禁、判定清单六角色隔离与身份键校验、配对统计元数据一致性，以及未知 `sample_strategy` 静默回退。`.venv` 完整测试 `302 passed, 9 skipped, 34 subtests passed`，Python 编译、shell 语法和 `git diff --check` 均通过。
+
+当前状态（2026-10-03 23:50 CST）：**项目负责人选择 RL 方案 B（换实验量级），v31 设计与代码已完成并通过本地/服务器测试与 preflight，尚未训练；发布底座仍是 DPO Champion。** 设计见 `29_rl_v31_scale_design.md`：完整 `rl_train_pool` degraded 4,165 条跑 64 步（约 1 epoch）、`scale` 停止档（`raw_kl ≤ 2e-2`，无 Step 4/8/12 截停，Step 32 起贪心增益 < 0 即停）、判定集 `validation` + `dpo_val_pool` degraded（3,466 条 degraded），配对区间与未放宽的 release 门禁共同验收；预计 6.5 h。启动需负责人确认（先 2 步 smoke 约 35 min）。
+
+2026-10-03 23:50 CST v31 实现与验证（未训练，未占用 GPU）：依据只读分析——v29 step_0 rollout 组内最优减贪心的上限增益英文 `0.117`（64% 组有赢家）、中文 `0.026`（21%）；v28 `raw_kl` 每步约 ×2–3 并在 Step 7 被 `5e-4` 截停；`pilot_rl` 只用了 `rl_train_pool` 4,165 条 degraded 中的 2,000 条；VITW 已暂存音频已全部分配。代码：`train_rl.py` 新增 `STOP_PROFILES`（`pilot` 逐位不变，`STOP_CONTRACT` 为其别名）与 `train.stop_profile`，训练循环/`plan_driver_action`/`driver_action_from_records` 透传档名，`check_config_contract` 拒绝未知档名与跨档阈值键；新增 `configs/train/qwen3_asr_rl_v31_scale.yaml`、`scripts/build_rl_verdict_manifest.py`、`scripts/run_rl_scale_v31.sh`（含 `RL_SCALE_SMOKE=1`）；`paired_significance.py` 支持多文件合并、`by_language_condition` 与 `--gate`。测试：此前本地 `297 passed, 9 skipped`；本次复核后 `.venv` `302 passed, 9 skipped, 34 subtests passed`。服务器 preflight：v31 配置过契约（`scale`）；`rl_train_pool` 的 `degraded` epoch 0 为 4,165 行（en 2,231 / zh 1,934）、clean 0、音频全部存在，64×64=4,096 ≤ 4,165；`/data/mega-asr/manifests/rl_verdict_extra_degraded.jsonl` 已生成 2,599 行（en 1,432 / zh 1,167，sha256 `fa65da4e…`），与 `rl_train_pool`/`rl_val_pool`/`validation`/`sft_train`/`dpo_train_pool`/`bench_test` 的 `source_utterance_id` 交集均为 0；`bash -n` 启动器通过。仓库同步到 V100 前覆盖文件已备份到 `/data/mega-asr/backups/repo_sync_v31_20261003T2045/`。
+
+以下为 2026-10-03 22:30 CST 复核时的状态：**RL pilot 暂停，v30A 不启动，发布底座仍是 DPO Champion。** v28 Step 7 `STOPPED_KL`、门禁 FAILED（贪心 `+0.0004`，Robust `+0.000007`）；v29 Step 4 与 v28 Step 7 在 2,867 条验证集上与 DPO 配对比较均为“与噪声无法区分”；v30A 的采样与 v29 几乎相同（4 步内逐 cell 差 0–11 个 prompt），预期同样不可区分。四张卡空闲。下一步在“收口 RL”与“换实验量级”之间决策，详见 `27_rl_v30_feasibility_plan.md` 末节。
+
+2026-10-03 22:40 CST 整改（未训练）：12 个未被读取的配置键已处理（阈值改由 `check_config_contract` 强制一致，无效的 reward/epsilon 副本从 v30A 配置删除）；服务器较新的 `qwen3_asr_rl.yaml` 与 `finish_rl_pilot_v7.sh` 中实际运行过的 `--held-out-decode sample` 已收回仓库；v29 启动脚本已归档；本地缺 torch/ffmpeg 时相关测试改为跳过。仓库随后作为唯一来源同步到 V100（覆盖前备份），并在服务器上跑全量单测，结果见下一条。
+
+2026-10-03 22:50 CST 验证（未训练，未占用 GPU）：本地 `.venv`（无 torch）`270 passed, 9 skipped`；V100 服务器 venv（有 torch/ffmpeg，`CUDA_VISIBLE_DEVICES=""`）stdlib unittest `Ran 286 tests, OK`。服务器 preflight：`train_rl.py --help` 含 `degraded_balanced`；v28、v30A 配置均通过 `check_config_contract`；把 `train.max_raw_kl` 改为 `1e-3` 或 `grpo.train_sequences` 改为 3 都会被拒绝；用真实 `RLAudioDataset` 读 `/data/mega-asr/manifests/pilot_rl.jsonl`（3,000 行），v30A epoch 0/1 各 2,000 行、clean 0 行，英文 7 个 cell 各 142–143 行，`zh|noise` 只有 18 条源样本，受 `max_repeat=4` 限制只能取 72 行，缺口 71 行回填到其他中文 cell；未知采样选项会被拒绝。结论：代码与配置一致，v30A 可以启动，但按上一条复核结论仍不建议启动。
+
+以下为历史状态。v27 Step 7 门禁 FAILED，动作 `stop`。 07:10 CST：贪心 `0.8773 → 0.8775`（`+0.0002`），Robust `+0.000014`（+2 次编辑），clean `−0.000144`，有效输出 `1.0`，训练状态 `STOPPED_KL`。未通过的是 `held_out_reward` 和 `robust_retention`。没有 `merged_base`。2026-10-02 07:28 CST 启动 `rl_pilot_v28`，驱动 PID 139274，PPID 1。只读恢复 v27 Step 4，日志是 `configured_learning_rate=5.00e-06`、`global_step=4 -> chunk_end=8`、`include_reference_candidate=True`、`LoRA targets: 199`。通过线不变。发布底座仍是 DPO Champion。方案在 `25_rl_v28_design.md`。Step 8 门禁还没写成。
 
 2026-10-03：增加 `pilot_feasibility` 门禁设计。它允许 reward 不下降、Robust 回退不超过 `0.001`，只用于确认训练闭环和 checkpoint 可用；正式 `release` 门禁仍要求 reward `+0.002` 且 Robust 零回退。两种结果必须写入不同文件，`pilot_feasibility` 通过不能发布模型。详见 `26_rl_pilot_gate_profiles.md`。
+
+2026-10-03 15:24（V100 +08:00）启动 `rl_pilot_feasibility_v29`，从 DPO Champion 新开，学习率 `5e-6`、`sample_strategy=degraded`，固定运行 4 步。Probe 为 `GO_GRPO`，训练于 16:37 结束，Step 4 checkpoint、rollout 汇聚和 2,867 条推理均成功。贪心 held-out `0.8773 → 0.8778`（`+0.0005`），Robust `+0.000269`，clean `−0.000060`，变好的场景为 `en|dropout`、`zh|obstructed`，有效输出 `1.0`，零方差均值 `0.3789`。`pilot_gate_step_4.json` 为 `PILOT_PASSED`，但默认 release gate 仍因 held-out reward 和 Robust 回退 FAILED；没有导出 `merged_base`，DPO Champion 未被覆盖。
+
+v29 复盘显示，阻塞点不是训练崩溃或 KL 硬停：4 步 `raw_kl` 最高 `3.4e-05`，零方差比例 `0.3438–0.4219`，梯度有限。4 步共汇聚 2,354 条 rollout，但只有 108 条标记为实际训练，`policy_keep_ratio` 约 `0.21–0.23`。2,867 条验证预测只有 17 条规范化文本发生变化，其中 6 条错误率改善、5 条恶化；`en|noise` 增加 6 个编辑、`en|recording` 增加 2 个编辑，抵消了 dropout/obstructed 的小幅收益。当前瓶颈是 `signed_edits` 的稀疏局部更新与 held-out Robust 样本覆盖不匹配，单纯降低门禁或继续加步数不能解决。
+
+下一轮方案与实现记录在 `27_rl_v30_feasibility_plan.md`：先只改 `degraded_balanced` 场景采样做 v30A；若 Robust 仍回退，再用相同配置冻结 audio projections 做 v30B 对照。不在 V100 空闲前启动训练。（2026-10-03 复核：V100 已空闲，但 v30A 因预期与 v29 不可区分而暂停，见 27 号文档末节。）
+
+2026-10-03：v30A 已在本地完成实现：`degraded_balanced` 固定 14 个 language×scenario cell，virtual epoch 2,000 行，单行最多重复 4 次；训练器会输出 cell 计数、同语言回填量、最大重复倍数和 manifest hash。新增配置为 `configs/train/qwen3_asr_rl_v30a.yaml`，sampler 单元测试 7/7 通过，Python 编译检查通过。因 V100 正被其它训练占用，本轮只完成代码和 smoke 级检查，尚未同步服务器或启动训练。
+
+2026-10-03（复盘后整改，未训练）：复盘 v10–v29 的 20 个检查点，贪心 held-out 增量落在 `−0.0006…+0.0005`（均值约 `−0.00007`），与学习率、掩码、优势形态没有剂量关系，判定为噪声量级；`+0.002` 通过线从未接近。同时发现 V100 训练器（3,542 行，md5 `60f5910b…`）与仓库旧版（1,957 行）不一致：`signed_edits`、`raw_gap`、`local_max_relative`、`include_reference_candidate`、`second_round`、音频投影开关只在服务器，v30A 补丁原先打在旧文件上，无法复现 v29。整改见 `28_rl_v30_trainer_sync_and_stats.md`：以服务器训练器为基线纳入仓库并叠加 `degraded_balanced`（`train/train_rl.py`）；新增 `tests/test_rl_config_contract.py`，固定 12 个“声明但无人读取”的配置键（含 `train.max_raw_kl`，KL 停止线实为写死的 `5e-4`）；v30A 场景权重由 20/20/15/15/10/10/10 改为等权；新增 `evaluation/paired_significance.py`；27 号方案加入 seed 噪声基线和统计验收。没有启动训练，也没有修改服务器；服务器训练器的 smoke、checkpoint 恢复和 v30A 运行仍待 GPU 环境验证。
 
 ## 暂停复盘（2026-10-01 22:33 CST）
 

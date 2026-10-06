@@ -15,6 +15,20 @@ python3 evaluation/eval_wer.py --help
 
 通过标准：测试全部通过、CLI 可解析、无语法错误、`git diff --check` 无错误。
 
+## v31 失败归因修复测试
+
+在重新占用 GPU 之前，必须完成以下只读检查：
+
+- 训练 manifest 的 degraded 行数至少 160,000；16 个 `language|scenario` cell（含 `mixed`）各至少 640 条且单 cell 不超过总量 20%；manifest 可以保留 clean 审计行，但 `sample_strategy=degraded` 生成的 optimizer epoch 必须不含 clean。
+- `sample_id`、`source_utterance_id`、`audio_sha256` 与 RL validation、DPO train/validation、release validation 和 bench/test 零交集。
+- scale 停止规则在 Step 640 的第一次负增益时继续，在下一次完整评估（Step 960）的连续第二次负增益时停止；KL、zero-variance 和严重 reward drop 规则仍然立即生效。
+- v31 配置的 horizon 为 2,560、保存/评估间隔为 320；训练日志必须记录实际 manifest 行数、degraded 虚拟 epoch 长度和 update/identical/no-improvement 计数。
+- v31 稳定性补丁的学习率、warmup 和 KL beta 必须分别为 `2e-6`、`64`、`0.08`；gate 阈值不得被放宽。
+- 10x 正式启动器必须能从最近的 `step_320`、`step_640` 等完整 checkpoint 继续，不能因 run 目录已存在而把中断任务判为不可恢复；`mixed` 场景必须在数据门禁中有明确处理结果。
+- 中断的 chunk 再恢复时，必须裁掉最后一份完整检查点之后的损失行和 rollout 行，剂量不能把同一 optimizer step 加两次；manifest sha、world size 或 `scheduler.pt` 对不上时必须拒绝恢复。`pipeline_state.json` 指向半成品检查点时，续跑步必须回到最后一份完整检查点。
+
+本轮只修改文档、配置和代码并运行 CPU/preflight 测试，不启动训练。只有上述检查全部通过，才允许进入 GPU smoke。
+
 ## 数据测试
 
 数据下载/物化是第一个可执行阶段。模型下载、base inference、SFT、DPO 和 RL 都必须等待
@@ -104,3 +118,7 @@ Router 不在当前范围。
 
 删除历史 fixture 后，所有本地测试只使用临时合成 JSON/对象，不依赖仓库内 checkpoint、prediction
 或音频文件。
+
+## 2026-10-04 当前 v31 修订
+
+当前 v31 修复验证：预算解析和传递、checkpoint/预测续跑合同、tail gate 极端回退与非有限数值单测；完整 pytest 与 README 合同；V100 clean/degraded 各一条推理；异步 5+1 步保存/加载/继续 smoke。正式验收同时要求原 release、paired 与新增 tail 通过，详见 `29_rl_v31_scale_design.md`。

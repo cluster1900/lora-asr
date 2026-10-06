@@ -26,6 +26,7 @@ class RunInferenceTest(unittest.TestCase):
         self.assertEqual(args.revision, "7278e1e70fe206f11671096ffdd38061171dd6e5")
         self.assertEqual(args.dtype, "float16")
         self.assertEqual(args.attention, "eager")
+        self.assertEqual(args.max_new_tokens, 512)
         self.assertEqual(args.batch_size, 1)
         self.assertFalse(args.no_resume)
         self.assertFalse(args.eval)

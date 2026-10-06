@@ -13,7 +13,7 @@ runtime:
   device: cuda
   world_size: 4
   micro_batch_size: 1 # 1 audio prompt per forward pass
-  gradient_accumulation_steps: 16 # effective batch = 1 * 16 * 4 = 64 prompts (256 rollouts)
+  gradient_accumulation_steps: 16 # effective batch = 1 * 16 * 4 = 64 prompts
   global_batch_size: 64
   gradient_checkpointing: true
   enable_input_require_grads: true
@@ -22,21 +22,29 @@ runtime:
   dataloader_workers: 2
 
 train:
-  # Horizon. A chunk's CLI --max-steps must not replace this.
-  max_steps: 12
+  # Start from the DPO Champion; v30A changes only degraded scenario coverage.
+  max_steps: 4
   save_steps: 4
   eval_steps: 4
-  # 2e-6 did not move the policy. 2e-5 moved it and made Robust worse.
-  # 1e-5 is the step size for updates that beat the greedy decode.
-  learning_rate: 1.0e-5
+  learning_rate: 5.0e-6
+  apply_learning_rate_on_resume: false
   warmup_steps: 2
   lr_scheduler: constant
-  # Sequence reward uses a sum over response tokens. The sum does not enlarge
-  # Adam steps once gradients are clipped to a fixed norm.
   loss_reduction: sequence_sum
-  # Virtual epoch is the degraded rows only. Clean rows stay in the manifest.
-  sample_strategy: degraded
-  # Contract copy. decide_rl_stop hardcodes the same floors; verify_gate does not read them.
+  sample_strategy: degraded_balanced
+  sample_strategy_options:
+    virtual_epoch_rows: 2000
+    max_repeat: 4
+    # Equal weights: every language x scenario cell gets the same quota.
+    # Doc 28 explains why noise/recording are not up-weighted.
+    scenario_weights:
+      noise: 1.0
+      recording: 1.0
+      dropout: 1.0
+      obstructed: 1.0
+      distortion: 1.0
+      echo: 1.0
+      far_field: 1.0
   early_held_out_reward_drop: 0.005
   probe_mass_min: 17.0
   step12_mass_floor: 17.0
@@ -47,6 +55,8 @@ train:
   max_raw_kl: 5.0e-4
 
 grpo:
+  policy_token_mask: signed_edits
+  include_reference_candidate: true
   group_size: 4
   train_sequences: 2
   second_round:
@@ -54,41 +64,31 @@ grpo:
     sample_size: 8
     max_generate_batch: 4
   sampling:
-    # 0.85 left 71% of groups with identical rewards, so samples rarely
-    # offered a transcript better than the DPO mode.
     temperature: 1.0
     top_p: 0.95
     top_k: 50
   advantage:
-    epsilon: 1.0e-6
+    mode: raw_gap
+    fixed_value: 0.10
+    local_max_relative: 0.35
     zero_variance_threshold: 0.80
-    # Below the old 0.85 floor so a degraded-only batch is not called a collapse.
     collapse_mean_reward_floor: 0.75
-    # Index 0 is greedy. A sample must beat it by this reward gap to update.
     anchor: greedy
     min_improvement: 0.02
   kl_regularization:
     beta: 0.04
 
 reward:
+  # The trainer reads penalties and clip from this file only. The old inline
+  # reward.clip / reward.penalties copies were never read and are removed.
   config_path: configs/train/reward_config.yaml
-  clip:
-    min: -1.0
-    max: 1.0
-  penalties:
-    empty: -0.25
-    repeat: -0.25
-    too_long: -0.15
-    too_long_ratio: 1.5
-    hallucination: -0.25
-    hallucination_error_threshold: 0.8
 
 lora:
   r: 16
   lora_alpha: 32
-  # Dropout would make the reinforced log-probs differ from the eval policy.
   lora_dropout: 0.0
   bias: none
+  train_audio_projections: true
   target_groups:
     projection: 3
     decoder_attention: 112
@@ -117,7 +117,7 @@ lifecycle:
       output_adapter: rl_release
       output_merged: rl_merged_base
 
-gates:  # 文档抄录。verify_gate 不读这里。驱动脚本必须把同样的数字传成 CLI。
+gates:
   rl_pilot:
     held_out_decode: greedy
     held_out_mean_reward_improvement_min: 0.002
