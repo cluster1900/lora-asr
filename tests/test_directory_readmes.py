@@ -3,9 +3,8 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-DOCUMENTED_DIRECTORIES = ("evaluation", "inference", "notebooks", "scripts", "train")
+DOCUMENTED_DIRECTORIES = ("configs", "evaluation", "inference", "notebooks", "scripts", "tests", "train")
 
 
 class DirectoryReadmeTest(unittest.TestCase):
@@ -19,19 +18,22 @@ class DirectoryReadmeTest(unittest.TestCase):
             self.assertTrue(readme.is_file(), f"missing {readme.relative_to(ROOT)}")
             content = readme.read_text(encoding="utf-8")
             for path in sorted(directory.iterdir()):
-                if not path.is_file() or path.name == "README.md":
+                if not path.is_file() or path.name == "README.md" or path.name.startswith("."):
                     continue
                 if path.name not in content:
                     missing.append(f"{directory_name}/{path.name}")
-        self.assertEqual(missing, [], "files missing from directory README inventory")
+        self.assertEqual(missing, [], f"files missing from directory README inventory: {missing}")
 
     def test_readmes_state_the_maintenance_contract(self) -> None:
         for directory_name in DOCUMENTED_DIRECTORIES:
             content = (ROOT / directory_name / "README.md").read_text(encoding="utf-8")
-            self.assertIn("目录职责", content)
-            self.assertIn("文件清单", content)
-            self.assertIn("维护要求", content)
-            self.assertIn("必须同步更新", content)
+            self.assertIn("目录职责", content, f"{directory_name}/README.md missing '目录职责'")
+            self.assertIn("文件清单", content, f"{directory_name}/README.md missing '文件清单'")
+            self.assertIn("主要输入输出", content, f"{directory_name}/README.md missing '主要输入输出'")
+            self.assertIn("使用入口", content, f"{directory_name}/README.md missing '使用入口'")
+            self.assertIn("维护要求", content, f"{directory_name}/README.md missing '维护要求'")
+            self.assertIn("必须", content, f"{directory_name}/README.md missing '必须'")
+            self.assertIn("同步更新", content, f"{directory_name}/README.md missing '同步更新'")
 
 
 if __name__ == "__main__":

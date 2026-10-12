@@ -1,72 +1,51 @@
 # 开发计划
 
+最后更新：2026-10-12
+
 ## 背景与范围
 
-仓库只维护一个 V100 服务器闭环，避免 Colab、A100 和服务器配置并存。当前范围是把现有静态
-合同迁移为 FP16/eager attention/4 卡 DDP，并完整实现 SFT → DPO → RL；不新增 router、sweep、
-Teacher 或独立评测器。
+本计划把训练合同拆成可交付的小闭环，先完成 baseline 和数据门禁，再实现 SFT、DPO、RL。目标是每个阶段都能在全新 Colab runtime 用固定 manifest、配置、seed 和 Git SHA 重跑；本阶段不把未实现的 runner 或 notebook 当作完成。
 
-## 唯一流程
+## 顺序
 
-1. 新建 data builder：完成 pinned source、staging、manifest、泄漏检查和恢复。
-2. 新建 inference runner (`inference/run_inference.py`)：单卡 batch 1、FP16、eager attention，基于官方 `qwen-asr` / Transformers API，支持加载 Base 与 PEFT Adapter，具备断点续推（基于已有 `sample_id` 跳过）、逐行 flush+fsync 容错写入与 `--eval` 联动 `evaluation/eval_wer.py` 自动产出评测报告。
-3. 新建 train runner (`train/train_sft.py`)：实现 SFT smoke/pilot 训练，支持单机 4 卡 DDP 与 `--single-gpu` 模式，操作底层 `model.model.thinker` 并开启 `gradient_checkpointing` 与 `enable_input_require_grads`；精确注入 199 个 Linear LoRA targets（Projection 3 + Decoder 196）；实现标签掩码 Cross Entropy 损失计算；具备规范 10+2 检查点保存与恢复机制（保存 adapter、optimizer、scheduler、RNG、training_state 与 resolved config）；提供 `--export-merged` 支持 `merge_and_unload()` 权重合并导出。后续以此为基础延伸 DPO 与 RL 训练。
-4. 新建 DPO 偏好对构建器 (`scripts/build_dpo_pairs.py`)：从候选音频池基于真实的 Base 与 Step 50 SFT 独立预测生成真实的 `(chosen, rejected)` 偏好对；正式模式强制传入 `--base-predictions` 和 `--sft-predictions`，严禁使用 gold 答案兜底或合成负例（杜绝 gold 泄漏）；经 WER/CER 判定过滤平局（`cand_sft == cand_base` 或 `err_sft == err_base` 一律剔除）；离线预计算冻结参考模型的序列对数概率 `ref_chosen_logp` 与 `ref_rejected_logp`，记录完整 Provenance 哈希并生成 `dpo_pair_audit.json`。
-5. 新建 DPO train runner (`train/train_dpo.py`)：实现 4 卡 DDP DPO 训练，基于冻结参考模型 logp 计算隐式奖励差与 Bradley-Terry 偏好损失，实时监控 `preference_accuracy` 与 `margin`；支持全量 held-out 验证集评估；遵循 10+2 检查点契约、保存 4 卡独立 RNG 并支持 `--export-merged`。
-6. 新建 RL (GRPO) train runner (`train/train_rl.py`)：实现 4 卡 DDP GRPO 训练，从 DPO 合并底座起训。现行 pilot 的第一轮是 1 条贪心解码加 3 条采样（`temperature=1.0`、`top_p=0.95`、`top_k=50`）；采样奖励至少高出贪心 `0.02` 才给正优势，否则该组不更新。未打过时可以再抽 8 条，反向长度固定为 2。按 `reward_config.yaml` 计算 ASR 奖励与 empty、repeat、too_long、hallucination 惩罚。策略项是序列求和，KL 是针对冻结参考模型的 Schulman K3（$\beta=0.04$）。v10/v11 使用 `sample_strategy: degraded`。保存 `rollouts.jsonl`、`loss_log.jsonl` 和检查点。只有整道 `gate.json` 为 `PASSED` 时才 `--export-merged` 到该 run 自己的目录。
-7. `evaluation/eval_wer.py`：接收 prediction 和 output directory，固定生成 scored JSONL、metrics JSON 及 scenario/cell/language CSV。
-8. `evaluation/verify_gate.py`：支持 SFT、DPO 与 RL 阶段机器可读门禁计算与归档，强校验 held-out preference/reward、退化改善数、Clean 回退与累积回退红线；DPO 与 RL 阶段门禁严格要求 Robust Macro 相对前一阶段零恶化（`max_robust_macro_regression <= 0.0`），并完整记录前序基线 metrics 与 predictions 的路径与 SHA-256 哈希。
+1. Phase 0：环境探针、官方模型加载、单条推理和 evaluator。
+2. Phase 1：manifest builder、质量检查和固定切分。
+3. Phase 2：SFT runner 与恢复合同。
+4. Phase 3：DPO pair builder、reference logprob 和 preference gate。
+5. Phase 4：RL rollout、reward、KL 和 held-out gate。
+6. Phase 5：Colab notebook 串联和规模化运行。
 
-核心配置必须覆盖：
+## 阶段交付物与完成条件
 
-- V100 训练配置：服务器路径、FP16、eager attention、world-size-aware global batch。
-- 数据配置：pinned revision、smoke/pilot/full 配额、manifest schema 和输出路径。
+| 阶段 | 必须交付 | 通过条件 | 失败后的动作 |
+| --- | --- | --- | --- |
+| Phase 0 | 环境探针、base 推理、CER evaluator、最小 Colab 编排 | clean/degraded 各 1 条成功；失败行可记录；Drive 产物能读回 | 修复依赖/API/音频前端，不启动训练 |
+| Phase 1 | manifest builder/validator、五类 scenario、固定切分 | schema、音频、source 泄漏、hash 和配额全通过 | 标记 `insufficient_data` 或 `data_failed` |
+| Phase 2 | SFT runner、LoRA、checkpoint/resume、val gate | 5–20 step smoke 恢复通过；相对 base 的 gate 写出结果 | 保留失败 run，调整新配置新 run |
+| Phase 3 | DPO pair builder、离线 reference logprob、preference gate | pair 审计和 held-out preference、CER gate 全通过 | 不生成 DPO release |
+| Phase 4 | RL rollout/reward/GRPO、reference freeze、held-out gate | reward、raw KL、reference checksum、clean/degraded gate 全通过 | 不生成 RL release |
+| Phase 5 | 主 notebook、规模化启动和最终 test 报告 | run report、test 指标、baseline 对比和文档结论齐全 | 阶段保持未完成 |
 
-当前接口只接受唯一 `sample_id` 和 `audio` 的 manifest；迁移时将官方训练字段统一为 `audio` +
-`text`，旧 `answer` 映射必须在代码变更中明确记录。训练输出必须保存 resolved config、target map
-hash、manifest hash、world size、pipeline state、checkpoint 和 adapter。
+每个阶段实现前先更新对应专项文档和目录 README；实现后先跑本地合同测试，再跑 Colab preflight 和 smoke，最后才允许扩大数据或步数。
 
-## 开发步骤
+## 设计与接口约定
 
-1. 先冻结 V100、SFT/DPO/RL、数据 schema、revision、seed 和 gate 合同；正式目录固定为 `/data/mega-asr`。
-2. 运行完整数据下载/物化和角色池 builder，直到 `DATASET_COMPLETE.json` 存在；数据未完成前不下载模型、不跑 inference、不训练。
-3. 创建独立 V100 环境，迁移 FP16/eager attention，移除 FlashAttention-2/BF16 依赖，并记录 environment.json。
-4. 运行 128-row base smoke、10+2 checkpoint/resume；确认 4 卡 world size、optimizer、scheduler、RNG、adapter 和 merge 可恢复。
-5. 对 `pilot_sft.jsonl`（7,000 条：5,000 degraded + 1,000 en clean + 1,000 zh clean）运行 4 卡 DDP SFT pilot（指定 `--allow-subset` 明确合规子集边界；全量训练强制要求 `DATASET_COMPLETE.json` 状态为 `PASSED`），在独立 `validation.jsonl` 上验证 degraded/clean gate，并通过 `merge_and_unload()` 产出 SFT Step 50 最优底座。
-6. 从独立 `dpo_train_pool` 与 `dpo_val_pool` 分别运行 Base 和 SFT Step 50 真实推理，基于双模型实际预测生成纯真实 preference pairs（禁止 gold/synthetic fallback；严格过滤平局；离线预计算 Step 50 参考模型 logp），运行 DPO pilot 并执行全额 held-out 验证，通过 zero-regression 门禁后产出 RL 基座。
-7. 从独立 `rl_train_pool` 与 `rl_val_pool` 运行 4 卡锚定 GRPO。v10/v11 第一轮是 1 条贪心解码加 3 条采样，未高出贪心 `0.02` 时再抽 8 条，所以一组是 4 行或 12 行；advantage 前完成组内聚合。优化器使用 `sample_strategy: degraded`。完成贪心 held-out、Robust ≤ 0、KL 与 clean 累积约束。只有整道 `gate.json` 为 `PASSED` 才导出到该 run 自己的目录。
-8. 三个 pilot 全部通过后，才按 full 配额依次运行 SFT、DPO、RL 和 release test。
+- 训练、评测和编排 CLI 必须支持 `--config`、`--output-dir` 和 `--seed`；数据/推理工具可用显式参数替代，但必须把最终解析配置写入结果。训练和正式评测还支持 `--run-id`；trainer 另支持 `--manifest`、`--val-manifest` 和 `--resume`。DPO 另支持 `--pair-manifest`。
+- `--resume` 只恢复 `04_training_plan.md` 中核对通过的 checkpoint。推理和评测按配置重跑，不恢复 optimizer。
+- 代码不得依赖 notebook 中的全局变量。
+- manifest 路径、模型路径和 Drive 根目录由配置或参数传入。
+- 错误样本写入 JSONL；批处理默认继续执行，并在汇总中报告失败数。
+
+所有入口必须返回非零退出码表示合同失败，并同时写结构化事件；单条数据失败只写该行 `error`，不能悄悄吞掉异常。CLI 的 `--help`、schema 版本和输出文件名属于公共接口，变更时同步更新训练/测试文档。
 
 ## 测试
 
-每次代码变更运行：
-
-```bash
-python3 -m unittest discover -s tests -v
-python3 -m py_compile evaluation/eval_wer.py
-```
-
-数据或训练合同变化还要运行 schema fixture、config validation 和 smoke。正式执行必须记录命令、method、
-revision、manifest hash、随机种子、dtype、attention、world size 和 gate.json。
+每一阶段先用合成 fixture 验证 schema、hash、错误退出码和 README 合同，再进行 Colab preflight。训练阶段额外执行 5–20 step smoke、保存/中断/恢复和固定 val 评测；DPO/RL 的算法单测不能以 loss 下降代替数学合同。所有测试命令、夹具和通过线记录在 `05_testing_plan.md`。
 
 ## 完成条件
 
-- V100 独立环境可从配置生成固定 manifest。
-- FP16/eager attention 的 clean/degraded 推理均能逐条写 prediction。
-- 10+2 resume 成功且 resolved config、world size、manifest hash 随 checkpoint 保存。
-- SFT、DPO、RL 前后均产出 English WER、Chinese CER、scenario、reward/preference 和失败统计。
-- release adapter、合并发布模型和 processor 可在新进程重新加载。
+实现前先补充本目录和 `05_testing_plan.md`；实现后完成 smoke、恢复、固定 manifest 评测和目录 README 合同测试；结果写入 `00_progress.md`。每个 run 还必须生成 `run_report.md`（或等价 JSON），列出环境、config、manifest、父版本、指标、gate、错误和恢复记录。
 
-## 影响
+## 验收与影响
 
-新功能必须直接延伸上述四个入口。训练器不提供跳过 pilot gate 或命令行注入旧 adapter 的入口；
-恢复只读取当前 output directory 的 pipeline state 和 checkpoint。需要第二套入口时，先证明现有
-接口无法表达需求并更新本文件。
-
-## 2026-10-04 当前 v31 修订
-
-当前 v31 解码修复在 `inference/decoding.py` 统一预算，训练/推理显式透传并记录合同，checkpoint 恢复和预测续跑拒绝合同不一致；启动器自动执行 5+1 步 smoke 后继续。接口、范围、影响与完成条件见 `29_rl_v31_scale_design.md` 的 2026-10-04 修订。
-
-## 2026-10-05 当前 v31 失败归因修订
-
-当前 v31 运行已确认训练池是非严格子集（4,165/16,000 degraded），并在 Step 32 因一次 `−0.0002` held-out 增益触发 `BLOCKED_TRANSFER`。同一方案内继续扩大量级：正式启动器拒绝低于 160,000 条 degraded、16-cell（含 `mixed`）覆盖不足或单 cell 超过 20% 的 manifest；训练 horizon 调整为 2,560 步、保存/评估每 320 步；scale 无效截停从 Step 640 起需要连续两次负增益；正式训练按 320 步 chunk 执行并支持显式 resume。修改前后都必须先通过配置契约、数据隔离、停止规则和目录 README 合同测试；本次不启动 V100 训练。
+完成开发阶段要求代码、配置、测试、产物和文档五者一致；只有文档更新或本地 mock 通过不能标记阶段完成。新增文件、接口、CLI 参数或产物路径时，必须同步更新 `configs/`、`train/`、`evaluation/`、`inference/`、`scripts/`、`notebooks/` 或 `tests/` 的 README（适用者）以及 `docs/qwen3-asr/00_progress.md`。

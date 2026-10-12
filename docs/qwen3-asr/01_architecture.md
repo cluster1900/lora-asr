@@ -1,58 +1,61 @@
-# 架构
+# 架构方案
 
-## 背景与范围
+## 背景与目标
 
-目标是在 4 张 V100 上，用 `Qwen/Qwen3-ASR-1.7B` 官方 API 建立可复现的鲁棒 ASR 后训练闭环。
-Mega-ASR 只作为方法参考和外部 baseline；不导入其 wrapper、训练入口或 target 规则。
-
-完整后训练链路固定为 SFT → DPO → RL。SFT 先建立可加载的 adapter，DPO 用可审计 preference pairs，
-RL 用固定 reward/rollout；三阶段都必须通过独立 gate。Router、Teacher、量化训练和 A2S 不在正式链路。
+项目目标是在 `Qwen/Qwen3-ASR-0.6B` 上建立可复现的中文鲁棒 ASR 后训练链路。训练固定使用单张 A100；新架构优先保证数据、训练、推理和评测解耦，使 Colab runtime 重启不会改变实验定义。
 
 ## 模块
 
+- `scripts/`：环境探针、manifest 构建、Drive 同步和阶段编排。
+- `inference/`：统一的 base/SFT/DPO/RL 推理接口，输出原始与归一化文本。
+- `train/`：三个阶段的训练 runner，读取配置和 JSONL manifest，不在代码中隐含数据路径。
+- `evaluation/`：WER/CER、scenario 聚合、输出健康度和 gate。
+- `configs/`：唯一的配置来源；运行时保存解析后的副本。
+- `notebooks/`：Colab 编排和可视化，不承载不可恢复的业务逻辑。
+
+训练接口参考 Modal Training Gym 的拆分方式：dataset、rollout/generate、reward、eval 和 train config 各自独立；只借鉴接口思想和可观测性，不引入其训练后端或私有 wrapper。
+
+## 数据流
+
 ```text
-V100 独立环境 -> data builder（待实现） -> JSONL manifests
-                                                           |
-                                                           v
-FP16 base -> inference runner（待实现） -> base predictions
-                                      |
-                                      v
-                              single LoRA adapter（待实现）
-                                      |
-                                      v
-                         adapter predictions -> evaluation/eval_wer.py
-                                                        |
-                                                        v
-                                                WER/CER/gates/report
+source audio/text
+  -> manifest builder
+  -> train/val/test split
+  -> base inference
+  -> SFT
+  -> preference pairs
+  -> DPO
+  -> fixed rollout + reward
+  -> RL
+  -> common evaluator
+  -> gate + release adapter
 ```
 
-- 数据层未来负责 pinned source staging、音频物化、选择、校验和 manifest 输出，不加载训练模型。
-- 训练层只消费固定 manifest/config，不负责下载数据；正式路径使用 `/data/mega-asr`，不读取
-  `/data/mini-k3`。
-- 运行时使用 FP16，不使用 BF16 或 FlashAttention-2；第一版 attention 为 eager，验证稳定后才
-  评估 PyTorch SDPA。
-- 训练使用单机 4 卡 DDP，global batch 必须显式包含 world size；推理固定单卡、batch 1 和
-  解码上限，单条失败写入结果而不中断批次。
-- 评测层只消费 prediction JSONL，英文和中文指标分开报告。
+## 阶段边界与依赖
 
-## 训练策略
+| 阶段 | 读取 | 写出 | 下游允许使用的条件 |
+| --- | --- | --- | --- |
+| baseline | 固定 val/test manifest、base 模型、`decode.eval` | predictions、metrics、environment | metrics 与 manifest/eval hash 齐全 |
+| SFT | train/val manifest、base release、SFT config | adapter、完整 checkpoint、gate | val gate 为 `passed` 才能成为 DPO policy |
+| DPO | SFT release、train/val pair manifest、离线 reference logprob | adapter、pair audit、preference/CER gate | gate 为 `passed` 才能成为 RL policy/reference |
+| RL | DPO release、train manifest、rollout config、冻结 reference | rollout、adapter、reward/KL/CER gate | gate 为 `passed` 才能发布 RL release |
 
-SFT、DPO、RL 各使用一个独立 stage adapter 和独立输出目录。阶段交接采用 `merge_and_unload()` 策略：SFT 从 base 开始，通过门禁后合并权重作为 DPO 基座；DPO 阶段通过门禁后合并作为 RL 基座。RL 只有整道 `gate.json` 为 `PASSED` 时，才把该检查点合并到该 run 自己的目录；未通过时发布底座保持 DPO Champion。LoRA 目标层同时覆盖 LLM Decoder 与音频塔 Projection 层。SFT pilot 使用 5k robust + 1k English clean + 1k Chinese clean；DPO 和 RL 使用各自不重叠的 pool 并包含独立验证集，DPO clean 音频候选池扩大 5 倍以过滤平局。现行 RL pilot 的第一轮是 1 条贪心解码加 3 条采样，未高出贪心 `0.02` 时再抽 8 条。具体 schema、配额和 reward 见 08 号合同与 `10_rl_v11_design.md`。
+每个边界都传递 `schema_version`、Git SHA、模型 revision、配置 hash、manifest hash、seed 和 eval decode hash；缺任一项时下游只能诊断，不能训练或发布。`latest.json` 是 run 内恢复指针，release 是通过门禁的不可变副本，两者不互相替代。
 
-## 接口
+## 运行控制面
 
-SFT manifest 每行包含 `sample_id`、`audio`、`text`、语言/场景和完整 source/hash 信息；DPO manifest 额外
-包含 `chosen`/`rejected`；RL rollout 额外包含 sampled prediction、reward components 和 KL。prediction
-继承 `sample_id` 并增加 `prediction` 或 `error`。每个阶段保存 resolved config、manifest hash、world
-size、checkpoint、adapter、metrics、rollouts（DPO/RL）和 gate。
+训练计算只读取 Colab 本地 staging；Drive 保存 manifest、环境指纹、追加式事件/指标、checkpoint 和 release。`request.json` 描述意图，`resolved_config.yaml` 描述实际参数，`training_state.json` 描述可恢复状态，`gate.json` 描述裁决。状态机和文件 checksum 由 `04_training_plan.md`、`07_colab_execution_contract.md` 共同定义；notebook 只能调用 CLI，不能拥有额外状态。
 
-## 测试与验收
+## 输入输出
 
-本地合同测试必须验证 schema、确定性分区、resume、错误输出、DPO pair 审计、RL reward 和 WER/CER 聚合。
-V100 验收必须覆盖 FP16 单 batch、4 卡 DDP、10+2 resume、SFT/DPO/RL pilot、clean/degraded 推理和最终固定 test。
+训练输入是 JSONL manifest、YAML 配置、模型标识和随机种子。训练输出是 `04_training_plan.md` 规定的 run 目录。推理输出每行包含 `sample_id`、`prediction_raw`、`prediction_normalized`、`error` 和运行元数据。
 
-## 影响
+评测解码 `decode.eval` 固定为 greedy。RL 采样只存在于 `decode.rollout`。阶段门禁读 val，test 只在发布时评一次。CER 使用 `zh-cer-v1`；reward 由同一套 CER 换算，两者分别报告。
 
-本次规划删除了 Colab/BF16/A2S 旧实现，不把历史代码或指标当作 V100 运行证据。历史指标只存在于
-Git 历史，不能继续作为正式产品证据。远端数据未来只经 data builder 进入 `/data/mega-asr/data`；服务器 CLI
-不保存第二份业务逻辑。
+## 达成标准
+
+每个阶段可单独运行、恢复和评测；同一 manifest 和配置能够复现输入摘要、checkpoint 元数据和指标计算；任何阶段失败都能定位到具体样本或 gate。
+
+## 测试与影响
+
+架构验收由目录合同、manifest/preflight、推理失败续跑、5–20 step smoke、断点恢复、DPO pair 审计、RL reward/KL 和 gate 测试组成。该分层让 SFT、DPO、RL 可以独立替换 trainer，同时保持 JSONL、checkpoint 和 evaluator 接口稳定；代价是每个阶段必须保存更多 hash、审计和中间产物。

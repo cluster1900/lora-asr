@@ -1,11 +1,11 @@
-# Qwen3-ASR Robust ASR — runtime and test dependencies (inferred from imports).
+# Qwen3-ASR-0.6B 中文鲁棒 ASR — Colab/A100 runtime and test dependencies.
 #
 # PyTorch is installed separately so you can pick the right build, e.g.
 #   CPU:  pip install torch --index-url https://download.pytorch.org/whl/cpu
 #   CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu121
 # then: pip install -r requirements.txt
 #
-# Real SFT/DPO/RL/inference runs also need the official Qwen3-ASR package:
+# SFT/DPO/RL/inference runs also need the official Qwen3-ASR package:
 #   pip install qwen-asr
 # qwen-asr pins transformers==4.57.6, so the transformers floor below allows it.
 # The contract tests in tests/ mock qwen-asr and do not need it.
@@ -21,6 +21,7 @@ safetensors>=0.4.3
 transformers>=4.57.6
 peft>=0.17.0
 datasets>=3.0.0
+jieba>=0.42.1
 
 # test runner (tests use unittest; pytest also works)
 pytest>=8.0

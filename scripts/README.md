@@ -1,214 +1,34 @@
-# scripts 目录说明
+# scripts
 
 ## 目录职责
 
-本目录维护 V100 服务器的数据 builder、数据集准备脚本，以及 RL pilot 训练结束后的异步评测脚本。数据脚本必须从固定 source、音频 staging、manifest、泄漏检查和恢复语义出发，确保训练、验证、评测角色物理隔离无泄漏。
+提供环境探针、中文 manifest 构建与校验、Drive 同步管理、运行目录初始化以及阶段启动支持脚本。为各训练与评测环节提供可复现的自动化 CLI 工具。
 
-## 文件清单
+## 当前文件清单
 
-| 文件 | 作用 |
-| --- | --- |
-| `download_sources.py` | E1 阶段原始数据源拉取与缓存：锁定 4 个 pinned revision，支持 HF 镜像（`hf-mirror.com`）与 OpenSLR 镜像断点续传，产出 `RAW_COMPLETE.json`。 |
-| `stage_parquet_sources.py` | E1 阶段 Parquet 数据流式解码与音频转码标准化：从 HF Parquet 文件直接流式解包音频 bytes，通过 `ffmpeg` 转码为 16kHz mono PCM 16-bit WAV，校验时长并产出 `staged_<source>.jsonl` 与 `PROCESSED_COMPLETE.json`。 |
-| `build_robust_manifests.py` | E1 阶段角色划分与门禁构建器：摄入各源 staged 样本，执行哈希分区无泄漏角色分配（7 个角色）、抽取 128 条平衡 smoke 子集与 pilot 子集、rejects 记录、SHA-256 校验和以及各级完成门禁（含 `DATASET_COMPLETE.json`）。 |
-| `build_dpo_pairs.py` | E5 阶段 DPO 偏好对构建与参考对数概率预计算器：基于真实的 Base 预测与 SFT Step 50 预测（必须显式提供 `--base-predictions` 与 `--sft-predictions`），经 WER/CER 排序构造真实的 `(chosen, rejected)` 偏好对；正式模式严禁使用 gold 答案或合成负例兜底（杜绝 gold 泄漏）；严格过滤平局（`cand_sft == cand_base` 或 `err_sft == err_base`）；使用冻结 SFT 合并底座离线预计算 `ref_chosen_logp` 与 `ref_rejected_logp`，记录完整 Provenance 哈希并生成 `dpo_pair_audit.json`。 |
-| `finish_rl_pilot_v7.sh` | 在 V100 上等待已启动的 `rl_pilot_v7` 训练结束，再按 held-out 最优检查点优先的顺序，对每个已保存 step 跑 2,867 条 `validation.jsonl` 推理和 `verify_gate.py`。状态写到 run 目录的 `pipeline_followup.json`。 |
-| `run_rl_pilot_v10.sh` | v10 的探针和 4/8/12 步退化集锚定 GRPO 驱动，学习率 `1e-5`，配置 `configs/train/qwen3_asr_rl.yaml`。该运行已在 Step 8 结束，状态 `BLOCKED_TRANSFER`。本仓库副本默认拒绝重跑；服务器上 2026-09-29 执行的那份没有这道门闩。不写入 DPO Champion。 |
-| `run_rl_pilot_v11.sh` | v11 的探针和 4/8/12 步锚定 GRPO 驱动，学习率 `2e-5`，配置 `configs/train/qwen3_asr_rl_v11.yaml`。该运行已在 Step 7 结束，状态 `STOPPED_KL`，`gate_step_7.json` 为 FAILED。本仓库副本没有重跑门闩：再执行会先跑探针，然后进入 `run_chunk 4`。不要再启动。设计内停止时评 `pipeline_state.global_step`。不写入 DPO Champion。 |
-| `run_rl_pilot_v11_recover.sh` | 等 `run_rl_pilot_v11.sh` 退出后做一次恢复：先给 `pipeline_state.global_step` 的完整检查点补贪心 held-out 和 2,867 条门禁。训练进程异常退出且上一块是 `CHUNK_DONE` 时，从最后一份含 optimizer 的检查点恢复下一块，同一块只恢复一次。设计内停止（Robust、KL、奖励下跌、`BLOCKED_*`、门禁 PASSED）不恢复训练，也不从 Step 0 重开。 |
-| `score_rl_greedy_held_out.py` | 给一个已保存的 RL 检查点追加一条贪心 Full Held-out 记录。调用训练器的 `evaluate_rl_validation(decode_mode=greedy)`，不创建优化器，不导出合并权重。合格记录已存在时不重复写；`assigned` 或 `rollouts` 不是 1,698 时拒绝写入。`--resolve-step` 从 `pipeline_state.json` 的 `global_step` 找出要评的检查点。 |
-| `score_rl_pilot_v11_checkpoint.sh` | 对 `rl_pilot_v11` 的某一个已保存 step 依次补贪心 held-out、2,867 条 `validation.jsonl` 预测和 `gate_step_<N>.json`。不调用 `train_rl.py`。门禁 FAILED 仍视为评测完成；预测行数不足或贪心行不合格时退出非 0。结束行 `SCORE_DONE` 从 `metrics.held_out_reward_improvement` 读取奖励增量。Step 7 已于 2026-09-29 22:33 CST 写成 FAILED。 |
-| `run_rl_pilot_v12.sh` | 从 DPO Champion 启动 `rl_pilot_v12`（学习率 `1e-5`，获胜优势为原始奖励差，最多 8 步）。Step 4 门禁之后，若裁剪前 `grad_norm` 中位数仍大于 1.5，再从 Champion 启动 `rl_pilot_v13`（固定优势 `0.10`）。不写 v10、v11 和 DPO Champion。v12 已有 `pipeline_state.json` 但没有 `switch_decision.json` 时拒绝重跑。该运行已在 2026-09-30 11:18 CST 停在 Step 4，动作 `stop`。不要再启动。 |
-| `run_rl_pilot_v14.sh` | 从 `rl_pilot_v12/checkpoints/step_4` 续训到新目录 `rl_pilot_v14`，学习率 `1e-5`，优势仍是原始奖励差。v14 已在 Step 8 写成 `switch`，v15 已在 Step 4 写成 `stop`。两道门禁都是 FAILED。再执行会读到已有决定并退出。不要靠删决定来重跑。 |
-| `run_rl_pilot_v16.sh` | 从 DPO Champion 启动 `rl_pilot_v16`。学习率 `1e-5`，优势是原始奖励差，获胜样本还必须是贪心文本的局部改正。该运行已在 2026-10-01 11:44 CST 停在 Step 8，动作 `stop`，门禁 FAILED。再执行会读到已有决定并退出。不要靠删决定来重跑。 |
-| `run_rl_pilot_v17.sh` | 从 DPO Champion 启动 `rl_pilot_v17`。学习率 `1e-5`，局部改正的阈值仍是 `0.35`，获胜优势改为 1。该运行已在 2026-10-01 13:13 CST 停在 Step 4，动作 `stop`，门禁 FAILED。再执行会读到已有决定并退出。不要靠删决定来重跑。 |
-| `run_rl_pilot_v18.sh` | 只读恢复 v16 Step 8 到新目录 `rl_pilot_v18`。该运行已在 2026-10-01 14:08 CST 停在 Step 10，训练状态 `STOPPED_KL`，门禁 FAILED。跟步时缺少 `gate_step_6.json`，没有写成决定。目录已存在，再执行会拒绝。不要靠删目录来重跑。 |
-| `run_rl_pilot_v19.sh` | 只读恢复 v16 Step 8 到新目录 `rl_pilot_v19`。学习率 `1e-5`，获胜优势是不超过 `0.05` 的奖励差。该运行已在 2026-10-01 15:34 CST 停在 Step 12，动作 `stop`，门禁 FAILED。再执行会读到已有决定并退出。不要靠删决定来重跑。 |
-| `run_rl_pilot_v20.sh` | 从 DPO Champion 新开 `rl_pilot_v20`。学习率 `5e-6`，优势仍是原始奖励差，局部阈值 `0.35`。2026-10-01 17:11 CST 在 Step 4 停止，动作 `stop`，门禁 FAILED。目录已存在，再执行会读到决定并退出。 |
-| `run_rl_pilot_v21.sh` | 从 DPO Champion 新开 `rl_pilot_v21`。学习率 `1e-5`，原始奖励差，局部阈值 `0.35`，不训练 3 个音频投影。2026-10-01 19:12 CST 前在 Step 4 停止，动作 `stop`，门禁 FAILED。目录已存在，再执行会读到决定并退出。 |
-| `run_rl_pilot_v22.sh` | 只读恢复 `rl_pilot_v21` 的 Step 4 到新目录 `rl_pilot_v22`。学习率、优势和音频投影开关与 v21 相同。复制 v21 损失日志。不写 v21 或 DPO Champion。2026-10-01 21:02 CST 在 Step 11 停止，动作 `stop`，门禁 FAILED。目录已存在，再执行会读到决定并退出。 |
-| `run_rl_pilot_v23.sh` | 只读恢复 `rl_pilot_v22` 的 Step 8 到新目录 `rl_pilot_v23`。恢复后把学习率写成 `5e-6`。优势、β、KL 天花板和音频投影开关不变。损失日志只保留到 Step 8。不写 v22 或 DPO Champion。2026-10-01 22:15 CST Step 12 动作 `stop`，门禁 FAILED。目录已存在，再执行会读到决定并退出。 |
-| `run_rl_pilot_v24.sh` | 从 DPO Champion 新开 `rl_pilot_v24`。学习率 `1e-5`，原始奖励差，局部阈值 `0.35`，音频投影仍开，199 个目标。策略梯度只打在相对贪心句发生变化的 token 上，KL 仍按整句。2026-10-02 00:13 CST Step 4 门禁 FAILED，动作 `continue`。00:19 CST 续到 Step 8 的那一块退出码 1，原因是一次更新的获胜句没有替换或插入 token。目录已存在，决定是 `continue`，再执行会拒绝。不要删决定，不要重跑。不写 v10 到 v23 或 DPO Champion。 |
-| `run_rl_pilot_v25.sh` | 从 DPO Champion 新开 `rl_pilot_v25`。学习率 `1e-5`，原始奖励差，局部阈值 `0.35`，音频投影仍开，199 个目标。替换和插入仍用正的 `raw_gap`，被删除的贪心 token 用负的 `raw_gap`，token 完全相同则跳过。2026-10-02 02:52 CST Step 4 门禁 FAILED，动作 `stop`。目录已存在，再执行会读到决定并退出。不要删决定，不要重跑。不写 v10 到 v24 或 DPO Champion。 |
-| `run_rl_pilot_v26.sh` | 从 DPO Champion 新开 `rl_pilot_v26`。学习率、优势、掩码和 199 个目标与 v25 相同。`--sample-strategy degraded_skip_regressed` 让 `noise` 和 `recording` 不进优化器。2026-10-02 04:39 CST Step 4 门禁 FAILED，动作 `stop`，贪心 `−0.0005`，Robust `+0.000359`。目录已存在，再执行会读到决定并退出。不要删决定，不要重跑。不写 v10 到 v25 或 DPO Champion。 |
-| `run_rl_pilot_v27.sh` | 从 DPO Champion 新开 `rl_pilot_v27`。学习率、优势、掩码和 199 个目标与 v25 相同。采样策略回到 `degraded`。`include_reference_candidate: true` 时，参考文本只有落在局部编辑距离内才进入更新。准备阶段要求训练器含 `append_reference_candidate(`，并保留 v26 的 `stop` 决定。2026-10-02 05:13 CST 启动，驱动 PID 133766。07:10 CST Step 7 门禁 FAILED，动作 `stop`：贪心 `+0.0002`，Robust `+0.000014`，训练状态 `STOPPED_KL`。不写 v10 到 v26 或 DPO Champion。不要从 Step 7 续训。 |
-| `run_rl_pilot_v28.sh` | 只读恢复 v27 Step 4 到新目录 `rl_pilot_v28`。`apply_learning_rate_on_resume: true` 把学习率写成 `5e-6`。参考文本、`signed_edits`、`raw_gap`、局部阈值 `0.35` 和 199 个目标保持不变。准备阶段截断损失日志到 Step 4，要求 v27 的决定是 `stop`。不恢复 Step 7，不写 v27 或 DPO Champion。 |
-| `run_rl_pilot_feasibility_v29.sh` | 归档件。2026-10-03 从 V100 `/tmp/rl_pilot_feasibility_v29.sh` 原样复制（仅加头注释），因为 `/tmp` 不是持久位置。流程：probe（128 prompt，须 `GO_GRPO`）→ 从 DPO Champion 训练 4 步（`qwen3_asr_rl_v28.yaml` + `--max-steps 4`，`degraded`）→ `score_rl_pilot_checkpoint.sh` 以 `pilot_feasibility` 评测。目录已存在时拒绝运行，不要重跑。 |
-| `build_rl_verdict_manifest.py` | v31 判定 B 清单生成器（`docs/qwen3-asr/29_rl_v31_scale_design.md`）。`--source dpo_val_pool.jsonl` 只取 `condition_group=degraded` 行原样写入 `--output`；`--exclude` 的每个角色都必须具备且唯一 `sample_id`/`source_utterance_id`/`audio_sha256`，任一交集、缺文本/音频路径或重复身份键都退出 1；`--check-audio` 要求音频文件存在。同时写 `<output>.COMPLETE.json`（行数、sha256、来源与排除文件 sha256、按语言/场景计数）。已有输出 sha 不同则拒绝覆盖。 |
-| `run_rl_scale_v31.sh` | v31 换量级实验启动器。流程：生成判定 B 清单 → 检查 RL degraded 至少 160,000 行、16 个 language×scenario cell（含 `mixed`）各至少 640 行且单 cell 不超过 20% → 检查六个固定角色的三种身份键零交集 → 检查 run 所在文件系统至少 100 GiB 可用 → probe（须 `GO_GRPO`）→ 按 320 步 checkpoint chunk 训练到 2,560 步（`stop_profile=scale`）→ release/paired/tail gate。正式门槛固定在脚本中，不能通过环境变量降低；`RL_SCALE_SMOKE=1` 时只跑 5 步并在 checkpoint 保存后退出。`RL_RUN_DIR` 必须位于 `/data/mega-asr/runs/rl_scale_v31*`；目录已存在时必须显式 `RL_RESUME=1`。续跑调用 `select_resume_step`：只承认 adapter、optimizer、scheduler、训练状态和四卡 RNG 齐全的检查点；设计内停止状态只有在该步检查点完整时才不再续训，半成品 `pipeline_state.json` 会回到上一份完整检查点。训练器同时裁掉未提交的损失行和 rollout。`nvidia-smi` 不可用或 GPU 上有任何 CUDA compute 进程时拒绝启动。 |
-| `score_rl_pilot_checkpoint.sh` | 给 `RL_RUN_DIR` 和 `RL_CONFIG` 指定的检查点补贪心 held-out、2,867 条预测和 gate。默认写 `gate_step_<N>.json`；设置 `RL_GATE_PROFILE=pilot_feasibility` 时写独立的 `pilot_gate_step_<N>.json`。拒绝把 v10、v11、v12 或 DPO Champion 当作目标。不调用 `train_rl.py`，不导出权重。 |
-| `sync_rl_pilot_v7_results.sh` | 把 V100 上的 v7 日志、gate、预测和 adapter 配置拉回本地 `results/rl_pilot_v7/`。不拉取 optimizer 和合并后的 safetensors。 |
-| `README.md` | 说明当前目录职责、文件清单、CLI 参数与维护要求。 |
+- `README.md`：本说明文档。辅助脚本（`colab_bootstrap.py`、`drive_sync.py`、`manifest_validate.py`、`build_dpo_pairs.py` 等）将在各阶段按需实现并登记。
 
-复核约束：`build_rl_verdict_manifest.py` 的 `--exclude` 必须覆盖 `sft_train`、`dpo_train_pool`、`rl_train_pool`、`rl_val_pool`、`validation`、`bench_test` 六个角色，并校验三种身份键完整且唯一；`run_rl_scale_v31.sh` 通过 `nvidia-smi` 检查所有 CUDA compute 进程，无法查询时拒绝启动。
+## 主要输入输出
 
-## 使用入口与 CLI 参数
+- **输入**：原始音频与标注、Drive 挂载路径、配置 YAML、随机种子以及待同步的本地 checkpoint 目录。
+- **输出**：结构化环境报告 `environment.json`、校验后的 `manifest_sha256.json`、符合 schema 的中文 train/val/test manifest、Drive 持久化 checkpoint、DPO pair/reference-logprob 审计、追加式 `events.jsonl` 和 `run_report.md`。
 
+## 使用入口
+
+在 Phase 0–3 实现后提供：
 ```bash
-# 1. 下载原始数据源并记录 RAW_COMPLETE.json
-python3 scripts/download_sources.py \
-    --config configs/data/public_robust_v100.yaml \
-    --raw-dir /data/mega-asr/data/raw \
-    --endpoint https://hf-mirror.com
+# 环境启动与探针
+python3 scripts/colab_bootstrap.py --config configs/train/sft_pilot.yaml --drive-root /content/drive/MyDrive/qwen3-asr --run-id <run_id> --seed 42
 
-# 2. 流式解包 Parquet 并通过 ffmpeg 转码为 16kHz mono WAV（支持指定 source 或 all）
-python3 scripts/stage_parquet_sources.py \
-    --config configs/data/public_robust_v100.yaml \
-    --source all \
-    --endpoint https://hf-mirror.com
+# Manifest 校验
+python3 scripts/manifest_validate.py --manifest manifests/train.jsonl --check-audio
 
-# 3. 哈希隔离分区并产出全套 7 角色 manifest、smoke.jsonl、pilot 子集与 DATASET_COMPLETE.json
-# （在数据未达全额配额时使用 --no-strict-quotas 标记 NON_STRICT_SUBSET，使用 --freeze-validation 保持核心 validation.jsonl 绝对冻结）
-python3 scripts/build_robust_manifests.py \
-    --config configs/data/public_robust_v100.yaml \
-    --staged-dir /data/mega-asr/manifests \
-    --output-dir /data/mega-asr/manifests \
-    --data-dir /data/mega-asr/data \
-    --mode full \
-    --no-strict-quotas \
-    --freeze-validation
-
-# 4. 深度核验已有 manifest 门禁与音频完整性
-# 非全量模式校验子集门禁（预期 VERIFIED (NON_STRICT_SUBSET)）
-python3 scripts/build_robust_manifests.py --config configs/data/public_robust_v100.yaml --mode verify-only --verify-audio
-# 严格模式校验全额配额（全量达标前判为 FAILED）
-python3 scripts/build_robust_manifests.py --config configs/data/public_robust_v100.yaml --mode verify-only --strict-quotas
-
-# 5. 构建 DPO 偏好对并预计算参考模型对数概率（强制要求传入真实 Base 与 SFT 预测）
-python3 scripts/build_dpo_pairs.py \
-    --candidate-manifest /data/mega-asr/manifests/pilot_dpo.jsonl \
-    --base-predictions /data/mega-asr/runs/dpo_candidates/base_pilot_dpo_predictions.jsonl \
-    --sft-predictions /data/mega-asr/runs/dpo_candidates/sft_step50_pilot_dpo_predictions.jsonl \
-    --output-manifest /data/mega-asr/manifests/pilot_dpo_pairs.jsonl \
-    --rejects /data/mega-asr/manifests/rejects_dpo.jsonl \
-    --audit-output /data/mega-asr/runs/dpo_pair_audit.json \
-    --ref-model-dir /data/mega-asr/runs/sft_pilot_controlled/merged_base \
-    --target-pairs 3000
-
-# 6. v7 已经在 V100 上启动后，用这份脚本收尾。它固定 balanced 采样和采样 held-out。
-#    v10/v11 使用各自的驱动。只改 RL_RUN_DIR 不能把本脚本拿去跑后续 pilot。
-bash scripts/finish_rl_pilot_v7.sh
-
-# 7. v7 收尾状态变为 DONE 后，在本地拉回 gate 和预测
-bash scripts/sync_rl_pilot_v7_results.sh
-
-# 8. v10 已结束（Step 8，BLOCKED_TRANSFER）。下面这条命令会直接退出。
-bash scripts/run_rl_pilot_v10.sh
-
-# 9. v11 已结束（Step 7，STOPPED_KL，gate_step_7.json 为 FAILED）。
-#    run_rl_pilot_v11.sh 没有重跑门闩，再执行会进入 run_chunk 4。不要启动。
-#    run_rl_pilot_v11_recover.sh 见到 STOPPED_KL 不加步。Step 7 已评完，不要再补评。
-
-# 10. v12 已结束（Step 4，动作 stop，gate_step_4.json 为 FAILED）。
-#     run_rl_pilot_v12.sh 再执行会读到已有决定并退出，不要靠删决定来重跑。
-
-# 11. v14 和 v15 都已结束，门禁 FAILED。再执行会读到已有决定并退出。
-bash scripts/run_rl_pilot_v14.sh
-
-# 12. v16 已结束（Step 8，动作 stop，门禁 FAILED）。再执行会读到已有决定并退出。
-bash scripts/run_rl_pilot_v16.sh
-
-# 13. v17 已结束（Step 4，动作 stop，门禁 FAILED）。再执行会读到已有决定并退出。
-bash scripts/run_rl_pilot_v17.sh
-
-# 14. v18 已结束（Step 10，STOPPED_KL，门禁 FAILED）。目录已存在，再执行会拒绝。
-bash scripts/run_rl_pilot_v18.sh
-
-# 15. v19 已结束（Step 12，动作 stop，门禁 FAILED）。再执行会读到已有决定并退出。
-bash scripts/run_rl_pilot_v19.sh
-
-# 16. v20 已结束（Step 4，动作 stop，门禁 FAILED）。再执行会读到已有决定并退出。
-bash scripts/run_rl_pilot_v20.sh
-
-# 17. v21 已结束（Step 4，动作 stop，门禁 FAILED）。再执行会读到已有决定并退出。
-bash scripts/run_rl_pilot_v21.sh
-
-# 18. v22 已结束（Step 11，动作 stop，门禁 FAILED）。再执行会读到已有决定并退出。
-bash scripts/run_rl_pilot_v22.sh
-
-# 19. v23 已结束（Step 12，动作 stop，门禁 FAILED）。再执行会读到已有决定并退出。
-bash scripts/run_rl_pilot_v23.sh
-
-# 20. v24 已结束。Step 4 门禁 FAILED，决定是 continue，随后 chunk 8 退出码 1。再执行会拒绝。不要删决定。
-bash scripts/run_rl_pilot_v24.sh
-
-# 21. v25 已于 2026-10-02 02:52 CST 停在 Step 4，动作 stop，门禁 FAILED。目录已存在时再执行会退出。不要删决定。
-bash scripts/run_rl_pilot_v25.sh
-
-# 22. v26 已于 2026-10-02 04:39 CST 停在 Step 4，动作 stop，门禁 FAILED。目录已存在时再执行会退出。不要删决定。
-bash scripts/run_rl_pilot_v26.sh
-
-# 23. v27 已于 2026-10-02 07:10 CST 停在 Step 7，动作 stop，门禁 FAILED。目录已存在时再执行会退出。不要删决定，不要从 Step 7 续训。
-bash scripts/run_rl_pilot_v27.sh
-
-# 24. v28 只读恢复 v27 Step 4，恢复后的学习率是 5e-6。目录已存在且决定为 continue 时再执行会拒绝。
-bash scripts/run_rl_pilot_v28.sh
+# DPO Pair 构建与离线参考 logprob 预计算
+python3 scripts/build_dpo_pairs.py --sft-release releases/sft/<sft_run_id> --train-manifest manifests/train.jsonl --val-manifest manifests/val.jsonl --output-dir manifests/dpo/<pair_id> --seed 42
 ```
 
-### RL 检查点可行性门禁
-
-```bash
-# 默认执行正式 release profile，输出 gate_step_<N>.json
-RL_RUN_DIR=/data/mega-asr/runs/rl_pilot_v28 \
-RL_CONFIG=/data/mega-asr/repo/configs/train/qwen3_asr_rl_v28.yaml \
-bash scripts/score_rl_pilot_checkpoint.sh 4
-
-# 只确认训练闭环和 checkpoint 可用，输出 pilot_gate_step_<N>.json
-RL_GATE_PROFILE=pilot_feasibility \
-RL_RUN_DIR=/data/mega-asr/runs/rl_pilot_v28 \
-RL_CONFIG=/data/mega-asr/repo/configs/train/qwen3_asr_rl_v28.yaml \
-bash scripts/score_rl_pilot_checkpoint.sh 4
-```
-
-### RL v31 换量级实验（方案 B）
-
-```bash
-# 需项目负责人确认后执行。先 smoke（约 35 min，5 步，不评分）：
-RL_SCALE_SMOKE=1 bash /data/mega-asr/repo/scripts/run_rl_scale_v31.sh
-
-# 正式运行（约 7 天，支持按 checkpoint 异步续跑）。产物在 /data/mega-asr/runs/rl_scale_v31/：
-# search_probe.json, loss_log.jsonl, checkpoints/step_{320,640,960,1280,1600,1920,2240,2560}, gate_step_<N>.json,
-# predictions_step_<N>(_extra)(_eval)/, paired_verdict_step_<N>.json, scale_verdict.json
-nohup bash /data/mega-asr/repo/scripts/run_rl_scale_v31.sh > /data/mega-asr/runs/rl_scale_v31.nohup 2>&1 &
-
-# 若主机维护或进程异常退出，从同一 run 的最后完整 320-step checkpoint 继续：
-RL_RESUME=1 RL_RUN_DIR=/data/mega-asr/runs/rl_scale_v31_<timestamp> \
-  nohup bash /data/mega-asr/repo/scripts/run_rl_scale_v31.sh \
-  > /data/mega-asr/runs/rl_scale_v31_<timestamp>.resume.nohup 2>&1 &
-
-# 单独生成/核对判定 B 清单（幂等）
-/data/mega-asr/venv/bin/python scripts/build_rl_verdict_manifest.py \
-  --source /data/mega-asr/manifests/dpo_val_pool.jsonl \
-  --exclude /data/mega-asr/manifests/sft_train.jsonl \
-            /data/mega-asr/manifests/dpo_train_pool.jsonl \
-            /data/mega-asr/manifests/rl_train_pool.jsonl \
-            /data/mega-asr/manifests/rl_val_pool.jsonl \
-            /data/mega-asr/manifests/validation.jsonl \
-            /data/mega-asr/manifests/bench_test.jsonl \
-  --output /data/mega-asr/manifests/rl_verdict_extra_degraded.jsonl --check-audio
-```
-
-
-### 主要输入输出与 Schema
-
-- **输入配置**：`configs/data/public_robust_v100.yaml`（定义 4 个 pinned 数据源与 7 个数据角色）。
-- **主要输出**：
-  - `manifests/RAW_COMPLETE.json`：原始数据下载完成标记。
-  - `manifests/PROCESSED_COMPLETE.json`：音频转码与标准化完成标记。
-  - `manifests/smoke.jsonl`：128 条平衡 smoke 数据（32 en + 32 zh + 64 degraded），供 Base 推理与续训 Smoke 使用。
-  - `manifests/<role>.jsonl`：7 个角色（`sft_train`, `dpo_train_pool`, `dpo_val_pool`, `rl_train_pool`, `rl_val_pool`, `validation`, `bench_test`）的 JSONL manifest。
-  - `manifests/pilot_<name>.jsonl`：pilot 子集 manifest。
-  - `manifests/rejects.jsonl`：校验未通过或清洗丢弃的样本记录（含丢弃原因）。
-  - `manifests/<role>_COMPLETE.json`：各角色完成指标与 hash。
-  - `manifests/manifest_sha256.json`：所有 manifest 的 sha256 汇总。
-  - `manifests/DATASET_COMPLETE.json`：E1 阶段总验收门禁文件（确认无跨角色泄漏与配额达成）。
+`drive_sync.py` 必须先写本地 staging 和 `sha256.json`，再复制 `.incoming`，读回核对后才更新 `latest.json`；manifest/pair builder 必须同时写 schema 版本、source 泄漏审计和 rejected 行，不能只返回一个行数。
 
 ## 维护要求
 
-新增、重命名或删除脚本时，必须同步更新“文件清单”和仓库根 README。修改数据源、配额、schema、
-输出文件、恢复策略或泄漏规则时，必须同步更新本 README、`docs/qwen3-asr/03_data_plan.md`、
-开发/测试/进度文档和对应测试。
-
-## 2026-10-04 当前 v31 修订
-
-`run_rl_scale_v31.sh` 继续当前 v31，默认创建带时间戳的新 run（可设 RL_RUN_DIR）；正式模式按 320 步 checkpoint chunk 运行，异常退出后用 `RL_RESUME=1` 从最后一份完整检查点继续，并丢掉该步之后尚未提交的损失行和 rollout。`RL_SCALE_SMOKE=1` 只运行 5 步并在保存完整 checkpoint 后结束，不评分。base/DPO 同预算预测保存在当前 run 的 baselines 内，最终叠加 tail gate。`score_rl_pilot_checkpoint.sh` 接受 RL_MAX_NEW_TOKENS、RL_BASE_EVAL_DIR、RL_DPO_EVAL_DIR，使候选和基线按同合同评分。
+脚本职责、CLI 参数、输入输出 schema 变更，以及新增、重命名或删除脚本时，必须在同一提交同步更新对应目录的 `README.md`、开发文档和测试；严禁将训练状态只记录在 shell 临时变量中。

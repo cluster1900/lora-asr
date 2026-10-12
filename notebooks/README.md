@@ -1,23 +1,23 @@
-# notebooks 目录说明
+# notebooks
 
 ## 目录职责
 
-本目录保留 Notebook 目录合同，但当前没有正式 Notebook。训练入口已经切换到 V100 服务器上的
-CLI；后续如需新增 Notebook，必须先证明它不会复制第二套数据、训练或评测逻辑。
+保存 Colab 运行编排入口、训练监视、指标可视化和小规模诊断 notebook。notebook 仅负责流程编排与调用，所有可复用的核心训练、推理与评测逻辑必须位于 `scripts/`、`train/`、`inference/` 或 `evaluation/` 中。
 
-## 文件清单
+## 当前文件清单
 
-| 文件 | 作用 |
-| --- | --- |
-| `README.md` | 说明本目录当前为空、入口约束和维护要求。 |
+- `README.md`：本说明文档。Phase 0 完成后加入单一主入口 notebook `00_bootstrap_baseline.ipynb`。
 
-## 当前状态
+## 主要输入输出
 
-旧的 Colab notebook、Colab 依赖和 BF16/A2S 编排已经删除。当前方案见
-`docs/qwen3-asr/07_v100_server_training_plan.md`，正式实现完成前不得新增临时 Notebook 作为训练入口。
+- **输入**：Google Drive 挂载授权、项目仓库 Git 分支/SHA、运行配置参数。
+- **输出**：在 Drive `runs/<run_id>/` 下生成的日志、训练状态、评估报告与图表展示。
+
+## 使用入口
+
+在 Google Colab 中打开：
+- `00_bootstrap_baseline.ipynb`（Phase 0 完成后提供）：从全新 runtime 运行环境探针、依赖安装、基线推理与指标评测。
 
 ## 维护要求
 
-新增、重命名或删除 Notebook 时，必须同步更新“文件清单”和仓库根 README。修改执行阶段、路径、
-CLI 参数、产物或门禁时，必须同步更新本 README、专项文档和静态测试。Notebook 不能成为服务器
-CLI 之外的第二套业务逻辑。
+notebook 必须支持从全新空白 runtime 完整运行；新增、重命名或删除 notebook 时，必须在同一提交同步更新对应目录的 `README.md` 与相关文档。

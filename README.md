@@ -1,68 +1,37 @@
 # Qwen3-ASR Robust ASR
 
-基于 `Qwen/Qwen3-ASR-1.7B` 官方 API 的独立鲁棒 ASR 微调项目。Mega-ASR 仅作为方法参考和
-外部 baseline，不是代码依赖。
+这是一个基于 `Qwen/Qwen3-ASR-0.6B` 官方 `qwen-asr`/Transformers API 的独立中文鲁棒 ASR 后训练项目。当前仓库已经重置为最小骨架，正式执行环境采用 Colab + Drive，训练使用单张 A100，顺序为 SFT → DPO → RL。
 
-## 当前主线
+## 当前状态
 
-```text
-V100 服务器 -> 固定数据 manifest -> SFT -> DPO -> RL -> release adapter
-           -> base/SFT/DPO/RL 对比 -> 固定 test 验收
-```
+项目处于 Phase 0：先建立 Colab 环境、固定 manifest 和 baseline 推理。训练 checkpoint 的保存与恢复从 SFT 开始，暂不声称任何后训练效果。
 
-- 训练目标仍为 `Qwen/Qwen3-ASR-1.7B`，运行时使用官方 `qwen-asr`/Transformers API。
-- 目标服务器为 4 × Tesla V100-SXM2-32GB；训练采用 FP16、eager attention 和单机 4 卡 DDP。
-- SFT、DPO、RL 都是完整后训练必做阶段；每阶段先做 pilot，再按 gate 扩大到 full。
-- A2S、Teacher、Router 和 FlashAttention 不在正式链路；RL 使用固定 reward/rollout 合同。
-- English 使用 WER，Chinese 使用 CER，并保留 scenario、失败输出和 32-cell 聚合。
-
-2026-09-18 已完成服务器只读盘点和从零训练规划同步；没有安装依赖、修改远端或启动训练。旧的 Colab/BF16/A2S 训练和推理实现已删除，V100 runner 尚未重建，不能据此声称 GPU 训练已可用。
-
-## 文件
+## 目录
 
 ```text
-configs/      数据与训练的唯一配置
-docs/         架构、开发、数据、训练、测试、进度和风险
-notebooks/    预留 Notebook 目录，当前为空，详见 notebooks/README.md
-scripts/      V100 数据 builder、数据集物化，以及 RL pilot 启动与收尾脚本，详见 scripts/README.md
-train/        V100 模型训练 runner（SFT/DPO/RL），详见 train/README.md
-inference/    预留 V100 推理 runner，详见 inference/README.md
-evaluation/   WER/CER 与聚合评测，详见 evaluation/README.md
-tests/        不依赖模型下载的合同测试
+configs/             训练和数据配置（重新实现后才加入具体配置）
+docs/qwen3-asr/      架构、数据、训练、测试、风险和进度文档
+evaluation/          WER/CER、场景聚合和 gate 评测
+inference/           Qwen3-ASR baseline 与批量推理
+notebooks/           Colab 编排入口；可复用逻辑必须放在 Python 模块
+scripts/             manifest、环境、Drive 同步和阶段启动脚本
+train/               SFT、DPO、RL runner
+tests/               数据、恢复、训练和评测合同测试
 ```
 
-目录说明：[notebooks](notebooks/README.md) · [scripts](scripts/README.md) ·
-[train](train/README.md) · [inference](inference/README.md) · [evaluation](evaluation/README.md)。这些目录的文件或职责变化时，
-必须在同一提交维护对应 README。
+## 新的工作方式
 
-## 本地验证
+每个阶段先更新 `docs/qwen3-asr/` 中对应文档，再实现代码；先跑 5–20 step smoke，再扩大规模。所有 run 保存固定配置、manifest hash、随机种子、环境信息、checkpoint 状态和原始预测。只有同时具备可复现命令、输出指标、baseline 对比和文档记录，阶段才算完成。
 
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install -r requirements.txt  # GPU 服务器改用对应 CUDA 版 torch，并额外安装 qwen-asr
-python3 -m unittest discover -s tests -v
-python3 -m py_compile evaluation/eval_wer.py scripts/download_sources.py scripts/stage_parquet_sources.py scripts/build_robust_manifests.py
-```
+## 起步计划
 
-## 入口
+1. 在 Colab 从空 runtime 安装官方依赖并记录环境指纹。
+2. 用固定 clean/degraded manifest 跑通 base 推理和 WER/CER。
+3. 建立中文 clean、noise、reverb、far_field、dropout 五类数据 MVP。
+4. 依次实现并验收 SFT、DPO、RL pilot。
 
-当前保留的 CLI 入口：
+详细范围、验收标准和 Drive checkpoint 合同见 [`docs/qwen3-asr/00_reset_plan.md`](docs/qwen3-asr/00_reset_plan.md)；训练实现、配置 schema、恢复、门禁和 run report 以 [`docs/qwen3-asr/04_training_plan.md`](docs/qwen3-asr/04_training_plan.md) 为准。文档合同已补齐，但 runner、锁定环境、GPU smoke 和任何后训练效果仍未完成。
 
-- 数据源拉取与门禁验证：
-```bash
-python3 scripts/download_sources.py --help
-python3 scripts/stage_parquet_sources.py --help
-python3 scripts/build_robust_manifests.py --help
-python3 scripts/build_robust_manifests.py --config configs/data/public_robust_v100.yaml --mode verify-only
-```
+## 可恢复历史
 
-
-
-- 评测工具：
-```bash
-python3 evaluation/eval_wer.py --help
-```
-
-训练和推理 runner 待按 V100 方案重新实现。
-
-执行合同见 [docs/qwen3-asr/README.md](docs/qwen3-asr/README.md)。未完成 SFT、DPO、RL 三阶段 pilot、固定评测、
-release adapter 和 Mega-ASR 同 evaluator baseline 前，不声称达到或超过 Mega-ASR。
+重置前仓库状态保存在本地 Git 标签 `pre-reset-20261012`，不作为当前实现或实验结果来源。

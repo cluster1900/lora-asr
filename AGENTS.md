@@ -2,7 +2,7 @@
 
 ## 项目定位
 
-本项目是独立的 Qwen3-ASR Robust ASR 项目，基础模型统一使用 `Qwen/Qwen3-ASR-1.7B`。Mega-ASR 只作为方法参考和外部 baseline，不作为最终代码底座。
+本项目是独立的中文 Qwen3-ASR Robust ASR 项目，基础模型统一使用 `Qwen/Qwen3-ASR-0.6B`。Mega-ASR 和 Modal Training Gym 只作为方法参考或外部 baseline，不作为最终代码底座。
 
 ## 开发约束
 
@@ -12,7 +12,8 @@
 - 新工程代码不得写入 `references/mega-asr-upstream/`。
 - `references/` 必须保持在 `.gitignore` 中，不提交其中任何文件。
 - 新代码应面向 Qwen3-ASR 官方 `qwen-asr`/Transformers API 设计。
-- V100 服务器是第一优先训练环境；正式执行使用 `/data/mega-asr`，不以 Colab/Google Drive 作为训练合同。
+- Colab 单张 A100 是正式训练环境；训练使用 Colab 本地磁盘，Google Drive 负责 manifest、checkpoint、日志和结果持久化，并作为恢复合同的一部分。
+- 可以参考 Modal Training Gym 的 dataset、rollout、reward、eval、recipe 和可观测性拆分，但不得直接依赖其训练后端或私有模型 wrapper。
 - 数据、SFT、DPO、RL、推理和评测应尽量解耦；SFT → DPO → RL 是正式后训练顺序。
 - 所有实验应能通过 JSONL manifest、配置文件和固定随机种子复现。
 
@@ -89,13 +90,13 @@
 - RL：必须验证 reward components、rollout、KL、reference freeze 和 held-out reward gate。
 - 训练脚本：先跑 5-20 step smoke test；checkpoint 可保存、加载、继续训练；训练配置必须随 checkpoint 保存。
 - 评测脚本：能计算 WER/CER；能按 `scenario` 聚合；保存原始预测、归一化预测和指标。
-- Router：必须报告 clean/degraded accuracy、precision、recall，并记录阈值来源。
+- 如后续实现 Router，必须报告 clean/degraded accuracy、precision、recall，并记录阈值来源；当前 MVP 不包含 Router。
 
 ## 验收标准
 
 一个阶段只有同时满足以下条件才算完成：
 
-- 有可复现服务器命令、配置、manifest 和固定随机种子。
+- 有可复现 Colab 启动步骤或 CLI、配置、manifest 和固定随机种子。
 - 有固定输入 manifest、配置文件和随机种子。
 - 有输出结果文件和指标摘要。
 - 有 baseline 对比。
@@ -103,9 +104,9 @@
 
 MVP 最低验收：
 
-- Qwen3-ASR baseline 可运行并产出 WER/CER。
-- 数据 MVP 至少覆盖 clean、noise、reverb、far_field、dropout。
-- SFT pilot 至少在一个 degraded 场景上相对 base 改善 WER/CER。
+- Qwen3-ASR-0.6B baseline 可运行并产出中文 CER（同时保留 WER 辅助指标）。
+- 中文数据 MVP 至少覆盖 clean、noise、reverb、far_field、dropout。
+- SFT pilot 至少在一个 degraded 场景上相对 base 改善 CER。
 - DPO pilot 相对 SFT 通过 preference 和 clean/degraded gate。
 - RL pilot 相对 DPO 通过 reward、KL 和 clean/degraded gate。
 

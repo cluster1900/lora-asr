@@ -1,227 +1,64 @@
 # 风险与决策
 
-## 当前决策
+## 背景与范围
 
-- 维护公开数据 -> FP16 base -> SFT -> DPO -> RL -> release -> 评测一条路径。
-- 基础模型固定 `Qwen/Qwen3-ASR-1.7B`；V100 使用 FP16 和 eager attention，不使用 BF16 或
-  FlashAttention-2。
-- 训练使用独立 `/data/mega-asr` 环境和单机 4 卡 DDP；global batch 必须包含 world size。
-- 完整链路固定为 SFT → DPO → RL；阶段交接采用 `merge_and_unload()` 策略产出下阶段基座，每阶段独立 adapter、manifest、checkpoint 和 gate。
-- LoRA 目标层同时覆盖 LLM Decoder 与音频塔投影层，兼顾语义纠错与声学损伤补偿；A2S 不进入正式链路。
-- DPO 推荐离线预计算参考模型 logprobs，消除训练时参考模型常驻显存开销（显存降 50%）。
-- RL 采用带 KL 正则的锚定 GRPO。v10/v11 第一轮是 1 条贪心解码加 3 条采样（`temperature=1.0`、`top_p=0.95`、`top_k=50`），未高出贪心 `0.02` 时再抽 8 条。v10 学习率 `1e-5`，v11 学习率 `2e-5`。优化器使用 `sample_strategy: degraded`。只有整道 `gate.json` 为 `PASSED` 才导出到该 run 自己的目录。v4–v8 的固定 $G=4$、温度 `0.85` 是历史采样。发布底座在 PASSED 之前保持 DPO Champion。统一 `asr` 键名与序列惩罚。
-- Clean 数据候选源扩大 5 倍以应对高平局率（ties），确保足额产出 clean preference pairs。
-- 设置全局 Base 锚定的 clean 错误率累积退化上限（$\le 0.025$），防止级联劣化。
-- English WER 与 Chinese CER 分开报告。
-- Mega-ASR 只作方法和外部 baseline，不进入运行时依赖。
-- 不使用 Teacher、Router 或量化训练；RL 是正式链路第三阶段。
-- Hub 数据只按角色配额流式 staging，不镜像完整数据集；SFT、DPO、RL 使用隔离 pool。
-- 2026-10-03 RL 选择方案 B（`29_rl_v31_scale_design.md`）：不再做 4–12 步改一个杠杆的 pilot；v31 只放大量级（完整 `rl_train_pool` degraded、256 步、`scale` 停止档 `raw_kl ≤ 2e-2`），奖励/优势/采样/学习率/β 不变。理由：20 个 pilot checkpoint 与 DPO 统计不可区分，训练长度由 `5e-4` KL 上限截停而非由数据决定；英文采样候选上限增益 `0.117`，说明策略分布内仍有可学信号。验收以配对区间（判定集 `validation` + `dpo_val_pool` degraded）与**未放宽**的 release 门禁共同决定。回滚条件：Step 64–128 held-out 增益都 ≤ 0、或配对 degraded 区间跨 0 且无剂量反应，即收口 RL（方案 A）；`scale` 档只由 v31 配置启用，pilot 行为逐位不变。
+训练在可中断的 Colab 单卡上运行，数据、模型 API、偏好缓存、rollout、指标和 Drive 恢复任一环节出错都可能制造不可复现实验。本文件记录已冻结的工程决策、可观测触发信号、缓解方案和回滚条件；不把风险表当作训练结果，也不重复旧仓库的历史 gate。
 
-- 2026-10-04 v31 复核更正：已核实训练 128 / 官方发布 512 的生成预算差异；异常行是 508 次编辑（并非已测得的生成 token 数）。额外判定集约 97% 的均值回退来自该行，但 held-out 负增益与 validation 回退仍需独立解释。按用户要求只迭代现有 v31：统一到发布预算 512，重新计算可比对照，补充尾部门禁，在同一 run 先做 5+1 步保存/恢复 smoke，再自动继续；是否改善以完整门禁为准。
-- 2026-10-05 v31 失败归因与修复决策：当前 `rl_train_pool` 是 `NON_STRICT_SUBSET`，只有 4,165 条 degraded；v31 在 Step 32 已结束，实际只消费 2,048 prompt，不能代表 16,000 条 RL 数据合同。训练本身仍有更新信号（887/2,048 group 更新、`raw_kl=0.010715`、zero variance `0.3125`），但 Step 32 的 held-out 增益 `−0.0002` 被单次 futility 规则截停。保留 DPO→RL、reward、LoRA、学习率和最终 gate 不变；正式启动器增加最低样本量与语言×场景覆盖门禁，v31 horizon 对齐到 256 步，scale futility 改为 Step 64 起连续两次负增益才停止。本轮只完成文档、配置和代码修复，不启动训练。
-- 2026-10-05 v31 训练量扩大决策：在上述方案内把 RL degraded 合同从 16,000 再扩大 10 倍到 160,000，语言×场景最低覆盖从 64 提到 640，horizon 从 256 步提到 2,560 步，保存/评估间隔从 32 提到 320，futility 起点同步到 Step 640。SFT、DPO、reward、LoRA、学习率、验证集和 release gate 不变；本轮只完成门禁与配置修改，不启动训练。
-- 2026-10-05 10x 效果风险：样本扩大预计降低估计方差，但旧 run 的 `raw_kl=0.010715` 已接近 `0.02` 上限，按 Step 1–32 日志粗略外推可能在 Step 58–72 触发 `STOPPED_KL`。在完成 KL 剂量预检前，不把 10x 训练视为已确认的收益方案；若预检仍显示早期 KL 快速上升，应在当前 v31 内先处理优化步幅，再决定是否占用 V100。
-- 2026-10-05 v31 稳定性处理：在不放宽 gate 的前提下，把学习率降至 `2e-6`、warmup 提至 `64`、KL beta 提至 `0.08`。若后续仍出现早期 KL 超限或 held-out 负增益，停止继续扩大步数，回到 reward/credit assignment 分析。
-- 2026-10-05 v31 对抗性修复落地：上述 10x 方案的有效执行合同为 160,000 degraded、16-cell（含 `mixed`）各至少 640、单 cell ≤20%，正式训练按 320 步 checkpoint 分块并以 `RL_RESUME=1` 显式恢复，run 文件系统至少 100 GiB 可用。smoke 只验证闭环；只有 release、paired、tail 三道门和安全停止条件全部满足才算 RL 成功。本轮不启动训练。
-- 2026-10-05 v31 恢复提交点：分块进程被杀掉时，未写入完整检查点的损失行和 rollout 不能留在下一次续跑里，否则剂量会双计、rollout 组审计会失败。续跑只承认 adapter、optimizer、scheduler、训练状态和四卡 RNG 都在的检查点；清单 sha、world size 或 scheduler 不一致则拒绝恢复。本轮仍不启动训练。
+## 设计原则
 
-## 风险与回滚条件
+风险处置必须有结构化状态、可定位事件和不可变输入 hash。优先停止并保留证据，再用新 run 修复；不覆盖 base/父 release，不从不同 run 拼接 step 0、reward 或 checkpoint。具体算法字段以 `04_training_plan.md`、测试夹具以 `05_testing_plan.md` 为准。
 
-| 风险 | 门禁 | 回滚 |
-|---|---|---|
-| V100 FP16 数值不稳定 | 单 batch 前向反向、有限 loss/gradient、10+2 resume | 降低 micro batch 或回退到上一有效 checkpoint |
-| eager attention 显存不足 | 128-row/10-step smoke 记录显存 | 降低 micro batch、增加 accumulation，不改 global batch 目标 |
-| 公开数据字段或 split 漂移 | pinned revision、probe、严格 schema | 停止并更新配置/文档 |
-| staging 过慢或服务器 CPU 被其他任务占用 | `/data/mega-asr` 独立缓存、逐条持久化、记录 CPU 负载 | 等待资源空闲或降低 worker，不读取其他项目产物 |
-| Robust 原始话语跨 scenario 泄漏 | base source identity 固定 90/10 分区 | 停止 build 并修复 source identity |
-| Hugging Face 直连不稳定 | mirror/ModelScope 下载记录和文件 hash | 切换已验证镜像，禁止无 hash 数据进入 manifest |
-| checkpoint 不能续训或 global batch 漂移 | 10+2 resume、记录 world size | 不启动 pilot |
-| clean 级联累积 regression | 每阶段 clean 相对 Base 累积增加 ≤0.025 红线 | 回退到上一阶段 adapter 并增大 clean 训练比例 |
-| SFT 英文 Clean 回退对 DPO 的压力 | E4 英文 Clean WER 增量 +1.43%（1.98% $\to$ 3.41%），逼近累积 2.5% 红线 | DPO 阶段严格监控 Clean preference 质量与平局过滤，DPO vs SFT 回退超过 2.0% 或累积超 2.5% 即刻回滚 |
-| DPO clean 平局率高导致 pairs 短缺 | 候选源扩大 5 倍、受控负例、严格过滤 ties | 重建 dpo_train_pool 候选池 |
-| DPO pair 质量或 preference 泄漏 | chosen/rejected 审计、ties rejects、held-out accuracy | 停止 DPO，重建 dpo_train_pool |
-| RL GRPO 候选同质化（组方差归零） | v10/v11：相同奖励比例 > 0.80 且批奖励低于 0.75，连续 2 步写入 `FAILED_ZERO_VARIANCE`。v4–v8 的温度 `0.85` 曾让约 71% 的组奖励相同 | 锚点模式只统计 `identical`；不把固定总行数当作通过条件 |
-| RL reward 投机或 KL 发散 | reward 组件单测、KL/rollout gate、reference freeze | 停止 RL，回退到 DPO adapter |
-| 4 卡 DDP 梯度/数据 shard 不一致 | global batch、sample_id 去重、world size 记录 | 停止当前 run，保留最后有效 checkpoint |
-| DDP 在线验证耗时方差引发 NCCL 看门狗超时 | Rank 分片评估 + dist.all_reduce 聚合、NCCL timeout 显式设置为 2 小时 | 修复进程间屏障等待，启用样本 rank-sharding |
-| 仓库训练器与服务器训练器漂移，配置悄悄跑成另一个实验 | `tests/test_rl_config_contract.py` 固定未被读取的配置键；训练日志输出 `degraded_balanced_summary=` | 以仓库为唯一来源更新服务器；契约测试失败即停止启动 |
-| 训练与发布解码预算不一致，长尾重复/幻觉未被 rollout 观测 | 训练、held-out、release 共享 `max_new_tokens`；逐样本记录长度、repeat、too_long、hallucination；`en|noise` stress gate | 任一阶段合同不一致或长尾门禁失败，停止并回退到 DPO Champion |
-| 4 步量级 pilot 的验收线低于 seed 噪声 | seed 噪声基线、`paired_significance.py` 区间上界 < 0 | 区间跨 0 记为“与噪声无法区分”，不写成有效改善 |
-| 指标不可比 | 同 manifest、同 evaluator、分语言指标 | 废弃该次比较 |
-| 运行时加载非官方 wrapper | import 和 model revision 记录 | 停止并移除不合规依赖 |
+## 已定决策
 
-### SFT Pilot 观测到的 Clean 回退与受控优化决策
+- 模型底座固定为官方 `Qwen/Qwen3-ASR-0.6B`。
+- 数据主线固定为中文，主指标为 `zh-cer-v1` CER。reward 由 CER 换算，两者分别报告。
+- Colab 单张 A100 是正式执行环境；Drive 只做持久化和共享存储，训练使用本地 runtime 磁盘。
+- 训练顺序固定为 SFT → DPO → RL。父版本依次是 base、SFT release、DPO release。
+- 所有阶段使用固定 manifest、配置和随机种子。门禁只读 val，test 只在发布时评一次。
+- 评测解码固定为 greedy。RL 采样参数只用于训练候选。
+- 初始 LoRA 只训练语言模型注意力投影，音频编码器和 projector 冻结。
+- 损失对转写 token 取平均。RL advantage 只做组内减均值，之后不再改写成常数。
+- `latest.json` 只指向最近的完整 checkpoint。release 只复制 val 门禁为 `passed` 的 step。
+- 训练细节以 `04_training_plan.md` 为准。重置前 RL pilot 的数值门禁不带入新 run。
+- 训练配置使用 `qwen3-asr-train-v1` schema；未知字段、非 greedy eval、错误 world size 和 LoRA 目标层在 preflight 拒绝。
+- `micro_cer` 是 gate 的主聚合，`macro_cer` 只作补充；不足 50 条的 scenario 不能单独构成改善结论。
+- 训练状态、恢复指针、事件日志和 release 使用不同文件，不能用 `latest.json` 代替 gate 或 release。
 
-在 E4 SFT Pilot 评测中，英文 Clean WER 从 1.98% 上升至 3.41%（+1.43%），中文 Clean CER 从 1.47% 上升至 1.57%（+0.10%），Clean 宏平均增量为 +0.77%，虽完全在单阶段 $\le 2.0\%$ 门禁内通过，但英文 Clean 回退已消耗了大部分累积容忍空间（相对 Base 累积增量 $\le 2.5\%$）。
-经归因分析，确定三大诱因为：(1) 恒定 2e-5 学习率无衰减；(2) 退化样本占比过高（71.4%）；(3) 步数偏多（4.57 epochs）且盲目取最后一步。
+## 风险
 
-据此确立受控优化决策：
-1. **学习率降温与 Decay 约束**：LoRA 更新包含音频塔投影层与所有 28 层 Decoder 上的 199 个 Linear，过大的恒定学习率（2e-5）容易过快改变 Base 原有声学/语言映射。下调峰值学习率至 1e-5，并配置 50 步 Warmup 及 300 步全程 Linear Decay。
-2. **数据分布重平衡（Balanced Clean Replay）**：针对退化音频占 71.4% 导致的声学特征漂移，引入平衡采样策略（50% degraded、25% English clean、25% Chinese clean）或 Clean 2x 重放，保全 Clean 先验。
-3. **多 Checkpoint 评测与 Pareto 择优**：避免因过拟合盲目选取最后一个 checkpoint，采用 `evaluation/eval_checkpoint_series.py` 自动化横向评测 step 100/150/200/250/300，综合退化场景改善与 Clean 保真度选定正式合并底座。
-4. **DPO 阶段监控红线**：DPO 偏好对构建中，Clean 源音频（LibriSpeech/AISHELL-1）必须确保 chosen 准确无误，严格过滤 gold 与预测一致的平局（ties），并防范负例误导。训练中以英文 Clean 为硬性约束，若 DPO vs SFT 回退 $> 0.02$ 或相对 Base 累积增量 $> 0.025$，触发立即停止并回滚。
+- Colab runtime 重启：通过频繁 checkpoint、恢复 smoke 和启动探针缓解。
+- Drive I/O 不稳定：训练前复制到本地，完成后 checksum 同步。
+- GPU 型号或显存变化：启动时记录并执行 batch/seq 长度门禁。
+- 依赖漂移：锁定版本并保存 `pip freeze`。
+- 退化改善伴随 clean regression：统一 clean/degraded gate，禁止只看单一 reward。
+- DPO/RL 数据污染：保存 source ID 和交集审计，test 不进入训练、配对、rollout 和选 checkpoint。
+- 评测和解码混用：greedy 与 rollout 分属两份配置，hash 不同则结果为 `incomparable`。
+- Drive 写入不完整：恢复只接受读回 checksum 与 `latest.json` 一致的 checkpoint。
+- 无更新被当成提升：RL 通过线要求相对本 run step 0 的 reward 提升，CER 不退化单独不够。
 
-### 受控优化实验（Run 2）验证结论与底座锁定
+## 风险矩阵与触发动作
 
-2026-09-20 在 4 × V100 SXM2-32GB 上完成 300 步受控对照实验及全系列检查点（Step 50~300）全量评测，获得明确结论：
-1. **中文与英文 Clean 先验全面超越 Base**：Step 50 检查点下，英文 Clean WER 达到 `1.94%`（优于 Base 1.98%），中文 Clean CER 达到 `1.40%`（优于 Base 1.47%），Clean Macro 为 `1.67%`（优于 Base 1.72%）。彻底避免了过拟合退化特征引发的 clean 遗忘。
-2. **全退化场景宏平均同步改善**：Step 50 的 Robust Macro 达到 `10.40%`，优于 Base（`10.52%`），并在 14 个退化单元中改善 6 个（`en|dropout`, `en|echo`, `en|recording`, `zh|echo`, `zh|far_field`, `zh|recording`），其余单元保持平稳。
-3. **消除数值下溢与死循环风险**：Step 50 有效输出率达 100.0%（0 推理错误，0 空输出，0 死循环）。而 Step 100/150 步由于继续训练导致在严重的退化样本上产生自回归死循环（1,599 字符）及 float16 下溢空输出。
-4. **决策裁定**：废除 Step 100 候选，**正式选定 `Step 50` 作为 SFT Pilot 最终准出模型**，通过收紧后的新门禁（限制 `max_robust_macro_regression <= 0.005` 与 `max_empty_output_rate <= 0.002`），导出合并底座至 `/data/mega-asr/runs/sft_pilot_controlled/merged_base`，作为向 E5 DPO 阶段交接的标准模型底座。
+| 风险 | 触发信号 | 缓解 | 回滚/处置 |
+| --- | --- | --- | --- |
+| 官方 API/监督格式漂移 | 模型加载或 token mask 合同失败 | 固定 `qwen-asr`/模型 revision，记录版本，运行 label-mask contract | 标记 `blocked_api`，不启动训练 |
+| A100 显存不足 | preflight/OOM 或峰值显存无余量 | micro batch 1、长度上限、梯度累积和显存报告 | 状态 `oom`，新配置新 run |
+| 标签前缀/终止符错误 | prefix 被计入 loss、`<|im_end|>` 缺失、空输出上升 | mask 单测与 smoke 解码 | 丢弃 checkpoint，回到父 release |
+| 数据/增强泄漏 | source/audio/text hash 跨 split | 分组切分、交集审计、manifest hash | 状态 `data_failed`，重新生成 manifest |
+| DPO preference 污染 | tie、空 pair、source 交集、reference hash 不一致 | 离线 pair audit 与 held-out schema | 不生成 DPO release |
+| RL 无信号/发散 | zero-advantage 过高、非有限 loss、raw KL 超阈值 | 全组归零、梯度裁剪、KL 停止规则 | 回到 DPO release，新 run |
+| Drive 半成品 | checksum 不一致、`.incoming` 被选中 | staging、读回校验、原子 `latest.json` | 保留旧指针，状态 `sync_failed` |
+| 恢复重复 step | global step 倒退或重复、日志尾部不一致 | 只从完整 checkpoint 恢复，按 step 截断事件 | `resume_rejected`，人工检查后重试 |
+| clean regression/健康度恶化 | clean CER、空/重复率超阈值 | 同一 val gate 与立即停止 | 回到上一通过 release |
+| 依赖或硬件漂移 | environment hash/GPU/dtype 不同 | 启动探针、锁定 requirements、记录环境 | 标记 `incomparable` 或新 baseline |
 
-### RL Pilot 阶段风险暴露、门禁拦截与受控重跑决策（2026-09-24）
+## 测试
 
-在 2026-09-24 对 `rl_pilot_v3`（60 steps GRPO）及历史轮次（v1/v2）的综合复核中，明确判定 **暂时不能进入正式下一步**。当时把该阶段标记为 **FAILED / BLOCKED**。
+风险合同必须用 fixture 或 preflight 模拟：坏音频和 source 泄漏、未知配置字段、错误 LoRA target、BF16/OOM、非有限 loss、Drive 截断/错 hash、恢复 step 重复、reference 参数变化和 clean 健康度越界。每个触发器都应产生预期状态、事件和无 release 结果；测试命令及断言见 `05_testing_plan.md`。
 
-#### 1. 风险与问题事实确认
-1. **Held-out Reward 门禁未达标且错误率反弹**：
-   - Held-out（573 条独立池）平均 Reward 最终由 Step 0 的 `0.9379` 变为 Step 60 的 `0.9375`（净增量为 `-0.0004`，远未达到合同要求的 $\ge +0.05$ 门槛）；
-   - Held-out 错误率由 `5.62%` 微幅上升至 `5.65%`（反弹 +0.03pp）。
-2. **奖励饱和与后期零方差策略塌缩（Zero-Variance Collapse）**：
-   - 训练后期（Step 50~60）训练集 batch reward 接近 1.0（达 0.9802），但 batch zero-variance ratio 频繁突破 `0.875 ~ 0.9375`；
-   - 在高饱和与过拟合状态下，单批次内候选全对或全同，无法贡献有效策略梯度，表现出明显的策略塌缩信号。
-3. **准出产物缺失与规范不完整**：
-   - 历史 v1 与 v2 的 gate 均为 `FAILED`（v2 存在 Robust 回退 +0.0202% 及 reward 不达标）；
-   - v3 缺少在 2,867 条全量验证集上的 `gate.json`、完整 `metrics.json`、全量 predictions 以及 merged release model，按合同不得声称阶段完成。
-4. **采样超参契约不一致与代码 Provenance 缺失**：
-   - 执行合同与方案中规划的采样参数为 temperature `0.7`、top_p `0.9`，但实际配置文件 `qwen3_asr_rl.yaml` 与运行参数使用了 `0.85 / 0.92`；
-   - 运行环境记录中缺失代码的 git commit SHA，全链路溯源证据链不完整。
+## 回滚
 
-#### 2. 处置与拦截决策
-1. **绝对阻断原则**：坚决不启动 full RL，坚决不发布当前任何 RL 检查点模型。
-2. **检查点保留**：保留 `step_60` 作为诊断 checkpoint，用于后续分析策略塌缩和饱和 token 分布。
-3. **重跑前置条件**：
-   - 修正采样契约一致性，消除计划与配置漂移；
-   - 补全运行时代码 git commit provenance 记录；
-   - 针对奖励饱和与 zero-variance 塌缩提出针对性优化方案（如探索保持、早停判定、退火重构）；
-   - 重新运行受控 Pilot 并在产出完整 2,867 条评测与全绿 `gate.json` 后，方可解冻下一阶段。
+任一阶段 gate 失败时回到上一个通过的 checkpoint；不覆盖 base、SFT 或 DPO 目录。旧仓库仅作为 Git 标签 `pre-reset-20261012` 的恢复来源。
 
-### RL Pilot v4 落地验证、Pareto 峰值确立与阶段决策（2026-09-24）
+## 验收与影响
 
-在完成零方差损失中和、采样超参冻结（`0.85/0.92/50`）、代码 Commit SHA 强制落盘后，于 4 × V100 SXM2-32GB 上完成了 `rl_pilot_v4`（30 steps）及 Step 10、Step 30 的 2,867 全量验证集评测，获得明确结论：
-
-1. **零方差中和机制有效抑制策略塌缩**：
-   - 组内优势全为 0 时损失置为 `0.0 * policy_token_logps.sum()`，在保留 DDP 反向图连通性的同时彻底切断了对参考模型的单向拉扯；
-   - 30 步全程平均零方差率为 `0.6807`（完全受控于 $\le 0.75$ 的硬门槛），彻底消除了 v3 晚期高达 93.75% 的病态同质化。
-2. **小样本 RL 的最佳泛化窗口确认（Step 10 Pareto 峰值）**：
-   - 在 2,236 条小样本训练集上，模型在 Step 10（累积 640 样本次，~0.28 epoch）达到最佳泛化点：573 条 held-out 错误率降低至 `5.57%`（降低 0.05pp），Reward 升至 `0.9385`（提升 +0.0006）；
-   - 在 2,867 条独立验证全集上，Step 10 较 DPO 基线保持 Clean 全面微增（Clean Macro 由 1.6717% 降至 1.6657%），退化场景 `en|distortion` 显式改善 0.1242pp（8.2634% → 8.1392%），0 空输出，0 推理失败；
-   - 随后继续训练（Step 20/30）并未带来进一步增益，反而出现轻微饱和与过拟合迹象。
-3. **核心问题与根因挖掘（为何 Step 10 达标受限、Step 30 退化）**：
-   - **顺序取样引发严重分布突变（Distribution Cliff）**：
-     - `pilot_rl.jsonl` 是将 1,236 条 degraded 与 1,000 条 clean 顺序拼接生成的；
-     - 训练器采用顺序游标读取：Step 0–18 纯训练 degraded（reward ~0.80–0.88），Step 20–30 突变为 100% clean（reward 陡增至 ~0.98，零方差率升至 0.875–0.9062）；
-     - 模型在后期严重拟合干净语音，冲淡并破坏了前期学到的退化语音表征，直接导致 Step 30 的退化增益彻底消失；
-   - **训练样本规模缺口**：`pilot_rl.jsonl` 实际仅有 2,236 条（1,236 degraded + 1,000 clean），低于合同要求的 3,000 条（2,000 degraded + 1,000 clean），源于数据池 `rl_train_pool.jsonl` 自身仅包含 1,236 条退化音频；
-   - **产物闭环与审计精度缺陷**：未生成 `merged_base` 与根目录 `gate.json`；`loss_log.jsonl` 的 `kl_loss` 精度截断导致四舍五入为 `0.0`。
-4. **门禁拦截事实与严格裁决**：
-   - **`held_out_reward` 拦截**：实测提升 `+0.0006`，未达到合同标称的 `+0.0020`；
-   - **`robust_retention` 拦截**：实测全集 Robust Macro 回退 `+0.0202pp`（0.103785 vs 0.103583），由于门禁设置为零容差 `0.0`，即使微小波动（2,867 样本中仅 1~2 处微小编辑）也触发硬拦截为 FAILED。
-5. **当前基准与冻结决策**：
-   - **正式底座保持**：维持 **DPO merged model** (`/data/mega-asr/runs/dpo_pilot_v2/merged_base`) 为唯一受控发布基座；
-   - **RL v4 Step 10**：确立为 RL Pilot 的 Pareto 最优模型，仅作为诊断候选全量归档；
-   - **严格遵从红线约束：v4 当时维持 BLOCKED，不启动 Full RL，不发布该轮权重**；
-   - 后续演进必须首先修复数据采样（打乱/分层平衡）、补齐训练数据池规模，并完善产物链条。
-
-### RL Pilot v5 落地验证与阶段决策（2026-09-26）
-
-在实现分层平衡采样（`--sample-strategy balanced`）、恢复 KL 6位小数精度、自动闭环导出 `merged_base` 后，于 4 × V100 SXM2-32GB 上完成了 `rl_pilot_v5`（30 steps）及 Step 30 的 2,867 全量验证集评测，获得明确结论：
-
-1. **分层平衡采样彻底解决分布悬崖问题**：
-   - Step 30 Held-out Reward 提升至 `0.9385`（+0.0006），Held-out Error Rate 降至 `0.0556`（-0.0006），打破了 v4 在 Step 30 的过拟合回退，成为全流程最优步数。
-2. **Clean 场景与特定退化场景显著优化**：
-   - 英文 Clean WER 达到 `1.9193%`（相对 DPO 下降 -0.0099pp，创项目新高）；
-   - 中文 Clean CER 达到 `1.4073%`（相对 DPO 下降 -0.0070pp）；
-   - Clean Macro 达到 `1.6633%`（相对 DPO 下降 -0.0084pp）；
-   - 退化场景 `en|recording` 取得显式改善（31.5710% → 31.2689%，-0.3021pp）；
-   - 2,867 条独立验证全集保持 100% 有效输出率，0 空输出，0 推理失败。
-3. **门禁拦截事实（Gate Status: FAILED）**：
-   - **`robust_retention` 拦截**：门禁要求 Robust Macro 恶化严格 $\le 0.0$。实测全集 2,867 条样本中，RL v5 仅净增加 2 处退化编辑（4 处 noise/distortion 微增，2 处 recording 减少），使 Robust Macro 从 `10.3583%` 变为 `10.3733%`（+0.0150pp，幅度较 v4 的 +0.0262pp 明显收窄），但仍触发零容差硬拦截；
-   - **`held_out_reward` 拦截**：实测提升 `+0.0006`，未达到合同标称的 `+0.0020`。
-4. **决策与基准认定**：
-   - **严格遵从红线约束**：未通过门禁前，**坚决不推进 Full RL，坚决不发布 RL 模型**，阶段状态维持 **BLOCKED**；
-   - **当前正式最优发布基座继续严格锁定为**：`/data/mega-asr/runs/dpo_pilot_v2/merged_base`（DPO Champion）。
-   - 确认小数据规模（1,236 条退化样本）下强化学习的边际收益受限，后续若需突破，需结合 Full 规模退化数据与精细化的 reward shaping。
-
-### RL Pilot v6 复核：策略没有更新，验证池口径也变了（2026-09-27）
-
-v6 的 30 步训练跑完，门禁 FAILED。复核权重和 rollout 之后，原因不是评测脚本把数算错，而是策略几乎停在 DPO 底座上，同时 held-out 文件已经不是 v5 的那一份。
-
-1. **序列级奖励被按 token 平均，梯度缩小了一个响应长度。** v6 Step 30 的 LoRA B 矩阵最大绝对值只有 `2.62e-5`（Frobenius 范数 0.020），A 矩阵相对初始值的变化范数只有 0.010。`raw_kl` 全程在 0 到 `1e-5`。训练集 30 步的 batch reward 前 10 步均值约 0.899、后 10 步约 0.901，没有上升。Held-out reward 从 Step 0 的 `0.8747` 到 Step 30 的 `0.8737`。
-2. **7,680 条 rollout 里，71.1% 的组优势全是 0。** 78.5% 的组表面文本不完全相同，但归一化后的 WER/CER 相同，奖励没有方差，这些组的反向是精确 0。有效更新只来自约 29% 的组。
-3. **Held-out 池已经换过。** v5 的 `rl_val_pool.jsonl` SHA-256 是 `a50f1724...`，573 行，Step 0 reward `0.9379`、错误率 `5.62%`。v6 使用的文件 SHA-256 是 `b0701db2...`，1,698 行（1,298 degraded + 400 clean），Step 0 reward `0.8747`、错误率 `11.36%`。进度文档里写的「每卡 143 条 / 573 条」与这个文件不符。提升仍然按本次 Step 0 计算，所以门禁失败来自 `-0.0004` 到 `-0.0010` 的负增量，不是因为拿 0.9379 去减。
-4. **2,867 条验证集上 Step 20 的 Robust / Clean 都略好于 DPO，但导出的是 Step 30。** Step 20 Robust Macro `10.3545%`（相对 DPO `-0.0038pp`），Step 30 回到 `10.3681%`。训练器在结束时固定合并最后一步。
-
-处置：v7 把 GRPO 损失改成序列求和，held-out 日志写明验证集行数和 sha，held-out reward 相对 Step 0 下降超过 0.02 时停训，结束时合并 reward 最高的已保存检查点。学习率、采样参数、30 步和 β=0.04 保持不变。未通过门禁前仍然不发布 RL 权重，正式底座仍是 DPO Champion。
-
-v7 于 2026-09-27 21:12 CST 跑完。Step 10/20/30 的门禁都是 FAILED，拦截项都是 `robust_retention` 和 `held_out_reward`。最优是 Step 10：held-out reward `0.8759`（相对 Step 0 的 `0.8747` 只 +0.0012，门槛 +0.0020）；Robust Macro 相对 DPO `+0.0157pp`，增量集中在 `en|noise`（+0.24pp）和 `en|recording`（+0.30pp）。Clean 没有退步。
-
-权重没有离开 v6 的尺度。v7 Step 30 的 LoRA B Frobenius 范数是 `0.0205`、最大绝对值 `2.65e-5`，v6 Step 30 是 `0.0204` / `2.62e-5`。`raw_kl` 仍是 `1e-6`。原因是 AdamW 会用梯度的均方根把步长归一化，实际步长由学习率决定；v7 的 `grad_norm` 约 4，又被 `clip_grad_norm_(max_norm=1.0)` 裁掉。序列求和没有把参数更新放大。v8 因此把峰值学习率从 `2e-6` 提到 `2e-5`，warmup 2 步之后保持常数，共 12 步，每 4 步保存并评 held-out。采样、β、序列求和和门禁阈值不变。
-
-### RL Pilot v8 结果：学习率加大后策略离开了参考模型，但指标变差（2026-09-28）
-
-v8 在 2026-09-28 00:57 CST 完成三个检查点的验证集门禁，状态都是 FAILED。
-
-1. **步长问题已被这次运行排除。** `raw_kl` 在 Step 10 达到 `4.5e-4`，Step 12 为 `2.3e-4`。这比 v6/v7 的 `1e-6` 大约高两个数量级，说明 `2e-5` 的常数学习率确实在更新策略。
-2. **Held-out 没有收益。** 1,698 条全量 held-out 的 reward 从 Step 0 的 `0.8747` 走到 Step 4 的 `0.8731`、Step 8 的 `0.8739`、Step 12 的 `0.8747`。最好的已保存检查点也只是回到起点，奖励增量 `+0.0000`，错误率从 `11.36%` 变为 `11.41%`。
-3. **Robust 随更新变差，Clean 先好后坏。** Step 12 的 Robust Macro 相对 DPO `+0.0645pp`。最大的单格回退是 `zh|echo`（+10 edits，+1.57pp）和 `en|noise`（+3 edits）。Clean Macro 在 Step 4 为 `1.6608%`（好于 DPO 的 `1.6717%`），Step 12 回到 `1.6782%`（+0.0065pp）。空输出和推理失败仍为 0。
-4. **决策。** 继续加大学习率会沿错误方向走得更远。v8 的更新把“四个采样中没那么差的一条”当成更好的策略，即使它比当前贪心解码更差。正式发布底座仍是 DPO Champion。
-
-v9 改的是这组参数，而不是再放大同一种更新：
-
-- 学习率 `1e-5`。`2e-6` 让 LoRA 停在 `2.6e-5`，`2e-5` 则把 Robust 推差。
-- 采样 `temperature=1.0`、`top_p=0.95`。`0.85/0.92` 下约 71% 的组奖励相同，候选打不出比 DPO 模式更好的转写。
-- LoRA dropout `0`。训练时的 dropout 让被强化的对数概率和评测策略不是同一个分布。
-- 优势以贪心解码为锚，奖励至少高出 `0.02` 才更新。KL β 仍是 `0.04`，步数仍是 12，每 4 步评测。
-
-### RL Pilot v10：剂量够了，贪心奖励没有转移（2026-09-29）
-
-v10 把「只更新比贪心好 `0.02` 的样本」和「退化语音上的奖励质量 ≥ 17」都做到了。1,698 条贪心 held-out 从 `0.8773` 降到 `0.8771`（`−0.0002`）。Step 8 的 LoRA B 最大绝对值是 `6.56e-5`（Frobenius `0.078`），`raw_kl` 是 `7.1e-5`，累计获胜组 135。梯度在裁剪前范数约 5，裁到 1 以后，AdamW 的步长由学习率决定。
-
-同一份 Step 8 的 2,867 条 `transcribe` 门禁是 Robust `−0.000404`（−6 次编辑），5 个场景变好，clean `−6.4e-05`。整道门禁仍 FAILED，因为贪心奖励没有达到 `+0.002`。`BLOCKED_TRANSFER` 说的是贪心 `generate` 奖励没有转移，不是 2,867 条编辑数为 0。
-
-v11 只改学习率到 `2e-5`，其余沿用 v10 的锚、β=`0.04`、温度和停止表。不从 v10 的检查点恢复。`raw_kl > 5e-4` 时训练进程停止；某一块的 2,867 条 Robust 增量 ≥ `0.0005` 时驱动不再开下一块。正式底座在整道门禁 PASSED 之前仍是 DPO Champion。
-
-v11 的恢复边界在 2026-09-29 写死。评测行数不是 2,867、gate 缺失、或 torchrun 非 0，都是失败，不进入下一块。`scripts/run_rl_pilot_v11_recover.sh` 在驱动退出后最多重评一次，或从最后一份同时含 adapter 和 optimizer 的检查点把下一块恢复一次。`BLOCKED_TRANSFER`、`BLOCKED_SEARCH`、`STOPPED_KL`、`STOPPED_REWARD_DROP`、`STOPPED_ROBUST` 和 PASSED 都不加步，也不从 Step 0 重开。没有完整检查点时不重新开始这一轮。
-
-这个格子在 Step 7 裂开。`2e-5` 把 `raw_kl` 从 Step 4 的 `8.9e-5` 推到 Step 5 的 `2.38e-4`、Step 6 的 `4.04e-4`、Step 7 的 `5.68e-4`，训练按 `5e-4` 停止并保存了 `checkpoints/step_7`。停止当时，2,867 条评测只挂在 4/8/12 步上，恢复脚本也只认识这三步。同日 22:33 CST 已补上贪心 held-out 和 `gate_step_7.json`，状态 FAILED，详见下一节的影响。Step 4 的正式门禁已经 FAILED（Robust `+9.8e-5`，+1 次编辑），但 `0.0005` 的训练停止线让脚本继续。发布底座仍是 DPO Champion。
-
-### 设计内停止必须评保存下来的检查点（2026-09-29）
-
-背景：v11 的 KL 停止发生在一块训练的中间。`checkpoints/step_7` 有 adapter 和 optimizer，门禁文件不在。继续训练会越过已经触发的 `raw_kl > 5e-4`。
-
-范围：给这次已经停下的检查点补上与 Step 4 相同的贪心 held-out 和 2,867 条门禁，并让驱动、恢复脚本以后都按 `pipeline_state.global_step` 找检查点。不改锚、β、采样、学习率和停止表，不恢复 v10，不把已更新话语送进 DPO。
-
-设计：`scripts/score_rl_greedy_held_out.py` 加载该检查点，调用服务器训练器的 `evaluate_rl_validation(decode_mode="greedy")`，在 `loss_log.jsonl` 追加一条 `val_decode=greedy`、`val_eval_scope=Full Held-out`、行数与 SHA 都对齐冻结池的记录。已有合格行时不重复写。`assigned` 或 `rollouts` 不是 1,698 时不写。随后 `scripts/score_rl_pilot_v11_checkpoint.sh` 跑 2,867 条 `parallel_inference.py` 和服务器 `verify_gate.py --rl-step <global_step> --held-out-decode greedy --max-robust-regression 0.0`。脚本不调用 `train_rl.py`，不导出 `merged_base`，写入路径固定在 `/data/mega-asr/runs/rl_pilot_v11/`。
-
-测试：行构造、重复写入和残缺检查点在本地单测里判定。服务器上先确认没有 `train_rl.py` 或 `parallel_inference.py`，再对 Step 7 跑通；`gate_step_7.json` 必须能被读出，`verify_gate` 因门禁 FAILED 返回 1 仍算评测完成。
-
-验收：Step 7 同时具备合格的贪心 held-out 行、2,867 行预测和 `gate_step_7.json`。通过线不变：相对本次 Step 0（`0.8773`）的贪心奖励 ≥ `+0.002`，Robust 六位小数 ≤ 0，clean ≤ `+0.02`，累计 clean ≤ `+0.025`，至少一个退化场景变好，有效输出 ≥ `0.95`。只有该文件为 PASSED 才是候选。
-
-影响：v11 训练进程保持 `STOPPED_KL`。Step 4 已有的 FAILED 门禁保留。2026-09-29 22:33 CST 的 `gate_step_7.json` 也是 FAILED：贪心 held-out `0.8773 → 0.8767`（`−0.0006`），2,867 条 Robust `−0.00045`、clean `−0.000139`、6 个场景变好、有效输出 `1.0`。只有 `held_out_reward` 未通过。没有导出，也不续训。发布底座仍是 DPO Champion。
-
-v10 Step 8 在 `raw_kl=7.1e-5`、135 个获胜组时，2,867 条已经是 −6 次编辑、贪心奖励 `−0.0002`。v11 Step 7 在 `raw_kl=5.68e-4`、121 个获胜组时仍是 −6 次编辑，奖励变成 `−0.0006`。两条运行的 Step 1 `policy_loss` 都是 `2.13505`。因此不把 `5e-4` 当成有益编辑的生效门槛，也不再开一轮去试 `1.5e-5`、更大的 β 或更高的 KL 天花板。
-
-2026-09-30 把下一次测量收成优势尺度。v12 用学习率 `1e-5` 和原始奖励差。裁剪前 `grad_norm` 的中位数仍大于 1.5 时，驱动从 DPO Champion 启动 v13，获胜优势固定为 `0.10`。范数已经降到 1.5 以下而贪心奖励仍不够 `+0.002` 时，v12 驱动停止。细节见 `11_rl_v12_design.md`。
-
-v12 Step 4 的实测是贪心 `+0.0002`、Robust +2 次编辑、中位 `grad_norm` `1.434`、`raw_kl` 最高 `5e-6`。同一 `1e-5` 下，v10 Step 4 是贪心 `−0.0001`、Robust +5 次编辑。原始奖励差是更好的方向，v13 的固定 `0.10` 没有启动。`rl_pilot_v14` 从 v12 Step 4 续训到 Step 8，贪心变成 `+0.0005`，Robust +3 次编辑，状态 `BLOCKED_TRANSFER`。接着从 Champion 新开的 `rl_pilot_v15` 把学习率改成 `2e-5`，Step 4 贪心是 `−0.0002`，驱动停止。见 `12_rl_v14_design.md`。仍然不提高 β，不放宽 `5e-4`，也不试 `1.5e-5`。
-
-v14 的 Robust 增量主要来自一条噪声样本的整句替换（+4 次编辑），v10 到 v15 都把这一条写成同一句错文本。v16 因此不改学习率，只拒绝相对贪心文本过远的获胜样本，并让非负的贪心增量可以续到 Step 24。Step 8 及以后 Robust 仍大于 0 就停止。见 `13_rl_v16_design.md`。
-
-v16 Step 8 的实测是贪心 `+0.0004`、Robust `+0.000164`（+4 次编辑），这 +4 全部来自同一条噪声样本，其余退化格子加总为 0。驱动因此停止。v17 不改学习率、β 和 `5e-4`，只把已经被局部过滤选中的获胜优势改成 1。Step 4 贪心变成 `−0.0003`，Robust `+0.000359`，质量仍是 `7.432122`。单位优势停止。v18 回到原始奖励差，只读恢复 v16 Step 8。Step 10 的 `raw_kl` 是 `0.000529`，训练器 `STOPPED_KL`。贪心退回 `+0.0001`，Robust 降到 `+0.000014`。v19 把奖励差截断在 `0.05`，Step 9 梯度从 `0.385` 降到 `0.159`，Step 12 的 `raw_kl` 仍是 `0.000640`，贪心 `−0.0001`，Robust 仍是 `+0.000014`。见 `16_rl_v19_design.md`。同一学习率下再缩放优势不能同时碰到贪心 `+0.002` 和 Robust ≤ 0。v20 不恢复 Step 8 的权重，把学习率改为 `5e-6`，优势、`β` 和 `5e-4` 保持不变。Step 4 贪心 `−0.0003`，Robust `+0.000202`，`raw_kl` 最高 `4e-6`。见 `17_rl_v20_design.md`。v21 不把学习率留在 `5e-6`，也不提高 `β` 或 `5e-4`。它只关掉 3 个音频投影。Step 4 的 Robust 降到 `−0.000090`，贪心是 `−0.0002`，门禁仍 FAILED。见 `18_rl_v21_design.md`。v22 不改这些杠杆，只读恢复该 Step 4。Step 8 贪心 `+0.0001`，Robust `−0.000038`。续到 Step 11 时 `raw_kl` 变成 `0.000604`，训练器 `STOPPED_KL`，贪心掉到 `−0.0004`，Robust 仍是 `−0.000143`。见 `19_rl_v22_design.md`。v23 不改优势、β 和 `5e-4`，只在恢复 v22 Step 8 之后把学习率写成 `5e-6`。Step 12 门禁 FAILED：`raw_kl` `0.000600`，`STOPPED_KL`，贪心 `−0.0004`，Robust `−0.000090`。见 `20_rl_v23_design.md`。v24 不改学习率、优势或音频投影。它从 Champion 新开，只把策略梯度限制在相对贪心句发生变化的 token 上，KL 仍按整句。见 `21_rl_v24_design.md`。2026-10-02 00:13 CST 的 Step 4 门禁 FAILED：贪心 `+0.0001`，Robust `+0.000217`（+5 次编辑）。Step 1 到 Step 5 的 `policy_keep_ratio` 在 `0.1378` 到 `0.1981`。00:19 CST 续块退出，rank 2 报 `changes_only update has no changed response tokens`。没有 `merged_base`。v25 不重跑这条掩码。它把 `-raw_gap` 放到被删除的贪心 token 上，相同 token 的一对跳过，只有删除的获胜句不再抛错。2026-10-02 02:52 CST Step 4 门禁 FAILED：贪心 `−0.0003`，Robust `+0.000209`（+4 次编辑），动作 `stop`。变差的场景是 `en|noise` 和 `en|recording`。见 `22_rl_v25_design.md`。v26 不改学习率、优势、掩码或音频投影。它让这两个场景留在清单里、不进优化器。2026-10-02 04:39 CST Step 4 门禁 FAILED：贪心 `−0.0005`，Robust `+0.000359`（+6 次编辑），变好的场景数是 0，动作 `stop`。见 `23_rl_v26_design.md`。v27 不沿用这次过滤。它回到完整退化集，只在 `0.35` 的局部距离内把参考文本加入候选。2026-10-02 06:21 CST Step 4 门禁 FAILED，只差奖励：贪心 `+0.0001`，Robust `−0.000007`。四步奖励质量 `16.727412`。续到 Step 7 时 `raw_kl` 是 `0.001151`，训练器 `STOPPED_KL`。07:10 CST Step 7 门禁 FAILED：贪心 `+0.0002`，Robust `+0.000014`（+2 次编辑）。见 `24_rl_v27_design.md`。v28 不恢复 Step 7，只读恢复 Step 4，并把学习率写成 `5e-6`。见 `25_rl_v28_design.md`。不放宽通过线，也不提高 `5e-4`。
-
-## 未验证假设
-
-FP16 在 eager attention 下的吞吐、显存余量、4 卡 DDP 效率、SFT/DPO/RL 学习率、DPO pair 质量和
-RL reward 稳定性都尚未在 V100 上验证。它们必须以 pilot gate 结果为准，不能凭规划文档宣称有效。
-
-## 测试与验收
-
-每项风险都必须有可执行门禁和输出文件。任何门禁失败都记录命令、输入 hash、错误和最后有效
-checkpoint；不得静默跳过。只有完成固定 test 和 Mega-ASR 同 evaluator 比较后，才能讨论达到
-或超过外部 baseline。
-
-## 本次规划影响
-
-旧 Colab/BF16/A2S 代码已删除；V100 smoke 和 pilot 通过前，新的训练/推理实现都不能作为正式结果证据。需要恢复历史实验时，必须重新提出目的并按文档优先流程加入。
+风险合同的验收是每个高风险项都有可观察触发信号、结构化状态和可执行回滚；测试方案覆盖模拟 OOM、坏 checksum、恢复 hash 不匹配、source 泄漏、非有限 loss 和 reference 变化。新增风险或替代方案必须同步到 `04_training_plan.md`、`05_testing_plan.md` 和 `00_progress.md`，否则不视为完成。
