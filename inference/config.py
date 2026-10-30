@@ -71,12 +71,40 @@ def load_infer_config(path: Path) -> dict[str, Any]:
     scoring = raw.get("scoring")
     if not isinstance(scoring, dict):
         raise ValueError("scoring must be a mapping")
-    _reject_unknown(scoring, {"normalization", "wer_tokenizer"}, "scoring")
+    _reject_unknown(
+        scoring,
+        {
+            "normalization",
+            "wer_tokenizer",
+            "wer_tokenizer_version",
+            "wer_dictionary_sha256",
+            "wer_hmm",
+        },
+        "scoring",
+    )
     if scoring.get("normalization") != "zh-cer-v1":
         raise ValueError("scoring.normalization must be zh-cer-v1")
     wer_tokenizer = scoring.get("wer_tokenizer")
-    if wer_tokenizer is not None and not isinstance(wer_tokenizer, str):
-        raise ValueError("scoring.wer_tokenizer must be a string or null")
+    wer_version = scoring.get("wer_tokenizer_version")
+    wer_dictionary = scoring.get("wer_dictionary_sha256")
+    wer_hmm = _as_bool(scoring.get("wer_hmm", False), "scoring.wer_hmm")
+    if wer_tokenizer is None:
+        if wer_version is not None or wer_dictionary is not None:
+            raise ValueError("null wer_tokenizer requires null version and dictionary hash")
+        if wer_hmm:
+            raise ValueError("null wer_tokenizer requires wer_hmm to be false")
+    else:
+        if not isinstance(wer_tokenizer, str) or not wer_tokenizer.strip():
+            raise ValueError("scoring.wer_tokenizer must be a non-empty string or null")
+        if not isinstance(wer_version, str) or not wer_version.strip():
+            raise ValueError("scoring.wer_tokenizer_version must be a non-empty string")
+        if (
+            not isinstance(wer_dictionary, str)
+            or len(wer_dictionary) != 64
+            or not all(ch in "0123456789abcdefABCDEF" for ch in wer_dictionary)
+        ):
+            raise ValueError("scoring.wer_dictionary_sha256 must be a 64-char hex string")
+        wer_dictionary = wer_dictionary.lower()
 
     decode = raw.get("decode")
     if not isinstance(decode, dict):
@@ -132,7 +160,13 @@ def load_infer_config(path: Path) -> dict[str, Any]:
         "schema_version": INFER_SCHEMA,
         "seed": seed,
         "model": {"name": name, "revision": revision},
-        "scoring": {"normalization": "zh-cer-v1", "wer_tokenizer": wer_tokenizer},
+        "scoring": {
+            "normalization": "zh-cer-v1",
+            "wer_tokenizer": wer_tokenizer,
+            "wer_tokenizer_version": wer_version,
+            "wer_dictionary_sha256": wer_dictionary,
+            "wer_hmm": wer_hmm,
+        },
         "decode_eval": normalized_eval,
         "decode_eval_sha256": decode_eval_sha256(normalized_eval),
         "official_language": LANGUAGE_TO_OFFICIAL[language],

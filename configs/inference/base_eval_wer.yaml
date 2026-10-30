@@ -1,0 +1,23 @@
+# Greedy eval with locked jieba 0.42.1 + built-in dict.txt SHA-256 auxiliary WER.
+# decode.eval is identical to base_eval.yaml (decode_eval_sha256 unchanged).
+schema_version: qwen3-asr-infer-v1
+seed: 42
+model:
+  name: Qwen/Qwen3-ASR-0.6B
+  revision: 5eb144179a02acc5e5ba31e748d22b0cf3e303b0
+scoring:
+  normalization: zh-cer-v1
+  wer_tokenizer: jieba
+  wer_tokenizer_version: "0.42.1"
+  wer_dictionary_sha256: 7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8
+  wer_hmm: false
+decode:
+  eval:
+    do_sample: false
+    num_beams: 1
+    max_new_tokens: 513
+    repetition_penalty: 1.0
+    no_repeat_ngram_size: 0
+    context: ""
+    language: zh
+    eos_policy: tokenizer_eos_only

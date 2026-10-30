@@ -1,6 +1,6 @@
 # 测试方案
 
-最后更新：2026-10-23
+最后更新：2026-10-30
 
 ## 背景与范围
 
@@ -15,7 +15,7 @@
 | 目录合同 | 当前受管目录与 README | `python3 -m unittest tests/test_directory_readmes.py -v` | 清单无漏项、章节齐全 | 测试输出 |
 | 数据合同 | 含五类 scenario、同源冲突、坏音频的 JSONL | `python3 scripts/manifest_validate.py --manifest <path> --check-audio` | schema、路径、采样率、split、source 无泄漏；坏行有明确错误 | `manifest.json`、`sha256.json`、审计报告 |
 | 推理 | 1 条 clean、1 条 degraded、1 条失败样本 | `python3 inference/run_inference.py ...` | 成功行含 raw/normalized；失败行含 `error`，批处理继续 | predictions JSONL |
-| 评测 | 固定预测和 gold | `python3 evaluation/eval_cer.py ...` | CER 可重算，按 scenario 聚合，健康度单独统计 | `metrics.json`、逐样本评分 |
+| 评测 | 固定预测、gold 与锁定 `jieba` 配置 | `python3 evaluation/eval_cer.py ...` / `python3 -m unittest tests.test_eval_cer -v` | CER 与锁定 `jieba` WER 可重算，分词器版本或词典哈希不符直接拒绝，按 scenario 聚合，健康度单独统计 | `metrics.json`、`by_scenario.csv`、逐样本评分 |
 | 配置/preflight | 最小 YAML、未知字段、错误 dtype/world size | `python3 train/<stage>.py --config <path> ...` | 非法配置在建 optimizer 前失败；resolved config/hash 已写出 | `preflight` 事件 |
 | SFT smoke | 5–20 step，含 clean+degraded | `python3 train/train_sft.py ...` | loss/grad/lr 有限；checkpoint 完整；可恢复并再训 1 step | checkpoint、events、metrics |
 | SFT release | 选出的 passed step、一份 risk stop、两行 scored | `python3 -m unittest tests.test_sft_release -v` | 只复制选出 step 的 adapter；文本不一致不发布；staged release 不能导出 hypotheses；续写必须是 manifest 前缀；不下载模型 | `release.json`、`readback.json` |
@@ -53,7 +53,19 @@
 - 推理错误：该行 `error` 非空。错误行仍进入 CER，假设按空串计，避免失败被记成 0 错误；空输出标志仍看实际预测，不看这个替代假设。
 - 有效输出：`error` 为空且归一化预测非空。重复和超长单独限流，不从有效输出里剔除。
 
-`wer_tokenizer` 缺省或为 null 时，`wer` 为 null，`wer_reason` 为 `wer_tokenizer_not_configured`。Phase 0 不锁定 jieba 词典，因此 baseline 配置不计算 WER。
+`wer_tokenizer` 缺省或为 null 时，`wer` 为 null，`wer_reason` 为 `wer_tokenizer_not_configured`。Phase 0 不锁定 jieba 词典，因此 `configs/inference/base_eval.yaml` 默认不计算 WER。
+
+### 锁定 `jieba` 中文 WER 辅助指标合同
+
+- **背景**：MVP 验收标准要求在以中文 CER 为主指标的同时保留中文 WER 辅助指标；中文无天然空格分词，若不锁定分词器版本、内置词典字节哈希与新词发现开关（HMM），跨环境或自定义词典污染会导致 WER 漂移且不可复算。
+- **范围**：仅在推理或训练配置的 `scoring` 显式启用 `wer_tokenizer: "jieba"`（如 `configs/inference/base_eval_wer.yaml`）时计算并输出中文 WER；不改变任何阶段的 CER 门禁裁决、不参与 RL reward 计算，也不改动已冻结的历史 YAML 与已发布 release 哈希。
+- **设计**：
+  1. 配置字段（`qwen3-asr-infer-v1` 与 `qwen3-asr-train-v1` 一致）：`wer_tokenizer`（`"jieba"` 或 `null`）、`wer_tokenizer_version`（锁定 `"0.42.1"`）、`wer_dictionary_sha256`（锁定内置 `jieba/dict.txt` 的 64 位十六进制 SHA-256 `"7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8"`）、`wer_hmm`（布尔值，锁定 `false`，关闭 HMM 未登录词切分以保证纯词典确定性分词）。当 `wer_tokenizer` 为 `null` 时，版本与词典哈希必须为 `null`，`wer_hmm` 必须为 `false`（在 `qwen3-asr-infer-v1` 中后三项可缺省）。`decode_eval_sha256` 仅对 `decode.eval` 求哈希，因此 `base_eval_wer.yaml` 与 `base_eval.yaml` 共享完全相同的 `decode_eval_sha256`（`4a4fee2b67884438faa196909749fcc8dcc6126b175554ad19992bf9b4f2f642`）。
+  2. 分词器加载与校验（`evaluation/zh_cer.py:load_jieba_tokenizer`）：仅接受 `wer_tokenizer == "jieba"`；核对 `importlib.metadata.version("jieba") == wer_tokenizer_version` 且 `jieba` 包目录下 `dict.txt` 的文件 SHA-256 等于 `wer_dictionary_sha256`，任一不符立即抛出 `ValueError`（CLI 退出码 2，不写出半截 `metrics.json`）；使用独立实例 `jieba.Tokenizer(dictionary=str(dict_path))` 初始化并按 `(version, dict_sha256)` 缓存，杜绝全局 `jieba.add_word` / `load_userdict` 状态污染。
+  3. 计分与输出（`evaluation/zh_cer.py:score_wer_pair` 与 `evaluation/eval_cer.py:evaluate`）：分词输入固定为 `zh-cer-v1` 归一化后的 `reference_normalized` 与 `scored_prediction_normalized`（推理错误行与 CER 一致，按空词序列 `[]` 计分）。词级编辑距离采用替换/插入/删除代价均为 1 的 `edit_distance(reference_words, scored_prediction_words)`，`sample_wer = word_edit_count / reference_word_count`。启用 WER 时：`scored.jsonl` 每行新增 `reference_words`、`scored_prediction_words`、`word_edit_count`、`reference_word_count`、`sample_wer`；`by_scenario` 与 `by_scenario.csv` 新增 `word_edit_count`、`reference_word_count`、`micro_wer`、`macro_wer`；顶层 `metrics.json` 令 `wer = micro_wer`、`wer_reason = null`，并写出 `micro_wer`、`macro_wer`、`word_edit_count`、`reference_word_count` 与 `wer_tokenizer_info`（含 `name`、`version`、`dictionary_sha256`、`hmm`）。未启用时所有输出字段与历史版本逐字一致。
+- **测试**：`python3 -m unittest tests.test_eval_cer -v` 验证锁定 `jieba` micro/macro/scenario WER、推理错误行空词计分、未知分词器拒绝、版本号不匹配拒绝、词典 SHA-256 不匹配拒绝、`configs/inference/base_eval_wer.yaml` CLI 运行及 `wer_tokenizer=null` 向后兼容。
+- **验收**：全部单元测试通过；使用 `configs/inference/base_eval_wer.yaml` 对固定 `val.jsonl`（2500 行）和封存 `test.jsonl`（2500 行）的四阶段（`base`、`sft`、`dpo`、`rl`）预测离线重算 WER，重算所得 `edit_count` 与 `micro_cer` 与已发布评测产物 100% 一致，且四阶段中文 WER 归档至运行日志与进度文档。
+- **影响**：只增量扩展可选 WER 评测配置与离线/在线评分字段，不改动任何已有 manifest、`decode_eval_sha256`、训练配置哈希或已发布 SFT/DPO/RL release。
 
 Phase 0 的 smoke manifest 是 `manifests/phase0/smoke.jsonl`，`split` 固定为 `smoke`。它只证明一条 clean、一条 degraded 和一条失败行，不是 Phase 1 的 train/val/test，也不能拿来训练。
 

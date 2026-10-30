@@ -1,6 +1,6 @@
 # 数据方案
 
-最后更新：2026-10-14
+最后更新：2026-10-30
 
 ## 背景与范围
 
@@ -122,8 +122,20 @@ AISHELL-1 在标成已审阅前要记下 2026-10-14 的核对结果，命令在 
 
 P9 的 50 条只覆盖本机已解压的 train `S0002`、`S0003`、`S0004`，而且没有人听。P11 的 50 条是另一份，train 25 加 dev 25，结论写在 `10_phase1_run_log.md`。官方文本和这 50 个音频文件都没有改。许可文字先不处理。先前三个说话人子集不作为这套官方切分的输入。
 
-## 影响
+## 影响与 OpenSLR 33 许可证合规边界
 
-2026-10-14 的候选比较见 [候选比较与首批建议](11_dataset_candidates.md)。AISHELL-1 仍是优先审阅候选。官方切分接口已经接到构建器和校验器上。P14 把正式配置命名为 `aishell1-openslr33-pilot-20261015`，`audited` 改为 true。许可证正文仍未处理。
+2026-10-14 的候选比较见 [候选比较与首批建议](11_dataset_candidates.md)。AISHELL-1 仍是优先审阅候选。官方切分接口已经接到构建器和校验器上。P14 把正式配置命名为 `aishell1-openslr33-pilot-20261015`，`audited` 改为 true。
+
+### OpenSLR 33（AISHELL-1）许可证合规收口（2026-10-30）
+
+- **背景**：OpenSLR 33 发布页元数据栏与 AISHELL-1 原始论文标注许可证为 `Apache-2.0`，但同一发布页正文同时写有 `"free for academic use"`。此前文档将两处并列标注留作待收口合规事项。
+- **范围**：针对本项目基于 `aishell1-openslr33-pilot-20261015` 生成的五场景 pilot 数据集及在其上训练产出的 SFT/DPO/RL pilot LoRA adapter 明确合规使用边界；不修改已冻结的 `train.jsonl`、`val.jsonl`、`test.jsonl` 与音频哈希。
+- **设计（交集最严原则）**：取两处声明的交集（最严约束）执行数据与模型合规边界：
+  1. 本项目当前所有基于 AISHELL-1（OpenSLR 33）的实验、评测与 pilot LoRA adapter 权重**严格限定于非商业学术研究与方法验证用途（academic / non-commercial research & benchmark evaluation only）**。
+  2. 代码仓库不提交、不托管、不公开再分发 AISHELL-1 原始语音或合成退化 WAV 音频文件（Git 仓库仅保存可复现抽样脚本、JSONL 标注文本清单与 SHA-256 校验索引）。
+  3. 若后续需要将训练权重用于商业生产部署，必须切换至无学术用途附加限制的纯商业授权语料重新构建 manifest 并从官方 `Qwen/Qwen3-ASR-0.6B` 重新训练，不得直接将基于 AISHELL-1 训练的 pilot adapter 用于商业闭源服务。
+- **测试与核查**：通过 `git ls-files` 与 `.gitignore` 规则确保仓库不含任何 AISHELL-1 `.wav` / `.tgz` / `.tar` 音频载荷（`results/` 下的大型音频包与 `references/` 均不被追踪或分发），并在 `11_dataset_candidates.md`、`06_risks_and_decisions.md`、`configs/README.md` 与 `00_progress.md` 同步记录该合规边界。
+- **验收**：全部数据、风险、配置和进度文档口径一致，无未决许可证状态冲突，且 Git 追踪树中零原始音频文件泄漏。
+- **影响**：在不改动任何已有 manifest、哈希与 Phase 1–5 实验产物的条件下完成 OpenSLR 33 合规闭环；后续接入 AliMeeting（CC BY-SA 4.0）或 SLR28（Apache-2.0）时同样按各数据源原始许可独立声明边界。
 
 采用相对路径、文件级 split、纯文本 `text` 和显式 source ID 后，旧的绝对路径 manifest、混入特殊 token 的标注和未带版本 hash 的结果不能直接复用；必须重新物化或提供迁移报告。该合同同时支持本地单测和 Colab Drive 恢复，不改变外部数据原始文件。

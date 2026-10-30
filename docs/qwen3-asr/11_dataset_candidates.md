@@ -1,6 +1,6 @@
 # 中文语音候选比较与首批数据建议
 
-核查日期：2026-10-15。状态：候选顺序保持不变。P14 将正式配置改为 `source_version: aishell1-openslr33-pilot-20261015`、`audited: true`。许可证正文仍未处理。
+核查日期：2026-10-15（2026-10-30 更新合规与 WER 收口状态）。状态：候选顺序保持不变。P14 将正式配置改为 `source_version: aishell1-openslr33-pilot-20261015`、`audited: true`；2026-10-30 已按交集最严原则完成 OpenSLR 33 非商业学术研究用途合规边界收口，并锁定 `jieba==0.42.1` 词典哈希补齐中文 WER 辅助指标。
 
 ## 背景与范围
 
@@ -62,11 +62,11 @@ WenetSpeech S 留给下一轮扩大训练分布。其官方 README 在 2026-01-0
 2. 官方切分的夹具合同已经通过，见 `10_phase1_run_log.md` 的 P8。正式语料接入时还要再查：官方 split 得到保留，speaker/source 跨 split 时拒绝，同源增强始终同 split，两次生成 hash 一致，混合文本和坏音频有拒收记录。
 3. 留下抽听审阅记录、全量自动审计、拒收统计和处理结论；仍未解决的标签错误不可作为 gold 进入 DPO 或 reward。P11 留下了 50 条抽听结论。全量时长、格式和削波审计随 pilot 抽样的时长表一起做，拒收统计写在 `selection.json`。
 4. 正式 manifest 满足 schema、音频、hash、泄漏与五场景配额；审阅完成后才更新配置中的来源与审计状态，独立 validator 带 `--check-audio` 退出码为 0。P13 在未审阅配置下退出码是 3。P14 把来源命名为 `aishell1-openslr33-pilot-20261015` 并把 `audited` 改为 true，再重新校验。许可证正文仍未处理。
-5. 固定 val 上先跑 base，报告分场景 CER、WER 和空/重复/超长/失败率。WER 分词器及词典 hash 目前未锁定，应先补齐。用 val 判断难度是否提供可测信号；如需修改增强，创建新版本、记录原因并重新建立全部对比基线，test 保持冻结。
+5. 固定 val 上先跑 base，报告分场景 CER、WER 和空/重复/超长/失败率。2026-10-30 已通过 `configs/inference/base_eval_wer.yaml` 锁定 `jieba==0.42.1` 及内置 `dict.txt` SHA-256（`7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`），补齐 `val.jsonl` 与 `test.jsonl` 四阶段中文 WER。用 val 判断难度是否提供可测信号；如需修改增强，创建新版本、记录原因并重新建立全部对比基线，test 保持冻结。
 6. 进入 SFT 时先做 5–20 step smoke 和恢复测试，再验证相对同一 base 的 clean/degraded gate。不能用训练 loss 下降或合成 fixture 通过代替识别指标。
 
 真实会议评测需单独固定通道和非重叠片段规则，按会议隔离开发与保留集；只评非重叠片段时明确其覆盖范围，不能宣称完整多人会议性能。公开语料是否曾进入基础模型预训练尚未核实，不能称作模型绝对未见数据。
 
 ## 对现有工作的影响
 
-`configs/data/manifest_mvp.yaml` 是 `source_version: aishell1-openslr33-pilot-20261015`、`audited: true`。Phase 1 要等带音频的校验退出码 0，以及固定 val 的 base CER。OpenSLR 正文里的 “free for academic use” 仍未处理。SFT 没有启动。
+`configs/data/manifest_mvp.yaml` 是 `source_version: aishell1-openslr33-pilot-20261015`、`audited: true`。Phase 1–5 已在固定 `val.jsonl` 与封存 `test.jsonl` 上完成闭环；OpenSLR 33 的 `Apache-2.0` 与 `"free for academic use"` 并列声明已按交集最严原则收口为“仅限非商业学术研究与评测、不公开再分发原始或派生音频”（详见 `03_data_plan.md`）。下一阶段优先接入 **AliMeeting Eval**（CC BY-SA 4.0，非重叠短片段，近场耳麦 vs 8 通道远场）进行真实世界 OOD 泛化评测。

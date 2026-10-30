@@ -1,4 +1,4 @@
-"""zh-cer-v1 normalization, Levenshtein CER, and output-health flags.
+"""zh-cer-v1 normalization, Levenshtein CER/WER, and output-health flags.
 
 The rules are the contract in docs/qwen3-asr/05_testing_plan.md. Normalization
 is for scoring only and must not replace the training target or prediction_raw.
@@ -6,15 +6,21 @@ is for scoring only and must not replace the training target or prediction_raw.
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
 import unicodedata
-from typing import Sequence
+from pathlib import Path
+from typing import Any, Sequence
 
 NORMALIZATION_VERSION = "zh-cer-v1"
+LOCKED_JIEBA_VERSION = "0.42.1"
+LOCKED_JIEBA_DICT_SHA256 = "7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8"
 REPEAT_RUN_MIN = 4
 REPEAT_PATTERN_MIN = 2
 REPEAT_PATTERN_MAX = 8
 REPEAT_PATTERN_TIMES = 3
 LONG_LENGTH_RATIO = 1.5
+_JIEBA_CACHE: dict[tuple[str, str, str], Any] = {}
 
 
 def normalize_zh_cer_v1(text: str) -> str:
@@ -179,4 +185,94 @@ def score_pair(
         "truncated": stop_reason == "length",
         "inference_error": inference_error,
         "valid_output": (not inference_error) and prediction_normalized != "",
+    }
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_jieba_tokenizer(
+    *,
+    expected_version: str,
+    expected_dictionary_sha256: str,
+    dict_path_override: Path | None = None,
+) -> Any:
+    """Return an isolated jieba.Tokenizer verified against version and dict SHA-256."""
+    if not isinstance(expected_version, str) or not expected_version.strip():
+        raise ValueError("expected_version must be a non-empty string")
+    if (
+        not isinstance(expected_dictionary_sha256, str)
+        or len(expected_dictionary_sha256) != 64
+        or not all(ch in "0123456789abcdefABCDEF" for ch in expected_dictionary_sha256)
+    ):
+        raise ValueError("expected_dictionary_sha256 must be a 64-char hex string")
+    expected_sha = expected_dictionary_sha256.lower()
+
+    try:
+        import jieba  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ValueError("jieba is not installed in the active Python environment") from exc
+
+    try:
+        actual_version = importlib.metadata.version("jieba")
+    except importlib.metadata.PackageNotFoundError:
+        actual_version = str(getattr(jieba, "__version__", ""))
+    if actual_version != expected_version:
+        raise ValueError(f"jieba version mismatch: expected {expected_version}, got {actual_version}")
+
+    dict_path = (
+        dict_path_override.resolve()
+        if dict_path_override is not None
+        else Path(jieba.__file__).resolve().parent / "dict.txt"
+    )
+    if not dict_path.is_file():
+        raise ValueError(f"jieba dictionary file not found: {dict_path}")
+    actual_sha = _sha256_path(dict_path)
+    if actual_sha != expected_sha:
+        raise ValueError(
+            f"jieba dictionary sha256 mismatch: expected {expected_sha}, got {actual_sha}"
+        )
+
+    cache_key = (actual_version, actual_sha, str(dict_path))
+    cached = _JIEBA_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    tokenizer = jieba.Tokenizer(dictionary=str(dict_path))
+    tokenizer.initialize()
+    _JIEBA_CACHE[cache_key] = tokenizer
+    return tokenizer
+
+
+def score_wer_pair(
+    reference_normalized: str,
+    scored_prediction_normalized: str,
+    tokenizer: Any,
+    *,
+    hmm: bool = False,
+) -> dict[str, object]:
+    """Score word-level Levenshtein WER on zh-cer-v1 normalized strings."""
+    if not reference_normalized:
+        raise ValueError("reference text is empty after zh-cer-v1 normalization")
+    reference_words = [token for token in tokenizer.lcut(reference_normalized, HMM=hmm) if token]
+    if not reference_words:
+        raise ValueError("reference words are empty after tokenization")
+    scored_words = (
+        []
+        if not scored_prediction_normalized
+        else [token for token in tokenizer.lcut(scored_prediction_normalized, HMM=hmm) if token]
+    )
+    word_edits = edit_distance(reference_words, scored_words)
+    reference_word_count = len(reference_words)
+    return {
+        "reference_words": reference_words,
+        "scored_prediction_words": scored_words,
+        "word_edit_count": word_edits,
+        "reference_word_count": reference_word_count,
+        "sample_wer": word_edits / reference_word_count,
     }

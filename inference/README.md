@@ -7,7 +7,7 @@
 ## 当前文件清单
 
 - `README.md`：本说明文档。
-- `config.py`：读取 `qwen3-asr-infer-v1`，拒绝未知字段，并计算 `decode.eval` 的 SHA-256。
+- `config.py`：读取 `qwen3-asr-infer-v1`，拒绝未知字段，校验 `scoring`（含可选锁定 `jieba` WER 的 `wer_tokenizer`、`wer_tokenizer_version`、`wer_dictionary_sha256`、`wer_hmm`），并仅对 `decode.eval` 计算 `decode_eval_sha256`。
 - `run_inference.py`：greedy `model.generate` 主路径，旁路记录官方 `transcribe()` 文本。单条失败写入 `error` 后继续。
 
 LoRA adapter 加载留到 SFT checkpoint 出现之后。Phase 0 只跑官方 base。

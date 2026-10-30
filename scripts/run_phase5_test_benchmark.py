@@ -625,6 +625,9 @@ def run_phase5_benchmark(
             predictions_sha256=predictions_sha,
             decode_eval_sha256=config["decode_eval_sha256"],
             wer_tokenizer=config["scoring"]["wer_tokenizer"],
+            wer_tokenizer_version=config["scoring"].get("wer_tokenizer_version"),
+            wer_dictionary_sha256=config["scoring"].get("wer_dictionary_sha256"),
+            wer_hmm=bool(config["scoring"].get("wer_hmm", False)),
         )
         eval_dir = output_dir / "eval" / stage
         eval_dir.mkdir(parents=True, exist_ok=True)

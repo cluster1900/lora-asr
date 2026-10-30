@@ -767,6 +767,9 @@ def evaluate_val(
         predictions_sha256=sha256_file(prediction_path),
         decode_eval_sha256=config["decode_eval_sha256"],
         wer_tokenizer=config["scoring"]["wer_tokenizer"],
+        wer_tokenizer_version=config["scoring"].get("wer_tokenizer_version"),
+        wer_dictionary_sha256=config["scoring"].get("wer_dictionary_sha256"),
+        wer_hmm=bool(config["scoring"].get("wer_hmm", False)),
     )
     with (step_dir / "scored.jsonl").open("w", encoding="utf-8") as handle:
         for row in scored:

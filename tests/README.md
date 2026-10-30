@@ -9,7 +9,7 @@
 - `README.md`：本说明文档。
 - `test_directory_readmes.py`：目录 README 结构与清单合同测试，验证所有受管理目录下的文件与文档要求一致。
 - `test_zh_cer.py`：`zh-cer-v1` 归一化、编辑距离、对齐回溯和健康度标志。`score_pair` 仍只返回编辑总数。
-- `test_eval_cer.py`：CER 聚合、WER 缺省和重复预测失败。
+- `test_eval_cer.py`：CER 聚合、WER 缺省向后兼容、锁定 `jieba==0.42.1` + 内置词典 SHA-256 中文 WER（micro/macro/scenario 与推理错误行）、分词器名称/版本/词典哈希不符拒绝、`configs/inference/base_eval_wer.yaml` CLI 运行和重复预测失败。
 - `test_run_inference.py`：缺失音频写入错误并继续处理后面的行。
 - `test_phase0_support.py`：读回哈希和固定种子噪声。
 - `test_phase0_lock.py`：可安装环境锁的 verify/install 拆分，以及错误 pin 被拒绝。

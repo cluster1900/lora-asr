@@ -1,6 +1,6 @@
 # 开发计划
 
-最后更新：2026-10-23
+最后更新：2026-10-30
 
 ## 背景与范围
 
@@ -69,6 +69,12 @@
 - 启动前强制核对 `test.jsonl` SHA-256、2500 条音频文件字节哈希（若本地仅存放 500 条 `clean` 源音频，可通过 `scripts/manifest_audio.py` 的 `render_scenarios` 确定性重建其余四类退化波形并与 `sha256.json` 逐文件核对零差异）、三份已发布 release 的 `status == "published"` / `publishable == true` / `adapter_sha256` / `payload_sha256`，以及统一的 `decode.eval` 哈希（`4a4fee2b67884438faa196909749fcc8dcc6126b175554ad19992bf9b4f2f642`）。
 - 支持按阶段与 `sample_id` 前缀断点续跑，输出各阶段的 `predictions/<stage>.jsonl`、`eval/<stage>/metrics.json`、`eval/<stage>/scored.jsonl`、`eval/<stage>/by_scenario.csv`，以及汇总对比报告 `benchmark_summary.json`、`run_report.md`、`status.json` 并同步到 Google Drive `runs/<run_id>/`。
 - `notebooks/01_qwen3_asr_post_training_pipeline.ipynb` 是主 Colab 编排 notebook，按 Phase 0 → Phase 1 → Phase 2 (SFT) → Phase 3 (DPO) → Phase 4 (RL) → Phase 5 (Test Benchmark) 串联 CLI 调用，不在单元格内隐藏模型状态或超参数。
+
+## Phase 6（Post-MVP）Track 1 收口入口
+
+- `configs/inference/base_eval_wer.yaml` 在保持与 `base_eval.yaml` 完全一致的 `model` 与 `decode.eval` SHA-256（`4a4fee2b67884438faa196909749fcc8dcc6126b175554ad19992bf9b4f2f642`）前提下，锁定 `wer_tokenizer: "jieba"`、`wer_tokenizer_version: "0.42.1"`、`wer_dictionary_sha256: "7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8"` 与 `wer_hmm: false`。
+- `evaluation/zh_cer.py`（`load_jieba_tokenizer`、`score_wer_pair`）、`evaluation/eval_cer.py` 与 `inference/config.py` 支持隔离 `jieba.Tokenizer` 词典验签与词级 Levenshtein WER（`wer`/`micro_wer`/`macro_wer` 及分场景 WER），并在 `wer_tokenizer: null` 时保持 100% 向后兼容；`train/train_sft.py` 与 `scripts/run_phase5_test_benchmark.py` 同步透传可选 `scoring` WER 字段。
+- Phase 5 `20261026T101800_phase5_test_06b_zh_seed42` 完整分场景与逐句错误归因、`val.jsonl` / `test.jsonl` 四阶段离线中文 WER 重算结果与 OpenSLR 33 非商业学术研究用途合规边界归档在 `12_phase2_run_log.md`、`03_data_plan.md` 与 `00_progress.md`。
 
 ## 验收与影响
 

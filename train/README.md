@@ -7,7 +7,7 @@
 ## 当前文件清单
 
 - `README.md`：本说明文档。
-- `train_sft.py`：SFT runner。只训练解码器注意力 LoRA，loss 按监督 token 加权，`--resume` 只读 `latest.json`。
+- `train_sft.py`：SFT runner。只训练解码器注意力 LoRA，loss 按监督 token 加权，`--resume` 只读 `latest.json`；评测步透传 `scoring` 可选锁定 WER 字段至 `evaluate`。
 - `build_sft_smoke_subset.py`：从已有 train/val manifest 抽 smoke 子集。10 个 train source、2 个 val source，每个 source 保留五类场景。
 - `sft_schema.py`：`qwen3-asr-train-v1` 解析和语义 hash，支持可选 `optim.scheduler_max_steps` 解耦余弦周期与 `train.max_steps`。未知字段会在创建 optimizer 之前拒绝。
 - `sft_contract.py`：LoRA 名称、label mask、token 加权 loss、sampler、smoke 抽样、运行时间上限和未完成评测记录。

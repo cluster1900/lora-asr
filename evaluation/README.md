@@ -8,8 +8,8 @@
 
 - `README.md`：本说明文档。
 - `jsonl_io.py`：UTF-8 JSONL 读写。空行跳过，坏行带行号失败。
-- `zh_cer.py`：`zh-cer-v1` 归一化、编辑距离、空/重复/超长/截断标志。`align_edits` 单独回溯替换、删除和插入，不改变 `score_pair` 的字段。
-- `eval_cer.py`：按 `sample_id` 对齐 manifest 和预测，写出 `metrics.json`、`scored.jsonl` 和 `by_scenario.csv`。
+- `zh_cer.py`：`zh-cer-v1` 归一化、字符与词级 Levenshtein 编辑距离、空/重复/超长/截断标志，以及隔离并校验版本与内置 `dict.txt` SHA-256 的 `load_jieba_tokenizer` 和词级评分 `score_wer_pair`。`align_edits` 单独回溯替换、删除和插入，不改变 `score_pair` 的字段。
+- `eval_cer.py`：按 `sample_id` 对齐 manifest 和预测，写出 `metrics.json`、`scored.jsonl` 和 `by_scenario.csv`。当配置锁定 `wer_tokenizer: "jieba"`（`version="0.42.1"`、`dict.txt` SHA-256 `7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`、`HMM=false`）时同步输出逐样本与分场景中文 WER（`wer`/`micro_wer`/`macro_wer`）；当 `wer_tokenizer` 为 `null` 时输出 schema 与历史完全一致。
 
 `verify_gate.py` 仍未实现。阶段门禁要等 val 行数和父版本 baseline 都存在后再写，不能用两行 smoke 冒充 `passed`。
 
@@ -25,6 +25,11 @@ python3 evaluation/eval_cer.py --config configs/inference/base_eval.yaml \
   --manifest manifests/phase0/smoke.jsonl \
   --predictions runs/<run_id>/predictions/smoke.jsonl \
   --output-dir runs/<run_id>/eval
+
+python3 evaluation/eval_cer.py --config configs/inference/base_eval_wer.yaml \
+  --manifest results/phase1_aishell_pilot_20261015/manifest/test.jsonl \
+  --predictions runs/<run_id>/predictions/dpo.jsonl \
+  --output-dir runs/<run_id>/eval_wer/dpo
 ```
 
 `micro_cer = sum(edit_count) / max(sum(reference_char_count), 1)`；`macro_cer` 是 sample CER 平均值。clean/degraded gate 使用 micro CER，scenario 结论要求该 cell 至少 50 行。评测只读 `decode.eval`，不读取 RL rollout 参数；test 仅在发布前评一次。缺预测、重复 sample、行数/manifest hash 不符或 score contract 不符必须失败或 `incomparable`，不能自动丢行后继续。

@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from evaluation.jsonl_io import read_jsonl  # noqa: E402
-from evaluation.zh_cer import score_pair  # noqa: E402
+from evaluation.zh_cer import load_jieba_tokenizer, score_pair, score_wer_pair  # noqa: E402
 from inference.config import load_infer_config  # noqa: E402
 
 METRICS_SCHEMA = "qwen3-asr-metrics-v1"
@@ -83,11 +83,11 @@ def _rate(flag_sum: int, count: int) -> float:
     return flag_sum / count if count else 0.0
 
 
-def _scenario_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _scenario_summary(rows: list[dict[str, Any]], *, include_wer: bool = False) -> dict[str, Any]:
     edits = sum(int(row["edit_count"]) for row in rows)
     refs = sum(int(row["reference_char_count"]) for row in rows)
     count = len(rows)
-    return {
+    summary: dict[str, Any] = {
         "samples": count,
         "edit_count": edits,
         "reference_char_count": refs,
@@ -100,6 +100,18 @@ def _scenario_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "inference_error_rate": _rate(sum(int(row["inference_error"]) for row in rows), count),
         "valid_output_rate": _rate(sum(int(row["valid_output"]) for row in rows), count),
     }
+    if include_wer:
+        word_edits = sum(int(row["word_edit_count"]) for row in rows)
+        word_refs = sum(int(row["reference_word_count"]) for row in rows)
+        summary.update(
+            {
+                "word_edit_count": word_edits,
+                "reference_word_count": word_refs,
+                "micro_wer": (word_edits / word_refs) if word_refs else None,
+                "macro_wer": (sum(float(row["sample_wer"]) for row in rows) / count) if count else None,
+            }
+        )
+    return summary
 
 
 def evaluate(
@@ -110,8 +122,31 @@ def evaluate(
     predictions_sha256: str,
     decode_eval_sha256: str,
     wer_tokenizer: str | None,
+    wer_tokenizer_version: str | None = None,
+    wer_dictionary_sha256: str | None = None,
+    wer_hmm: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return scored rows and the metrics object."""
+    if not isinstance(wer_hmm, bool):
+        raise ValueError("wer_hmm must be a boolean")
+    if wer_tokenizer is None:
+        if wer_tokenizer_version is not None or wer_dictionary_sha256 is not None:
+            raise ValueError("null wer_tokenizer requires null version and dictionary hash")
+        if wer_hmm:
+            raise ValueError("null wer_tokenizer requires wer_hmm to be false")
+        tokenizer = None
+    else:
+        if wer_tokenizer != "jieba":
+            raise ValueError(f"unsupported wer_tokenizer: {wer_tokenizer}")
+        if not isinstance(wer_tokenizer_version, str) or not wer_tokenizer_version.strip():
+            raise ValueError("wer_tokenizer_version is required when wer_tokenizer is set")
+        if not isinstance(wer_dictionary_sha256, str) or len(wer_dictionary_sha256) != 64:
+            raise ValueError("wer_dictionary_sha256 must be a 64-char hex string when wer_tokenizer is set")
+        tokenizer = load_jieba_tokenizer(
+            expected_version=wer_tokenizer_version,
+            expected_dictionary_sha256=wer_dictionary_sha256,
+        )
+
     scored: list[dict[str, Any]] = []
     for manifest, prediction in join_rows(manifest_rows, prediction_rows):
         error = prediction.get("error")
@@ -133,23 +168,33 @@ def evaluate(
             "stop_reason": prediction.get("stop_reason"),
         }
         row.update(scored_fields)
+        if tokenizer is not None:
+            row.update(
+                score_wer_pair(
+                    str(scored_fields["reference_normalized"]),
+                    str(scored_fields["scored_prediction_normalized"]),
+                    tokenizer,
+                    hmm=wer_hmm,
+                )
+            )
         scored.append(row)
 
+    include_wer = tokenizer is not None
     by_scenario_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in scored:
         by_scenario_rows[str(row.get("scenario") or "unknown")].append(row)
     by_scenario = {
-        name: _scenario_summary(group)
+        name: _scenario_summary(group, include_wer=include_wer)
         for name, group in sorted(by_scenario_rows.items())
     }
-    overall = _scenario_summary(scored)
-    if wer_tokenizer:
-        wer: float | None = None
-        wer_reason = "wer_tokenizer_configured_but_not_implemented"
+    overall = _scenario_summary(scored, include_wer=include_wer)
+    if include_wer:
+        wer: float | None = overall["micro_wer"]
+        wer_reason: str | None = None
     else:
         wer = None
         wer_reason = "wer_tokenizer_not_configured"
-    metrics = {
+    metrics: dict[str, Any] = {
         "schema_version": METRICS_SCHEMA,
         "normalization_version": "zh-cer-v1",
         "manifest_sha256": manifest_sha256,
@@ -168,8 +213,24 @@ def evaluate(
         "valid_output_rate": overall["valid_output_rate"],
         "wer": wer,
         "wer_reason": wer_reason,
-        "by_scenario": by_scenario,
     }
+    if include_wer:
+        assert wer_tokenizer_version is not None and wer_dictionary_sha256 is not None
+        metrics.update(
+            {
+                "micro_wer": overall["micro_wer"],
+                "macro_wer": overall["macro_wer"],
+                "word_edit_count": overall["word_edit_count"],
+                "reference_word_count": overall["reference_word_count"],
+                "wer_tokenizer_info": {
+                    "name": "jieba",
+                    "version": wer_tokenizer_version,
+                    "dictionary_sha256": wer_dictionary_sha256.lower(),
+                    "hmm": wer_hmm,
+                },
+            }
+        )
+    metrics["by_scenario"] = by_scenario
     return scored, metrics
 
 
@@ -189,6 +250,8 @@ def write_scenario_csv(path: Path, by_scenario: dict[str, Any]) -> None:
         "inference_error_rate",
         "valid_output_rate",
     ]
+    if any("micro_wer" in summary for summary in by_scenario.values()):
+        fields.extend(["word_edit_count", "reference_word_count", "micro_wer", "macro_wer"])
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -218,6 +281,9 @@ def main(argv: list[str] | None = None) -> int:
             predictions_sha256=sha256_file(args.predictions),
             decode_eval_sha256=config["decode_eval_sha256"],
             wer_tokenizer=config["scoring"]["wer_tokenizer"],
+            wer_tokenizer_version=config["scoring"]["wer_tokenizer_version"],
+            wer_dictionary_sha256=config["scoring"]["wer_dictionary_sha256"],
+            wer_hmm=config["scoring"]["wer_hmm"],
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"eval_cer failed: {exc}", file=sys.stderr)
@@ -231,12 +297,16 @@ def main(argv: list[str] | None = None) -> int:
     metrics_path = args.output_dir / "metrics.json"
     metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     write_scenario_csv(args.output_dir / "by_scenario.csv", metrics["by_scenario"])
-    print(json.dumps({
+    summary_out: dict[str, Any] = {
         "micro_cer": metrics["micro_cer"],
         "macro_cer": metrics["macro_cer"],
         "samples": metrics["samples"],
         "metrics": str(metrics_path),
-    }, ensure_ascii=False))
+    }
+    if metrics["wer"] is not None:
+        summary_out["wer"] = metrics["wer"]
+        summary_out["macro_wer"] = metrics["macro_wer"]
+    print(json.dumps(summary_out, ensure_ascii=False))
     return 0
 
 
