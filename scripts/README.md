@@ -6,28 +6,136 @@
 
 ## 当前文件清单
 
-- `README.md`：本说明文档。辅助脚本（`colab_bootstrap.py`、`drive_sync.py`、`manifest_validate.py`、`build_dpo_pairs.py` 等）将在各阶段按需实现并登记。
+- `README.md`：本说明文档。
+- `colab_bootstrap.py`：写入 `environment.json`、`resource_report.json`、`request.json` 和解析后的推理配置。不加载 ASR 模型。
+- `prepare_phase0_audio.py`：下载官方中文样例，生成 5 dB 噪声副本和一条故意缺失的 manifest 行。
+- `phase0_readback.py`：把指定产物复制到目标目录后再读回，按 SHA-256 核对。
+- `run_phase0_baseline.py`：按顺序调用上面的脚本、推理和 CER。每次子命令追加到运行目录的 `command_log.md`。Drive 父目录存在时创建 Drive 根目录并读回；父目录不存在时仍做本地读回，退出码 3。
+- `rebuild_phase0_env.py`：在第二份空 runtime 上安装仓库根目录 `requirements.lock` 的精确版本。`# verify:` 的 CUDA 包只核对；核对失败时退出码 2，不调用 pip。锁定的包安装成功后，如果预装 `torchao` 低于 0.16.0，就卸掉它，避免 `peft` 0.21 注入 LoRA 时抛错。不升级 `torchao`，也不替换 CUDA 版 torch。通过时写出 `rebuild_report.json`。
+- `manifest_contract.py`：Phase 1 的 schema、配置解析、切分哈希、文本规则和退出码表。
+- `manifest_audio.py`：把一条源音频做成 clean、5 dB noise、reverb、far_field、dropout 五条 16 kHz 波形。噪声种子来自 SHA-256，不用 Python `hash()`。
+- `build_manifest.py`：读取源 JSONL，写出 `train.jsonl`、`val.jsonl`、`test.jsonl`、`rejected.jsonl`、`manifest.json`、`sha256.json` 和 `wavs/`。无官方身份时按 source id 哈希切分；整份源带 `speaker_id` 和 `official_split` 时保留官方切分。
+- `manifest_validate.py`：按配置重算状态、配额、source、speaker、文本、音频泄漏和音频格式，并与 `manifest.json` 对照。
+- `sample_aishell_pilot.py`：从 AISHELL-1 转写和时长表里抽出 pilot 源。train 目标 18000 秒且至少 50 名说话人，dev 和 test 各 500 条。全角拉丁字母、削波和重复文本写入拒收表。不改正式配置，不把 `audited` 设为 true。
+- `build_dpo_pairs.py`：把已发布 SFT release 的 greedy 预测配成 DPO pair。chosen 是 manifest 原文，rejected 是 `prediction_raw`。tie、空输出和推理错误写入 `pair_rejected.jsonl`，超 token 写入 `overlength_pairs.jsonl`。不计算 reference logprob，不下载模型。
+- `strip_dpo_gap_pairs.py`：读取冻结 null pair，只对 dropout 从两边去掉 0.40–0.55 的静音段，写到新目录 `pairs_gap_strip`。剥完相同或 rejected 为空的行写入 `gap_ties.jsonl`。不覆盖 `pairs/` 或 `pairs_logprob/`，不算 logprob，不下载模型。
+- `run_phase5_test_benchmark.py`：Phase 5 封存 2500 条 `test.jsonl` 四阶段（`base`、`sft`、`dpo`、`rl`）同口径 greedy 终局评测与汇总脚本。强制核对 `test.jsonl` SHA-256、测试音频与 `manifest/sha256.json`（支持从 500 条 `clean` 测试源音频通过 `render_scenarios` 确定性重建其余 2000 条退化 WAV 并逐文件验签）以及三份已发布 release（`sft_06b_zh_20261015T234939_step000030`、`dpo_06b_zh_20261022T133007_step000040`、`rl_06b_zh_20261023T042034_step000005`），支持阶段与 `sample_id` 前缀断点续跑，输出各阶段 `predictions/<stage>.jsonl`、`eval/<stage>/metrics.json`、`eval/<stage>/scored.jsonl`、`eval/<stage>/by_scenario.csv` 以及 `benchmark_summary.json`、`run_report.md`、`status.json` 并同步到 Drive。
+
+`drive_sync.py` 还没有实现。checkpoint 恢复属于 Phase 2。正式配置的 `source_version` 是 `aishell1-openslr33-pilot-20261015`。
 
 ## 主要输入输出
 
 - **输入**：原始音频与标注、Drive 挂载路径、配置 YAML、随机种子以及待同步的本地 checkpoint 目录。
-- **输出**：结构化环境报告 `environment.json`、校验后的 `manifest_sha256.json`、符合 schema 的中文 train/val/test manifest、Drive 持久化 checkpoint、DPO pair/reference-logprob 审计、追加式 `events.jsonl` 和 `run_report.md`。
+- **输出**：结构化环境报告 `environment.json`、`command_log.md`（每条子命令的命令行、退出码、stdout、stderr）、`run_report.md`。Phase 1 构建器另写四个 JSONL、`manifest.json`、`sha256.json` 和 `wavs/`。`sha256.json` 的 `generated_at` 不参与两次构建是否相同的比较。Drive checkpoint 和 DPO 审计还没有实现。
 
 ## 使用入口
 
-在 Phase 0–3 实现后提供：
 ```bash
-# 环境启动与探针
-python3 scripts/colab_bootstrap.py --config configs/train/sft_pilot.yaml --drive-root /content/drive/MyDrive/qwen3-asr --run-id <run_id> --seed 42
-
-# Manifest 校验
-python3 scripts/manifest_validate.py --manifest manifests/train.jsonl --check-audio
-
-# DPO Pair 构建与离线参考 logprob 预计算
-python3 scripts/build_dpo_pairs.py --sft-release releases/sft/<sft_run_id> --train-manifest manifests/train.jsonl --val-manifest manifests/val.jsonl --output-dir manifests/dpo/<pair_id> --seed 42
+python3 scripts/run_phase0_baseline.py \
+  --config configs/inference/base_eval.yaml \
+  --output-dir /content/run/phase0_baseline_20261013a \
+  --run-id phase0_baseline_20261013a \
+  --seed 42 \
+  --drive-root /content/drive/MyDrive/qwen3-asr
 ```
 
-`drive_sync.py` 必须先写本地 staging 和 `sha256.json`，再复制 `.incoming`，读回核对后才更新 `latest.json`；manifest/pair builder 必须同时写 schema 版本、source 泄漏审计和 rejected 行，不能只返回一个行数。
+退出码 0 表示 clean、noise、失败行、CER 和 Drive 读回都完成。退出码 3 表示转写和本地读回完成，但 Drive 根目录不存在。退出码 1 或 2 表示这条 baseline 没有跑完。
+
+环境锁重建：
+
+```bash
+python3 scripts/rebuild_phase0_env.py \
+  --lock requirements.lock \
+  --output-dir /content/run/phase0_lock_rebuild_20261013
+```
+
+退出码 0 表示 verify 包、安装包和 CUDA 都与锁一致。退出码 2 表示安装前的 CUDA 包已经偏离，pip 没有运行。退出码 1 表示 pip 失败，或安装后的版本、CUDA 与锁不一致。
+
+Phase 1 构建和校验：
+
+```bash
+python3 scripts/build_manifest.py \
+  --config configs/data/manifest_mvp.yaml \
+  --sources <source.jsonl> \
+  --output-dir <manifest-dir> \
+  --seed 42
+python3 scripts/manifest_validate.py \
+  --manifest <manifest-dir> \
+  --config configs/data/manifest_mvp.yaml \
+  --check-audio
+```
+
+pilot 抽样：
+
+```bash
+python3 scripts/sample_aishell_pilot.py catalog \
+  --archive /content/aishell/data_aishell.tgz \
+  --output-dir /content/aishell/pilot_catalog
+python3 scripts/sample_aishell_pilot.py select \
+  --transcript aishell_transcript_v0.8.txt \
+  --durations /content/aishell/pilot_catalog/durations.jsonl \
+  --output-dir /content/aishell/pilot_sample \
+  --seed 42
+```
+
+`catalog` 只读整包，写出 `durations.jsonl` 和 `catalog.json`。`select` 写出 `source.jsonl`、`selected.jsonl`、`rejected.jsonl` 和 `selection.json`。配额不够时退出码 3，并且不留下 `source.jsonl`。输入缺失或说话人切分数量不对时退出码 2。默认期望 train/dev/test 说话人是 340/40/20，夹具用 `--expect-speakers` 改成小数量。
+
+`--seed` 必须与配置里的 seed 相同。哈希模式的源 JSONL 每行只有 `source_utterance_id`、`audio`、`text`，可选 `language`。官方模式还要有 `speaker_id` 和 `official_split`（`train`、`dev` 或 `test`），可选 `source_package`。`dev` 写入 `val.jsonl`。两种模式不能出现在同一份源文件里，否则退出码 2。`audio` 相对源文件所在目录。构建器退出码与校验器相同：0 是 `passed`，2 是配置、seed 不匹配、源文件缺失或混用切分模式，3 是 `insufficient_data`，4 是 `data_failed`，1 是 schema、泄漏、坏音频或 hash 冲突。校验器缺少 `--check-audio` 时退出码 2。正式配置 `audited` 为 true。行数不够时退出码仍是 3。`audited: false` 的配置即使行数够也必须得到 3，不能交给 SFT。
+
+DPO pair：
+
+```bash
+python3 scripts/build_dpo_pairs.py \
+  --train-manifest results/phase1_aishell_pilot_20261015/manifest/train.jsonl \
+  --train-predictions <train_predictions.jsonl> \
+  --val-manifest results/phase1_aishell_pilot_20261015/manifest/val.jsonl \
+  --val-predictions <val_scored_or_predictions.jsonl> \
+  --release-dir <published-sft-release> \
+  --tokenizer-dir <qwen3-asr-tokenizer> \
+  --output-dir <pair-dir> \
+  --seed 42 \
+  --max-transcript-tokens 512
+```
+
+退出码 0 表示 val pair 至少 100 且每个场景至少 10，`pair_metadata.json` 的 `trainable` 仍是 false。退出码 3 表示文件已写出但 val 数量不足。退出码 1 表示 release 未发布、id 对不齐、音频损坏或跨 split 泄漏，不留下 pair 文件。`--contract-test-char-tokens` 只用在合同测试里，正式 pair 必须用 `--tokenizer-dir`。EOS 是 `<|im_end|>`，token 数是正文 token 再加 1。
+
+dropout 静音段另写：
+
+```bash
+python3 scripts/strip_dpo_gap_pairs.py \
+  --train-pairs <frozen-null/train_pairs.jsonl> \
+  --val-pairs <frozen-null/val_pairs.jsonl> \
+  --expect-train-sha256 d958d602dcc4a252ac75ce36d99536e8a53f48fa72929d1b69ead2647dba3f1b \
+  --expect-val-sha256 a7591e86f5a33efb314e29304153fe55e2d24ffba9bdd8b2739f953568b116d2 \
+  --tokenizer-dir <qwen3-asr-tokenizer> \
+  --output-dir <pairs_gap_strip> \
+  --seed 42 \
+  --max-transcript-tokens 512
+```
+
+输出目录的最后一级必须叫 `pairs_gap_strip`。脚本核对源 SHA-256 后才写 `train_pairs.jsonl`、`val_pairs.jsonl`、`gap_ties.jsonl`、`overlength_pairs.jsonl`、`pair_audit.json`、`pair_metadata.json` 和 `pair_report.json`。dropout 的 `reference_text` 与 `chosen_text` 都是剥离后的归一化文本。其他场景的文本和 token 数不变。reference logprob 保持 null，`trainable` 是 false，审计处置是 `unlistened`。退出码 0 表示 val 数量够。退出码 3 表示文件已写出但 val 不足。退出码 2 表示参数不合法。退出码 1 表示哈希不符、目录名被拒绝或行内容不能剥，并且不留下 pair 文件。`--contract-test-char-tokens` 只用在合同测试里。
+
+Phase 5 封存 `test.jsonl` 四阶段终局评测：
+
+```bash
+python3 scripts/run_phase5_test_benchmark.py \
+  --config configs/train/rl_pilot_aligned.yaml \
+  --test-manifest results/phase1_aishell_pilot_20261015/manifest/test.jsonl \
+  --manifest-sha-index results/phase1_aishell_pilot_20261015/manifest/sha256.json \
+  --data-config configs/data/manifest_mvp.yaml \
+  --pilot-sample-tar /content/drive/MyDrive/qwen3-asr/data/aishell1/20261015/pilot_sample_audio.tar \
+  --sft-release-dir <releases/sft/sft_06b_zh_20261015T234939_step000030> \
+  --dpo-release-dir <releases/dpo/dpo_06b_zh_20261022T133007_step000040> \
+  --rl-release-dir <releases/rl/rl_06b_zh_20261023T042034_step000005> \
+  --output-dir runs/<run_id> \
+  --drive-root /content/drive/MyDrive/qwen3-asr \
+  --run-id <YYYYMMDDTHHMMSS_phase5_test_06b_zh_seed42> \
+  --seed 42
+```
+
+脚本按顺序评测 `base`、`sft`、`dpo`、`rl` 四个阶段，若本地缺失测试音频且提供 `--pilot-sample-tar`，会先从 tar 包解出 500 条 `clean` 测试源音频，再确定性生成其余 2000 条退化音频（针对跨 CPU 架构 SIMD `float32` 归约导致的 `noise` 缩放因子 `±8 ULP` 尾数差自动对齐并校验）并对全部 2500 条 WAV 与 `sha256.json` 验签；支持按阶段与 `sample_id` 前缀断点续跑，并在 Drive 根目录存在时将预测、评分、`benchmark_summary.json`、`run_report.md` 和 `status.json` 同步至 `<DRIVE_ROOT>/runs/<run_id>/`。
+
+`drive_sync.py` 必须先写本地 staging 和 `sha256.json`，再复制 `.incoming`，读回核对后才更新 `latest.json`。manifest builder 必须同时写 schema 版本、source 泄漏审计和 rejected 行，不能只返回一个行数。
 
 ## 维护要求
 

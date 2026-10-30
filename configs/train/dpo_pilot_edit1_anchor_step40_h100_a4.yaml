@@ -1,0 +1,153 @@
+# Plan 1 + Plan 3 comparison: 100-step cosine horizon (optim.scheduler_max_steps: 100),
+# stopped at step 40 (train.max_steps: 40), plus 4-sample dropout anchor averaging
+# per optimizer step (dpo.dropout_anchor_samples_per_step: 4, matching accumulation 4).
+# Each of the 4 deterministic dropout anchor rows contributes (0.05 / 4) * token_mean_NLL
+# to reduce single-utterance NLL variance while keeping max_grad_norm: 1.0 unchanged.
+# Do not resume 20261020T114647, 20261020T041218, 20261020T024637, or 20261020T014427.
+# Do not edit the executed DPO YAMLs.
+# The 120 minute clock stays in this file. The launch sets
+# QWEN3_ASR_DISABLE_RUNTIME_BUDGET=1 and the log must contain
+# DPO_RUNTIME_BUDGET disabled. publishable stays false.
+schema_version: qwen3-asr-train-v1
+stage: dpo
+profile: pilot
+seed: 42
+model:
+  name: Qwen/Qwen3-ASR-0.6B
+  revision: 5eb144179a02acc5e5ba31e748d22b0cf3e303b0
+  processor_sha256: 1b94f6ef846ce0faa88927fd8104c27831c457a69f103e6ec62fa392d315856c
+  parent_release: sft_06b_zh_20261015T234939_step000030
+  parent_release_sha256: "a185a61f54b6fd74bd5e3bfa1173e15450cfbb772731567671a928aad805096a"
+runtime:
+  environment_lock_sha256: cb7f7d03116c4b18100df8a165085eac4a014a765018a8cfb0d31b63c26d56a0
+  dtype: bfloat16
+  world_size: 1
+  attention: sdpa
+  gradient_checkpointing: true
+  num_workers: 0
+  allow_dirty: true
+  tf32: false
+  deterministic_algorithms: true
+  max_runtime_minutes: 120
+  shutdown_margin_minutes: 10
+  min_free_gpu_fraction: 0.10
+  min_free_disk_gb: 10
+  min_free_ram_gb: 4
+lora:
+  rank: 16
+  alpha: 32
+  dropout: 0.0
+  scope: decoder_attention_only
+  projections: [q_proj, k_proj, v_proj, o_proj]
+data:
+  train_manifest: results/phase1_aishell_pilot_20261015/manifest/train.jsonl
+  val_manifest: results/phase1_aishell_pilot_20261015/manifest/val.jsonl
+  manifest_metadata: results/phase1_aishell_pilot_20261015/manifest/manifest.json
+  max_audio_seconds: 30
+  max_transcript_tokens: 512
+  max_input_tokens: 2048
+  overlength: reject
+  sampler: seeded_shuffle
+baseline:
+  metrics: configs/train/aishell_val_base_20261015.json
+batch:
+  micro_batch_size: 1
+  gradient_accumulation_steps: 4
+  eval_batch_size: 1
+optim:
+  name: adamw
+  learning_rate: 0.000005
+  betas: [0.9, 0.95]
+  eps: 0.000001
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  scheduler: cosine
+  warmup_steps: 10
+  min_lr_ratio: 0.1
+  scheduler_max_steps: 100
+train:
+  max_steps: 40
+  max_epochs: 1
+  log_steps: 1
+  save_steps: 10
+  eval_steps: 10
+  keep_last: 10
+  interrupt_after_step: null
+scoring:
+  normalization: zh-cer-v1
+  wer_tokenizer: null
+  wer_tokenizer_version: null
+  wer_dictionary_sha256: null
+  wer_hmm: false
+  empty_penalty: 0.5
+  repeated_penalty: 0.5
+  reward_clip: [-1.0, 1.0]
+decode:
+  eval:
+    do_sample: false
+    num_beams: 1
+    max_new_tokens: 513
+    repetition_penalty: 1.0
+    no_repeat_ngram_size: 0
+    context: ""
+    language: zh
+    eos_policy: tokenizer_eos_only
+  rollout:
+    group_size: 4
+    greedy_candidates: 1
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 50
+    max_new_tokens: 513
+    seed_strategy: sha256_seed_epoch_visit_sample_candidate
+    context: ""
+    language: zh
+    eos_policy: tokenizer_eos_only
+gate:
+  min_rows_per_scenario: 50
+  clean_cer_increase_max: 0.01
+  clean_cer_increase_vs_base_max: 0.02
+  degraded_macro_increase_max: 0.0
+  scenario_cer_increase_max: 0.01
+  min_improved_degraded_scenarios: 1
+  empty_rate_max: 0.01
+  repeated_rate_max: 0.01
+  long_rate_max: 0.01
+  truncation_rate_max: 0.01
+  valid_output_rate_min: 0.99
+  min_preference_accuracy: 0.55
+  min_val_pairs: 100
+  min_reward_improvement: 0.002
+  raw_kl_max: 0.001
+  reward_drop_stop: 0.01
+dpo:
+  beta: 0.1
+  pair_train_manifest: results/phase3_dpo_logprob_20261017/train_pairs.jsonl
+  pair_val_manifest: results/phase3_dpo_logprob_20261017/val_pairs.jsonl
+  reference_cache: results/phase3_dpo_logprob_20261017/ref_logprobs.jsonl
+  reference_report: results/phase3_dpo_logprob_20261017/ref_report.json
+  pair_metadata: results/phase3_dpo_pairs_20261017/pair_metadata.json
+  parent_metrics: configs/train/aishell_val_sft_step30_20261016.json
+  listen_waiver: user_20261017_skip_listen
+  audit_disposition: unlistened
+  min_train_pairs: 100
+  min_pairs_per_scenario: 10
+  logp_reduction: sequence_sum
+  train_scenarios: [noise, reverb, far_field]
+  val_scenarios: [clean, noise, reverb, far_field]
+  aligned_substitution_only: true
+  exclude_clean_identical_rejected: true
+  max_edit_count: 1
+  loss_token_scope: mismatched_only
+  dropout_anchor_weight: 0.05
+  dropout_anchor_target: rejected_text
+  dropout_anchor_samples_per_step: 4
+  ref_margin_min: -4.0
+  ref_margin_max: 0.0
+  null_train_pairs_sha256: d958d602dcc4a252ac75ce36d99536e8a53f48fa72929d1b69ead2647dba3f1b
+  null_val_pairs_sha256: a7591e86f5a33efb314e29304153fe55e2d24ffba9bdd8b2739f953568b116d2
+  filled_train_pairs_sha256: 43473f10fbb9c0349adf2eb76eaf647506978c96eabb5b09847994456519c1b1
+  filled_val_pairs_sha256: b82fc2783726555231164025a0e2d7faa82b5391bdcf8b98c6397eec1aff5eca
+  reference_cache_sha256: 5a77f22586dcf1b73393124055eb02466a904d8bdbdd2d44d40ace78000ef43e
+  reference_report_sha256: 8128e2a7731fda2b211dbaf840f38c31b132f26a9fab6f7cd3e8a11d4d805e78
+rl: null

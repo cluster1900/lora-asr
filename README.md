@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-项目处于 Phase 0：先建立 Colab 环境、固定 manifest 和 baseline 推理。训练 checkpoint 的保存与恢复从 SFT 开始，暂不声称任何后训练效果。
+已完成 Phase 0 环境与 baseline 验证、Phase 1 AISHELL-1 多声学场景 manifest 构建、Phase 2 SFT、Phase 3 DPO 与 Phase 4 RL pilot 训练与 release 发布。2026-10-26 已完成 Phase 5 封存 `test.jsonl`（2500 条）四阶段终局评测（Base: 2220 / SFT: 2204 / DPO: 2200 / RL: 2213 编辑）。详细实验进展与指标见 [`docs/qwen3-asr/00_progress.md`](docs/qwen3-asr/00_progress.md) 与 [`docs/qwen3-asr/12_phase2_run_log.md`](docs/qwen3-asr/12_phase2_run_log.md)。
 
 ## 目录
 
@@ -30,7 +30,7 @@ tests/               数据、恢复、训练和评测合同测试
 3. 建立中文 clean、noise、reverb、far_field、dropout 五类数据 MVP。
 4. 依次实现并验收 SFT、DPO、RL pilot。
 
-详细范围、验收标准和 Drive checkpoint 合同见 [`docs/qwen3-asr/00_reset_plan.md`](docs/qwen3-asr/00_reset_plan.md)；训练实现、配置 schema、恢复、门禁和 run report 以 [`docs/qwen3-asr/04_training_plan.md`](docs/qwen3-asr/04_training_plan.md) 为准。文档合同已补齐，但 runner、锁定环境、GPU smoke 和任何后训练效果仍未完成。
+详细范围、验收标准和 Drive checkpoint 合同见 [`docs/qwen3-asr/00_reset_plan.md`](docs/qwen3-asr/00_reset_plan.md)；训练实现、配置 schema、恢复、门禁和 run report 以 [`docs/qwen3-asr/04_training_plan.md`](docs/qwen3-asr/04_training_plan.md) 为准。可安装锁是根目录 `requirements.lock`。runner、训练 GPU smoke 和任何后训练效果仍未完成。
 
 ## 可恢复历史
 

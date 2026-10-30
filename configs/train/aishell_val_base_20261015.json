@@ -1,0 +1,31 @@
+{
+  "schema_version": "qwen3-asr-baseline-v1",
+  "split": "val",
+  "parent": "base",
+  "manifest_sha256": "2503945d8b1adbc3f0070a24fe33e5cb8b98e0248c68c550d59955bff33c7de8",
+  "predictions_sha256": "e7589fff432ea111d308012d4faecb76dc8b0abf907d21c231435456a1e0ebba",
+  "decode_eval_sha256": "4a4fee2b67884438faa196909749fcc8dcc6126b175554ad19992bf9b4f2f642",
+  "samples": 2500,
+  "by_scenario": {
+    "clean": {
+      "samples": 500,
+      "micro_cer": 0.022528672856362644
+    },
+    "dropout": {
+      "samples": 500,
+      "micro_cer": 0.18814855270344075
+    },
+    "far_field": {
+      "samples": 500,
+      "micro_cer": 0.023757509557618788
+    },
+    "noise": {
+      "samples": 500,
+      "micro_cer": 0.0599399235390497
+    },
+    "reverb": {
+      "samples": 500,
+      "micro_cer": 0.0252594210813763
+    }
+  }
+}

@@ -6,7 +6,11 @@
 
 ## 当前文件清单
 
-- `README.md`：本说明文档。推理主入口 `run_inference.py` 和解码 helper 将在 Phase 0 实现并登记。
+- `README.md`：本说明文档。
+- `config.py`：读取 `qwen3-asr-infer-v1`，拒绝未知字段，并计算 `decode.eval` 的 SHA-256。
+- `run_inference.py`：greedy `model.generate` 主路径，旁路记录官方 `transcribe()` 文本。单条失败写入 `error` 后继续。
+
+LoRA adapter 加载留到 SFT checkpoint 出现之后。Phase 0 只跑官方 base。
 
 ## 主要输入输出
 
@@ -15,16 +19,14 @@
 
 ## 使用入口
 
-在 Phase 0 实现后提供：
 ```bash
-# 评估推理（greedy）
-python3 inference/run_inference.py --model Qwen/Qwen3-ASR-0.6B --manifest manifests/val.jsonl --output predictions/val.jsonl --language zh --mode eval
-
-# 挂载 LoRA adapter 推理
-python3 inference/run_inference.py --model Qwen/Qwen3-ASR-0.6B --adapter runs/<run_id>/checkpoints/step_000010/adapter --manifest manifests/val.jsonl --output predictions/val_sft.jsonl --language zh --mode eval
+python3 inference/run_inference.py --config configs/inference/base_eval.yaml \
+  --manifest manifests/phase0/smoke.jsonl \
+  --output runs/<run_id>/predictions/smoke.jsonl \
+  --mode eval --seed 42
 ```
 
-正式评测优先传 `--config configs/inference/base_eval.yaml`，其中固定 model revision、processor hash、language、context、max_new_tokens、EOS policy 和 `decode.eval`；显式 CLI 参数只用于 Phase 0 探针。单条失败必须 flush 到 JSONL 后继续，批处理返回非零码并在汇总中报告失败数；LoRA adapter 在新进程加载后至少复核一条 clean 和一条 degraded。
+正式评测传 `--config configs/inference/base_eval.yaml`。CLI `--seed` 必须和配置里的 seed 相同。单条失败 flush 到 JSONL 后继续，进程返回码为 1；模型加载失败返回码为 2，不写半截成功结果。`prediction_raw` 不做重复折叠。`transcribe_text` 是官方 `transcribe()` 的文本，两者不一致时写入同一行的 `transcribe_matches_greedy=false`。
 
 ## 维护要求
 

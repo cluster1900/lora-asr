@@ -11,6 +11,10 @@
 - `06_risks_and_decisions.md`：Colab、Drive、显存、恢复和数据质量风险。
 - `07_colab_execution_contract.md`：环境启动、持久化、恢复和运行目录结构。
 - `08_colab_drive_training_gym_design.md`：Colab/Drive 生命周期、单 A100 调度和 Training Gym 思想映射。
+- `09_phase0_run_log.md`：Phase 0 每次命令的脚本、退出码和结果，用来回看失败发生在哪一步。
+- `10_phase1_run_log.md`：Phase 1 manifest 构建和校验的命令、退出码和结果。
+- `11_dataset_candidates.md`：公开中文语料候选比较、官方来源、首批抽样建议与接入缺口；候选研究不代表数据审计通过。
+- `12_phase2_run_log.md`：Phase 2 SFT smoke 的命令、退出码和恢复结果。
 - `00_progress.md`：当前进度、实验结果和阻塞项。
 
 ## 使用顺序

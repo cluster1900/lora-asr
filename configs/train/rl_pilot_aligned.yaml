@@ -1,0 +1,133 @@
+# 20-step Aligned Phase 4 RL pilot (group_pg_mixed_v1) on the published DPO step-40 release.
+# Trains only on [noise, reverb, far_field] rollout groups with prefix/length-aligned
+# punctuation-free substitution mask (loss_token_scope: mismatched_only, max_edit_count: 2),
+# accumulates 4 real signal groups per optimizer step (accumulate_signal_groups_only: true),
+# anchors dropout to the frozen DPO step-40 greedy hypothesis (dropout_anchor_weight: 0.05),
+# and uses a damped post-DPO schedule (lr: 1e-6, warmup_steps: 5, scheduler_max_steps: 50, kl_beta: 0.10).
+schema_version: qwen3-asr-train-v1
+stage: rl
+profile: pilot
+seed: 42
+model:
+  name: Qwen/Qwen3-ASR-0.6B
+  revision: 5eb144179a02acc5e5ba31e748d22b0cf3e303b0
+  processor_sha256: 1b94f6ef846ce0faa88927fd8104c27831c457a69f103e6ec62fa392d315856c
+  parent_release: dpo_06b_zh_20261022T133007_step000040
+  parent_release_sha256: "1d28d3119385c178c4b1b9a1e52a68d134f33a9bfd3de36659290a184ba5c51a"
+runtime:
+  environment_lock_sha256: cb7f7d03116c4b18100df8a165085eac4a014a765018a8cfb0d31b63c26d56a0
+  dtype: bfloat16
+  world_size: 1
+  attention: sdpa
+  gradient_checkpointing: true
+  num_workers: 0
+  allow_dirty: true
+  tf32: false
+  deterministic_algorithms: true
+  max_runtime_minutes: 120
+  shutdown_margin_minutes: 10
+  min_free_gpu_fraction: 0.10
+  min_free_disk_gb: 10
+  min_free_ram_gb: 4
+lora:
+  rank: 16
+  alpha: 32
+  dropout: 0.0
+  scope: decoder_attention_only
+  projections: [q_proj, k_proj, v_proj, o_proj]
+data:
+  train_manifest: results/phase1_aishell_pilot_20261015/manifest/train.jsonl
+  val_manifest: results/phase1_aishell_pilot_20261015/manifest/val.jsonl
+  manifest_metadata: results/phase1_aishell_pilot_20261015/manifest/manifest.json
+  max_audio_seconds: 30
+  max_transcript_tokens: 512
+  max_input_tokens: 2048
+  overlength: reject
+  sampler: seeded_shuffle
+baseline:
+  metrics: configs/train/aishell_val_base_20261015.json
+batch:
+  micro_batch_size: 1
+  gradient_accumulation_steps: 4
+  eval_batch_size: 1
+optim:
+  name: adamw
+  learning_rate: 0.000001
+  betas: [0.9, 0.95]
+  eps: 0.000001
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  scheduler: cosine
+  warmup_steps: 5
+  scheduler_max_steps: 50
+  min_lr_ratio: 0.1
+train:
+  max_steps: 20
+  max_epochs: 1
+  log_steps: 1
+  save_steps: 5
+  eval_steps: 5
+  keep_last: 10
+  interrupt_after_step: null
+scoring:
+  normalization: zh-cer-v1
+  wer_tokenizer: null
+  wer_tokenizer_version: null
+  wer_dictionary_sha256: null
+  wer_hmm: false
+  empty_penalty: 0.5
+  repeated_penalty: 0.5
+  reward_clip: [-1.0, 1.0]
+decode:
+  eval:
+    do_sample: false
+    num_beams: 1
+    max_new_tokens: 513
+    repetition_penalty: 1.0
+    no_repeat_ngram_size: 0
+    context: ""
+    language: zh
+    eos_policy: tokenizer_eos_only
+  rollout:
+    group_size: 4
+    greedy_candidates: 1
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 50
+    max_new_tokens: 513
+    seed_strategy: sha256_seed_epoch_visit_sample_candidate
+    context: ""
+    language: zh
+    eos_policy: tokenizer_eos_only
+gate:
+  min_rows_per_scenario: 50
+  clean_cer_increase_max: 0.01
+  clean_cer_increase_vs_base_max: 0.02
+  degraded_macro_increase_max: 0.0
+  scenario_cer_increase_max: 0.01
+  min_improved_degraded_scenarios: 1
+  empty_rate_max: 0.01
+  repeated_rate_max: 0.01
+  long_rate_max: 0.01
+  truncation_rate_max: 0.01
+  valid_output_rate_min: 0.99
+  min_preference_accuracy: 0.55
+  min_val_pairs: 100
+  min_reward_improvement: 0.00002
+  raw_kl_max: 0.001
+  reward_drop_stop: 0.01
+dpo: null
+rl:
+  algorithm: group_pg_mixed_v1
+  advantage: group_mean_centered
+  kl_beta: 0.10
+  updates_per_rollout: 1
+  max_group_visits: 1000
+  no_signal_stop_groups: 100
+  invalid_group_rate_max: 0.01
+  train_scenarios: [noise, reverb, far_field]
+  loss_token_scope: mismatched_only
+  max_edit_count: 2
+  accumulate_signal_groups_only: true
+  dropout_anchor_weight: 0.05
+  parent_metrics: configs/train/aishell_val_dpo_step40_20261022.json

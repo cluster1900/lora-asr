@@ -6,7 +6,9 @@
 
 ## 当前文件清单
 
-- `README.md`：本说明文档。Phase 0 完成后加入单一主入口 notebook `00_bootstrap_baseline.ipynb`。
+- `README.md`：本说明文档。
+- `00_bootstrap_baseline.ipynb`：只调用 `scripts/run_phase0_baseline.py`，不在单元格里加载模型。
+- `01_qwen3_asr_post_training_pipeline.ipynb`：Phase 0 → Phase 1 → Phase 2 (SFT) → Phase 3 (DPO) → Phase 4 (RL) → Phase 5 (Sealed `test.jsonl` 四阶段终局评测) 主 Colab 编排 notebook，所有步骤仅调用 `scripts/`、`train/`、`inference/`、`evaluation/` CLI，不在单元格里保存隐藏状态或加载模型。
 
 ## 主要输入输出
 
@@ -15,8 +17,7 @@
 
 ## 使用入口
 
-在 Google Colab 中打开：
-- `00_bootstrap_baseline.ipynb`（Phase 0 完成后提供）：从全新 runtime 运行环境探针、依赖安装、基线推理与指标评测。
+在 Google Colab 的普通内存 A100 runtime 中打开 `00_bootstrap_baseline.ipynb`。运行前把仓库放在 `/content/lora-asr`，并挂载 Drive。终端等价命令是 `python3 scripts/run_phase0_baseline.py`。
 
 ## 维护要求
 

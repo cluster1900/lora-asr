@@ -1,0 +1,37 @@
+# Phase 1 formal manifest config.
+# Named on 2026-10-15 for the AISHELL-1 OpenSLR pilot.
+# The Apache-2.0 field and the "free for academic use" sentence are still both on the OpenSLR page.
+schema_version: qwen3-asr-data-v1
+seed: 42
+source_version: aishell1-openslr33-pilot-20261015
+audited: true
+audio_processor_version: phase1-aug-v1
+language: zh
+sample_rate: 16000
+duration_seconds:
+  min: 0.5
+  max: 30.0
+splits:
+  val: 0.1
+  test: 0.1
+quota:
+  min_val_rows_per_scenario: 50
+scenarios:
+  - clean
+  - noise
+  - reverb
+  - far_field
+  - dropout
+augmentation:
+  noise:
+    snr_db: 5.0
+  reverb:
+    delay_ms: 50
+    decay: 0.35
+    repeats: 5
+  far_field:
+    gain: 0.3
+    lowpass_window: 8
+  dropout:
+    start_ratio: 0.4
+    width_ratio: 0.15
