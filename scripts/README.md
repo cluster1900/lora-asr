@@ -20,6 +20,8 @@
 - `build_dpo_pairs.py`：把已发布 SFT release 的 greedy 预测配成 DPO pair。chosen 是 manifest 原文，rejected 是 `prediction_raw`。tie、空输出和推理错误写入 `pair_rejected.jsonl`，超 token 写入 `overlength_pairs.jsonl`。不计算 reference logprob，不下载模型。
 - `strip_dpo_gap_pairs.py`：读取冻结 null pair，只对 dropout 从两边去掉 0.40–0.55 的静音段，写到新目录 `pairs_gap_strip`。剥完相同或 rejected 为空的行写入 `gap_ties.jsonl`。不覆盖 `pairs/` 或 `pairs_logprob/`，不算 logprob，不下载模型。
 - `run_phase5_test_benchmark.py`：Phase 5 封存 2500 条 `test.jsonl` 四阶段（`base`、`sft`、`dpo`、`rl`）同口径 greedy 终局评测与汇总脚本。强制核对 `test.jsonl` SHA-256、测试音频与 `manifest/sha256.json`（支持从 500 条 `clean` 测试源音频通过 `render_scenarios` 确定性重建其余 2000 条退化 WAV 并逐文件验签）以及三份已发布 release（`sft_06b_zh_20261015T234939_step000030`、`dpo_06b_zh_20261022T133007_step000040`、`rl_06b_zh_20261023T042034_step000005`），透传 `scoring` 可选锁定 WER 字段至 `evaluate`，支持阶段与 `sample_id` 前缀断点续跑，输出各阶段 `predictions/<stage>.jsonl`、`eval/<stage>/metrics.json`、`eval/<stage>/scored.jsonl`、`eval/<stage>/by_scenario.csv` 以及 `benchmark_summary.json`、`run_report.md`、`status.json` 并同步到 Drive。
+- `prepare_alimeeting_ood_eval.py`：Phase 6 Track 2 AliMeeting Eval（OpenSLR 119，`CC BY-SA 4.0`）只读真实远场 OOD 评测集构建脚本。使用纯标准库解析近场与远场 Praat `.TextGrid`，跨全场会议说话人轨剔除多说话人重叠、副语言噪声标记与拉丁语码转换，按 `seed: 42` 跨会议轮转抽取配对源语句，同步切出 `near_field`（耳麦单声道）与 `far_field`（8 通道阵列 `ch0`）16 kHz PCM16 WAV，写出 `ood_eval.jsonl`、`rejected.jsonl`、`manifest.json`（`trainable: false`）与 `sha256.json`，支持与 Drive `data/alimeeting_eval/v1_seed42/` 验签缓存与恢复。
+- `run_alimeeting_ood_benchmark.py`：Phase 6 Track 2 AliMeeting 真实远场近/远场配对 OOD 四阶段（`base`、`sft`、`dpo`、`rl`）同口径 greedy 评测与统计汇总脚本。联合读取 `configs/train/rl_pilot_aligned.yaml` 与 `configs/inference/base_eval_wer.yaml`（强制核对 `decode_eval_sha256` 一致、`trainable == false`、`ood_eval.jsonl` 与全部配对 WAV SHA-256 及三份已发布 release 谱系），同时计算 `zh-cer-v1` CER、锁定 `jieba==0.42.1` 中文 WER、远近场退化差与 2000 次配对源簇 Bootstrap 95% CI，支持阶段与 `sample_id` 前缀断点续跑，并将全套预测、评分、`benchmark_summary.json`、`run_report.md` 和 `status.json` 读回校验同步至 `<DRIVE_ROOT>/runs/<run_id>/`。
 
 `drive_sync.py` 还没有实现。checkpoint 恢复属于 Phase 2。正式配置的 `source_version` 是 `aishell1-openslr33-pilot-20261015`。
 
@@ -134,6 +136,33 @@ python3 scripts/run_phase5_test_benchmark.py \
 ```
 
 脚本按顺序评测 `base`、`sft`、`dpo`、`rl` 四个阶段，若本地缺失测试音频且提供 `--pilot-sample-tar`，会先从 tar 包解出 500 条 `clean` 测试源音频，再确定性生成其余 2000 条退化音频（针对跨 CPU 架构 SIMD `float32` 归约导致的 `noise` 缩放因子 `±8 ULP` 尾数差自动对齐并校验）并对全部 2500 条 WAV 与 `sha256.json` 验签；支持按阶段与 `sample_id` 前缀断点续跑，并在 Drive 根目录存在时将预测、评分、`benchmark_summary.json`、`run_report.md` 和 `status.json` 同步至 `<DRIVE_ROOT>/runs/<run_id>/`。
+
+Phase 6 Track 2 AliMeeting Eval 只读 OOD 物化与四阶段评测：
+
+```bash
+python3 scripts/prepare_alimeeting_ood_eval.py \
+  --config configs/data/alimeeting_ood_eval.yaml \
+  --output-dir /content/alimeeting_ood/v1_seed42 \
+  --drive-cache-dir /content/drive/MyDrive/qwen3-asr/data/alimeeting_eval/v1_seed42 \
+  --archive-path /content/alimeeting_raw/Eval_Ali.tar.gz \
+  --download-if-missing \
+  --seed 42
+
+python3 scripts/run_alimeeting_ood_benchmark.py \
+  --train-config configs/train/rl_pilot_aligned.yaml \
+  --infer-config configs/inference/base_eval_wer.yaml \
+  --ood-manifest /content/alimeeting_ood/v1_seed42/ood_eval.jsonl \
+  --manifest-sha-index /content/alimeeting_ood/v1_seed42/sha256.json \
+  --sft-release-dir /content/drive/MyDrive/qwen3-asr/releases/sft/sft_06b_zh_20261015T234939_step000030 \
+  --dpo-release-dir /content/drive/MyDrive/qwen3-asr/releases/dpo/dpo_06b_zh_20261022T133007_step000040 \
+  --rl-release-dir /content/drive/MyDrive/qwen3-asr/releases/rl/rl_06b_zh_20261023T042034_step000005 \
+  --output-dir runs/<run_id> \
+  --drive-root /content/drive/MyDrive/qwen3-asr \
+  --run-id <YYYYMMDDTHHMMSS_phase6_alimeeting_ood_06b_zh_seed42> \
+  --seed 42
+```
+
+`prepare_alimeeting_ood_eval.py` 退出码：0 为 `passed`（配对源语句不少于 `min_paired_sources` 且全部 WAV 与 `sha256.json` 验签通过）；2 为配置/种子或参数错误；3 为 `insufficient_data`；1 为归档损坏、目录缺失或哈希校验失败。`run_alimeeting_ood_benchmark.py` 退出码：0 为四阶段评测与 Drive 读回完成；2 为配置、非只读 manifest、音频验签或未发布 release 校验失败。
 
 `drive_sync.py` 必须先写本地 staging 和 `sha256.json`，再复制 `.incoming`，读回核对后才更新 `latest.json`。manifest builder 必须同时写 schema 版本、source 泄漏审计和 rejected 行，不能只返回一个行数。
 

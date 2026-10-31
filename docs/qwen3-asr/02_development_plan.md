@@ -76,6 +76,12 @@
 - `evaluation/zh_cer.py`（`load_jieba_tokenizer`、`score_wer_pair`）、`evaluation/eval_cer.py` 与 `inference/config.py` 支持隔离 `jieba.Tokenizer` 词典验签与词级 Levenshtein WER（`wer`/`micro_wer`/`macro_wer` 及分场景 WER），并在 `wer_tokenizer: null` 时保持 100% 向后兼容；`train/train_sft.py` 与 `scripts/run_phase5_test_benchmark.py` 同步透传可选 `scoring` WER 字段。
 - Phase 5 `20261026T101800_phase5_test_06b_zh_seed42` 完整分场景与逐句错误归因、`val.jsonl` / `test.jsonl` 四阶段离线中文 WER 重算结果与 OpenSLR 33 非商业学术研究用途合规边界归档在 `12_phase2_run_log.md`、`03_data_plan.md` 与 `00_progress.md`。
 
+## Phase 6（Post-MVP）Track 2 AliMeeting 真实远场 OOD 评测入口
+
+- `configs/data/alimeeting_ood_eval.yaml`（`qwen3-asr-ood-data-v1`）声明 OpenSLR 119 `Eval_Ali.tar.gz`（`CC BY-SA 4.0`，只读 OOD 用途）的非重叠单说话人过滤、近场耳麦与 8 通道远场阵列 `ch0` 同步配对、纯中文清洗及会议轮转抽样参数（`seed: 42`、`max_paired_sources: 500`）。
+- `scripts/prepare_alimeeting_ood_eval.py` 解析 Praat `.TextGrid`，剔除多说话人重叠与语码转换片段，同步切出 `near_field` 与 `far_field` 16 kHz 单声道 PCM16 WAV，写出 `ood_eval.jsonl`、`rejected.jsonl`、`manifest.json`（`trainable: false`）与 `sha256.json`，并支持与 Google Drive `data/alimeeting_eval/v1_seed42/` 双向验签缓存。
+- `scripts/run_alimeeting_ood_benchmark.py` 联合读取 `configs/train/rl_pilot_aligned.yaml`（冻结模型/LoRA/reward 运行时）与 `configs/inference/base_eval_wer.yaml`（锁定 `zh-cer-v1` CER + `jieba==0.42.1` WER，核对 `decode_eval_sha256` 一致），校验 `ood_eval.jsonl` 全部音频哈希与三份已发布 release（`sft`、`dpo`、`rl`），按阶段与 `sample_id` 前缀续跑评测四阶段，输出含远近场退化差与 2000 次配对源簇 Bootstrap 95% CI 的 `benchmark_summary.json`、`run_report.md`、`status.json` 并同步至 Drive `runs/<run_id>/`。
+
 ## 验收与影响
 
 完成开发阶段要求代码、配置、测试、产物和文档五者一致；只有文档更新或本地 mock 通过不能标记阶段完成。新增文件、接口、CLI 参数或产物路径时，必须同步更新 `configs/`、`train/`、`evaluation/`、`inference/`、`scripts/`、`notebooks/` 或 `tests/` 的 README（适用者）以及 `docs/qwen3-asr/00_progress.md`。

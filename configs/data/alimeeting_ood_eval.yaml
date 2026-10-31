@@ -1,0 +1,34 @@
+# Phase 6 Track 2: AliMeeting Eval (OpenSLR 119) read-only real-world OOD benchmark config.
+# License: CC BY-SA 4.0 — strictly read-only OOD evaluation, never mixed into training.
+schema_version: qwen3-asr-ood-data-v1
+dataset_name: alimeeting_eval_openslr119
+license: CC-BY-SA-4.0
+usage_policy: read_only_ood_evaluation
+seed: 42
+archive:
+  url: https://speech-lab-share-data.oss-cn-shanghai.aliyuncs.com/AliMeeting/openlr/Eval_Ali.tar.gz
+  filename: Eval_Ali.tar.gz
+  expected_size_bytes: 3673718355
+audio:
+  sample_rate_hz: 16000
+  far_field_channel: 0
+  min_duration_sec: 1.0
+  max_duration_sec: 20.0
+  min_peak_abs: 0.001
+  min_rms: 0.0001
+alignment:
+  overlap_eps_sec: 0.001
+  max_near_far_sync_drift_sec: 0.25
+  max_near_far_duration_diff_sec: 0.08
+text_filter:
+  normalization: zh-cer-v1
+  min_normalized_chars: 2
+  reject_latin: true
+  reject_overlap_tags: true
+selection:
+  scenarios:
+    - near_field
+    - far_field
+  max_paired_sources: 500
+  min_paired_sources: 50
+  stratify_by: meeting_id

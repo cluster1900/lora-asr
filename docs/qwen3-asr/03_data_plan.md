@@ -138,4 +138,18 @@ P9 的 50 条只覆盖本机已解压的 train `S0002`、`S0003`、`S0004`，而
 - **验收**：全部数据、风险、配置和进度文档口径一致，无未决许可证状态冲突，且 Git 追踪树中零原始音频文件泄漏。
 - **影响**：在不改动任何已有 manifest、哈希与 Phase 1–5 实验产物的条件下完成 OpenSLR 33 合规闭环；后续接入 AliMeeting（CC BY-SA 4.0）或 SLR28（Apache-2.0）时同样按各数据源原始许可独立声明边界。
 
+### Phase 6 Track 2：AliMeeting Eval（OpenSLR 119）只读真实远场 OOD 数据合同（2026-10-30）
+
+- **背景**：Phase 1–5 的 `far_field`、`reverb`、`noise` 均由 AISHELL-1 近讲干净语音经合成滤波器得到；需要引入真实物理会议室采集的同步“近场耳麦 vs 远场麦克风阵列”公开基准，检验四阶段（`base`、`sft`、`dpo`、`rl`）向真实房间混响与环境底噪的零样本域外（OOD）泛化能力。
+- **范围**：仅使用 **AliMeeting Eval**（OpenSLR 119，`Eval_Ali.tar.gz`，字节数 `3673718355`，8 场真实多人会议共约 4 小时，许可证 `CC BY-SA 4.0`）构建**只读域外评测集**（`split: "ood_eval"`、`usage_policy: "read_only_ood_evaluation"`、`trainable: false`）。严禁将任何 AliMeeting 样本混入 `train.jsonl`、DPO pair 或 RL rollout，也不回写或改动任何 Phase 1 既有 manifest。
+- **设计**：
+  1. 配置文件为 `configs/data/alimeeting_ood_eval.yaml`（`schema_version: qwen3-asr-ood-data-v1`），固定 `seed: 42`、`far_field_channel: 0`（从 `Eval_Ali_far/audio_dir/{room}_{meeting}_MS*.wav` 8 通道阵列录音确定性抽取第 0 通道）、时长窗口 `[1.0, 20.0]` 秒、非静音阈值（`min_peak_abs: 0.001`、`min_rms: 0.0001`）与配对抽样上限 `max_paired_sources: 500`（最低门禁 `min_paired_sources: 50`）。
+  2. 物化脚本 `scripts/prepare_alimeeting_ood_eval.py` 使用纯标准库解析 `Eval_Ali_near/textgrid_dir/*.TextGrid` 与 `Eval_Ali_far/textgrid_dir/*.TextGrid`：
+     - **严格单说话人零重叠过滤**：在同一场会议的全部说话人轨（含近场各说话人 TextGrid 并集与远场多轨 TextGrid）上，任一活跃语音区间与另一区间重叠超过 `overlap_eps_sec: 0.001` 秒，或标注含显式重叠标记 `(/OVERLAP)`，一律拒收并写入 `rejected.jsonl`（原因 `speaker_overlap` 或 `overlap_tag`）。
+     - **纯中文文本清洗与对齐**：剥离官方副语言/静音标记（`<sil>`、`<%>`、`<->`、`<$>`、`<#>`、`<_>`、`<space>`、`(~)`、`(SIL)`、反引号与 `&`），拒绝含半角/全角拉丁字母的语码转换片段（`contains_latin_code_switch`）及 `zh-cer-v1` 归一化后不足 `2` 个字符的极短语气词（`empty_or_too_short_text`）；要求近场与远场同说话人同文区间的起止同步偏差不超过 `max_near_far_sync_drift_sec: 0.25` 秒且时长差不超过 `0.08` 秒。
+     - **会议分层确定性抽样与配对切片**：按 `SHA-256(seed:source_utterance_id:alimeeting-ood-v1)` 在每场会议内排序后按 `meeting_id` 轮转抽取最多 `500` 个配对源语句，为每个 `source_utterance_id` 同步切出 `near_field`（耳麦单声道）与 `far_field`（阵列 `ch0` 单声道）两条 16 kHz PCM16 WAV（共最多 `1000` 条），写出 `ood_eval.jsonl`（`qwen3-asr-ood-manifest-v1`）、`rejected.jsonl`、`manifest.json`（`qwen3-asr-ood-manifest-set-v1`）与 `sha256.json`，并支持将切好的只读 OOD 包持久化缓存至 Google Drive `data/alimeeting_eval/v1_seed42/`。
+- **测试**：`python3 -m unittest tests.test_alimeeting_ood_benchmark -v` 使用合成双说话人 Praat TextGrid 与近场单声道/远场 8 通道 WAV 夹具验证重叠语音剔除、拉丁字母与标注符号过滤、近远场同步配对、确定性会议轮转抽样、`trainable=false` 只读标记及二次运行 SHA-256 一致性。
+- **验收**：夹具单测退出码 0；Colab 真实 `Eval_Ali.tar.gz` 物化后 `selected_sources >= 50`、`near_field` 与 `far_field` 行数严格 1:1 配对、全部 WAV 通过 `sha256.json` 验签且零训练泄漏。
+- **影响**：新增独立只读 OOD 数据入口，不影响 Phase 1 `manifest_mvp.yaml`、`build_manifest.py`、`manifest_validate.py` 或任何训练数据集。
+
 采用相对路径、文件级 split、纯文本 `text` 和显式 source ID 后，旧的绝对路径 manifest、混入特殊 token 的标注和未带版本 hash 的结果不能直接复用；必须重新物化或提供迁移报告。该合同同时支持本地单测和 Colab Drive 恢复，不改变外部数据原始文件。
